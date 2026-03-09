@@ -1,7 +1,16 @@
 #!/bin/bash
 
+# Ensure environment is setup before running the build script
+# Require: gcc, swig, rocm, python and libfabric if building libfabric
+# tests
+
 # Initialize variables
 build_cfg=""
+
+# script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+cd $SCRIPT_DIR
 
 # Parse command-line arguments
 while getopts "p:" opt; do
@@ -10,16 +19,6 @@ while getopts "p:" opt; do
     * ) echo "Usage: $0 -p <scons parameter>"; exit 1 ;;
   esac
 done
-
-module unload gcc
-module unload libfabric
-
-module load gcc-native/13.2
-module load swig/4.1.1
-module load rocm/6.2.4
-module load cray-python/3.11.7
-module use /sw/crusher/ums/ompix/DEVELOP/cce/13.0.0/modules/
-module load libfabric/ompix-upstream-borg-r
 
 ml
 
