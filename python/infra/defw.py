@@ -43,6 +43,25 @@ g_keywords = {'DATE': get_today,
 			  'YNEAR': get_nearest_yaml_block,
 			  'YTOP': get_top_yaml_block}
 
+def split_external_paths(value):
+	if not value:
+		return []
+	return [p for p in value.split(':') if p]
+
+def clear_module_cache(module_name):
+	for key in list(sys.modules.keys()):
+		if key == module_name or key.startswith(module_name + '.'):
+			del sys.modules[key]
+
+def import_module_from_path(module_name, module_path):
+	clear_module_cache(module_name)
+	if module_path in sys.path:
+		sys.path.remove(module_path)
+	sys.path.insert(0, module_path)
+	mod = importlib.import_module(module_name)
+	importlib.reload(mod)
+	return mod
+
 class DEFwYaml:
 	def __init__(self, y=None):
 		if y is not None and (type(y) is not dict and type(y) is not list):
@@ -799,15 +818,11 @@ class ServiceSuitesBase(Suites):
 		for path in self.suites_path:
 			for subdir, dirs, files in os.walk(path):
 				break
-			import_path = os.path.split(subdir)[1]
 			for d in dirs:
 				#import the directory as a package
 				if d.startswith(self.suite_prefix):
 					name = d.replace(self.suite_prefix, '')
-					if import_path:
-						mod_path = import_path+"."+d
-					else:
-						mod_path = d
+					mod_path = d
 					if noinit_load and d in noinit_load:
 						sys.path.append(mod_path)
 						continue
@@ -817,9 +832,7 @@ class ServiceSuitesBase(Suites):
 					# the resmgr. is there a better way of handling this?
 					if not me.is_resmgr() and name == 'resmgr' and self.noload_resmgr:
 						continue
-					#mod = __import__(import_path)
-					mod = importlib.import_module(mod_path)
-					importlib.reload(mod)
+					mod = import_module_from_path(mod_path, path)
 					mname = mod.svc_info['name']
 					db[mname] = mod
 					try:
@@ -833,19 +846,15 @@ class ServiceSuites(ServiceSuitesBase):
 	def __init__(self):
 		global defw_config_yaml
 
-		paths = []
-		aux_paths = []
-		paths.append(os.path.join(defw_path, "python", "services"))
+		paths = [os.path.join(defw_path, "python", "services")]
 		try:
-			tmp_paths = []
 			v = defw_config_yaml['defw']['external-services']
-			tmp_paths += v.split(':')
+			tmp_paths = split_external_paths(v)
 			setup_external_paths(tmp_paths)
-			for p in tmp_paths:
-				aux_paths.apend(os.path.join(p, 'python'))
+			paths += tmp_paths
 		except:
 			pass
-		super().__init__(aux_paths+paths,
+		super().__init__(paths,
 						 prefix="svc_", disabled_methods=['run', 'edit'],
 						 suite_prefix="svc_")
 
@@ -853,12 +862,12 @@ class ServiceSuiteAPIs(ServiceSuitesBase):
 	def __init__(self):
 		global defw_config_yaml
 
-		paths = []
-		paths.append(os.path.join(defw_path, "python", "service-apis"))
+		paths = [os.path.join(defw_path, "python", "service-apis")]
 		try:
 			v = defw_config_yaml['defw']['external-service-apis']
-			paths += v.split(':')
-			setup_external_paths(paths)
+			tmp_paths = split_external_paths(v)
+			setup_external_paths(tmp_paths)
+			paths += tmp_paths
 		except:
 			pass
 		super().__init__(paths,
@@ -869,13 +878,13 @@ class ExpSuites(Suites):
 	def __init__(self):
 		global defw_config_yaml
 
-		paths = []
-		paths.append(os.path.join(defw_path, "python", "experiments"))
+		paths = [os.path.join(defw_path, "python", "experiments")]
 		try:
 			v = defw_config_yaml['defw']['external-experiments']
 			if(v):
-				paths += v.split(':')
-				setup_external_paths(paths)
+				tmp_paths = split_external_paths(v)
+				setup_external_paths(tmp_paths)
+				paths += tmp_paths
 		except:
 			pass
 		super().__init__(paths, prefix="exp_")
@@ -1094,12 +1103,18 @@ def dumpGlobalTestResults(fname=None, status=None, desc=None):
 	else:
 		print(yaml.dump(results, Dumper=DEFwDumper, indent=2, sort_keys=False))
 
-def setup_external_paths(paths):
+def setup_external_paths(paths, prepend=False):
 	global defw_tmp_dir
 
-	for p in paths:
-		if p not in sys.path:
-			sys.path.append(p)
+	if prepend:
+		for p in reversed(paths):
+			if p in sys.path:
+				sys.path.remove(p)
+			sys.path.insert(0, p)
+	else:
+		for p in paths:
+			if p not in sys.path:
+				sys.path.append(p)
 
 def setup_paths():
 	global defw_tmp_dir
@@ -1108,6 +1123,11 @@ def setup_paths():
 		path = os.path.join(cdefw_global.get_defw_path(),p)
 		if path not in sys.path:
 			sys.path.append(path)
+	for env_var in ['DEFW_EXTERNAL_SERVICE_APIS_PATH',
+					'DEFW_EXTERNAL_SERVICES_PATH',
+					'DEFW_EXTERNAL_EXPERIMENTS_PATH']:
+		setup_external_paths(split_external_paths(os.environ.get(env_var, '')),
+							 prepend=True)
 	defw_tmp_dir = cdefw_global.get_defw_tmp_dir()
 	Path(defw_tmp_dir).mkdir(parents=True, exist_ok=True)
 
