@@ -120,6 +120,7 @@ def get_rpc_req_base():
 global_class_db = {}
 global_singleton_db = {}
 global_singleton_alias_db = {}
+global_class_db_lock = threading.Lock()
 global_singleton_db_lock = threading.Lock()
 
 def system_shutdown():
@@ -133,28 +134,32 @@ def is_system_up():
 	return not g_system_shutdown
 
 def add_to_class_db(instance, class_id):
-	if class_id in global_class_db:
-		raise DEFwError("Duplicate class_id. Contention in timing")
-	logging.debug(f"created instance for {type(instance).__name__} "\
-			      f"with id {class_id}")
-	global_class_db[class_id] = instance
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			raise DEFwError("Duplicate class_id. Contention in timing")
+		logging.debug(f"created instance for {type(instance).__name__} "\
+				      f"with id {class_id}")
+		global_class_db[class_id] = instance
 
 def has_class_entry(class_id):
-	return class_id in global_class_db
+	with global_class_db_lock:
+		return class_id in global_class_db
 
 def get_class_from_db(class_id):
-	if class_id in global_class_db:
-		return global_class_db[class_id]
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			return global_class_db[class_id]
 	logging.debug(f"Request for class not in the database {class_id}")
 	raise DEFwNotFound(f'no {class_id} in database')
 
 def del_entry_from_class_db(class_id):
-	if class_id in global_class_db:
-		instance = global_class_db[class_id]
-		logging.debug(f"removing instance for {type(instance).__name__} "\
-					"with id {class_id}")
-		del global_class_db[class_id]
-		global_singleton_alias_db.pop(class_id, None)
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			instance = global_class_db[class_id]
+			logging.debug(f"removing instance for {type(instance).__name__} "\
+						"with id {class_id}")
+			del global_class_db[class_id]
+			global_singleton_alias_db.pop(class_id, None)
 
 def get_singleton_key(module_name, class_name):
 	return f"{module_name}:{class_name}"
@@ -173,13 +178,14 @@ def evict_singleton_instance(module_name, class_name):
 	key = get_singleton_key(module_name, class_name)
 	with global_singleton_db_lock:
 		instance = global_singleton_db.pop(key, None)
-		aliases = [
-			class_id for class_id, alias_key in global_singleton_alias_db.items()
-			if alias_key == key
-		]
-		for class_id in aliases:
-			global_singleton_alias_db.pop(class_id, None)
-			global_class_db.pop(class_id, None)
+		with global_class_db_lock:
+			aliases = [
+				class_id for class_id, alias_key in global_singleton_alias_db.items()
+				if alias_key == key
+			]
+			for class_id in aliases:
+				global_singleton_alias_db.pop(class_id, None)
+				global_class_db.pop(class_id, None)
 		if instance is not None or aliases:
 			logging.debug(
 				f"evicted singleton instance for {class_name} with key {key} "
@@ -194,15 +200,23 @@ def shutdown_service_instance(instance):
 	)
 
 def bind_singleton_alias(class_id, module_name, class_name, instance):
-	add_to_class_db(instance, class_id)
-	global_singleton_alias_db[class_id] = get_singleton_key(module_name, class_name)
+	key = get_singleton_key(module_name, class_name)
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			raise DEFwError("Duplicate class_id. Contention in timing")
+		logging.debug(f"created instance for {type(instance).__name__} "\
+				      f"with id {class_id}")
+		global_class_db[class_id] = instance
+		global_singleton_alias_db[class_id] = key
 
 def is_singleton_alias(class_id):
-	return class_id in global_singleton_alias_db
+	with global_class_db_lock:
+		return class_id in global_singleton_alias_db
 
 def dump_class_db():
-	for k, v in global_class_db.items():
-		logging.debug("id = %f, name = %s" % (k, type(v).__name__))
+	with global_class_db_lock:
+		for k, v in global_class_db.items():
+			logging.debug("id = %f, name = %s" % (k, type(v).__name__))
 
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
