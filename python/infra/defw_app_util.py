@@ -113,7 +113,7 @@ def _build_service_env(service_spec):
 			'defw_generic.yaml',
 		),
 		'DEFW_AGENT_NAME': agent_name,
-		'DEFW_AGENT_TYPE': 'agent',
+		'DEFW_AGENT_TYPE': 'service',
 		'DEFW_SHELL_TYPE': 'daemon',
 		'DEFW_LISTEN_PORT': str(listen_port),
 		'DEFW_TELNET_PORT': str(telnet_port),
