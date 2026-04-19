@@ -114,9 +114,9 @@ class WorkerRequest:
 			   raise DEFwError(f"Bad Request type {wr_type}")
 
 	def type2str(self, wr_type):
-		if WorkerRequest.WR_SEND_MSG:
+		if wr_type == WorkerRequest.WR_SEND_MSG:
 			return 'WR_SEND_SMG'
-		if WorkerRequest.WR_CONNECT:
+		if wr_type == WorkerRequest.WR_CONNECT:
 			return 'WR_CONNECT'
 		return 'UNKNOWN_WORKREQUEST'
 
