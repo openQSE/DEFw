@@ -352,7 +352,8 @@ class WorkerThread:
 		logging.debug("module name is: %s " % mname)
 		logging.debug("rpc type is: %s " % rpc_type)
 		module = importlib.import_module(mname)
-		importlib.reload(module)
+		if common.get_debug_module_reload():
+			importlib.reload(module)
 		logging.debug(f"module is: {module.__name__}")
 		args = y['rpc']['parameters']['args']
 		kwargs = y['rpc']['parameters']['kwargs']
