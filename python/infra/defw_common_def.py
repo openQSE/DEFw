@@ -237,7 +237,8 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'loglevel': 'critical',
 		   'halt_on_exception': False, 'remote copy': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
-		   'cmd verbosity': True}
+		   'cmd verbosity': True,
+		   'debug module reload': False}
 
 global_pref = GLOBAL_PREF_DEF
 
@@ -292,6 +293,21 @@ def set_script_remote_cp(enable):
 	global global_pref
 	global_pref['remote copy'] = enable
 	save_pref()
+
+def set_debug_module_reload(enable):
+	'''
+	Enable or disable module reloads on remote RPC dispatch for debugging.
+	'''
+	global global_pref
+	global_pref['debug module reload'] = bool(enable)
+	save_pref()
+
+def get_debug_module_reload():
+	'''
+	Return whether debug module reload is enabled for remote RPC dispatch.
+	'''
+	global global_pref
+	return global_pref['debug module reload']
 
 def set_logging_level_helper(levelno):
 	global FILE_HANDLER
