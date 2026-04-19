@@ -195,14 +195,15 @@ class YamlGlobalTestResults:
 
 
 def normalize_experiment_result(result):
+	from defw_remote import DEFwResult
 	if isinstance(result, dict) and 'status' in result:
-		rc = copy.deepcopy(result)
+		rc = DEFwResult(copy.deepcopy(dict(result)))
 	elif isinstance(result, bool):
-		rc = {'status': 'PASS' if result else 'FAIL'}
+		rc = DEFwResult({'status': 'PASS' if result else 'FAIL'})
 	elif result is None:
-		rc = {'status': 'PASS'}
+		rc = DEFwResult({'status': 'PASS'})
 	else:
-		rc = {'status': 'PASS', 'args': [result]}
+		rc = DEFwResult({'status': 'PASS', 'args': [result]})
 	return rc
 
 
@@ -514,7 +515,11 @@ class Script(MethodInterceptor):
 				if type(e) == DEFwError and e.halt:
 					raise e
 				else:
-					rc = {'status': 'FAIL', 'error': traceback.format_exc()}
+					from defw_remote import DEFwResult
+					rc = DEFwResult({
+						'status': 'FAIL',
+						'error': traceback.format_exc(),
+					})
 		duration = time.time() - start_time
 		if method_name == 'run':
 			result = normalize_experiment_result(rc)

@@ -3,7 +3,16 @@ import cdefw_global
 from defw_exception import DEFwError, DEFwAgentNotFound
 from defw_common_def import load_pref
 from defw import me, get_agent, dump_all_agents
+import yaml
 import uuid, logging, time
+
+
+class DEFwResult(dict):
+	def __repr__(self):
+		return self.__str__()
+
+	def __str__(self):
+		return yaml.dump(dict(self), sort_keys=False).strip()
 
 class BaseRemote(object):
 	# the idea of the *args and **kwargs in the __init__ method is for subclasses
@@ -98,7 +107,7 @@ class BaseRemote(object):
 			pass
 
 def defwrc(error, *args, **kwargs):
-	rc = {}
+	rc = DEFwResult()
 	if error == -1:
 		rc['status'] = 'FAIL'
 	elif error == -2:
@@ -110,4 +119,3 @@ def defwrc(error, *args, **kwargs):
 	if len(kwargs):
 		rc['kwargs'] = kwargs
 	return rc
-
