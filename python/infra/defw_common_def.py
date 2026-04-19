@@ -118,6 +118,8 @@ def get_rpc_req_base():
 			'statistics': {'send_time': None}}}
 
 global_class_db = {}
+global_singleton_db = {}
+global_singleton_alias_db = {}
 
 def system_shutdown():
 	global g_system_shutdown
@@ -136,6 +138,9 @@ def add_to_class_db(instance, class_id):
 			      f"with id {class_id}")
 	global_class_db[class_id] = instance
 
+def has_class_entry(class_id):
+	return class_id in global_class_db
+
 def get_class_from_db(class_id):
 	if class_id in global_class_db:
 		return global_class_db[class_id]
@@ -148,6 +153,31 @@ def del_entry_from_class_db(class_id):
 		logging.debug(f"removing instance for {type(instance).__name__} "\
 					"with id {class_id}")
 		del global_class_db[class_id]
+		global_singleton_alias_db.pop(class_id, None)
+
+def get_singleton_key(module_name, class_name):
+	return f"{module_name}:{class_name}"
+
+def add_singleton_instance(instance, module_name, class_name):
+	key = get_singleton_key(module_name, class_name)
+	if key in global_singleton_db:
+		raise DEFwError(f"Duplicate singleton instance for {key}")
+	logging.debug(f"created singleton instance for {class_name} with key {key}")
+	global_singleton_db[key] = instance
+	return instance
+
+def get_singleton_instance(module_name, class_name):
+	key = get_singleton_key(module_name, class_name)
+	if key in global_singleton_db:
+		return global_singleton_db[key]
+	raise DEFwNotFound(f"no singleton {key} in database")
+
+def bind_singleton_alias(class_id, module_name, class_name, instance):
+	add_to_class_db(instance, class_id)
+	global_singleton_alias_db[class_id] = get_singleton_key(module_name, class_name)
+
+def is_singleton_alias(class_id):
+	return class_id in global_singleton_alias_db
 
 def dump_class_db():
 	for k, v in global_class_db.items():
@@ -400,4 +430,3 @@ def save_pref():
 def dump_pref():
 	global global_pref
 	print(yaml.dump(global_pref, Dumper=DEFwDumper, indent=2, sort_keys=True))
-

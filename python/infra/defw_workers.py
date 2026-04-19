@@ -13,6 +13,15 @@ import defw
 from collections import deque
 import time
 
+INSTANCE_MODE_SINGLETON = 'singleton'
+INSTANCE_MODE_PER_CONNECTION = 'per_connection'
+
+
+def get_instance_mode(module):
+	svc_info = getattr(module, 'svc_info', {})
+	return svc_info.get('instance_mode', INSTANCE_MODE_PER_CONNECTION)
+
+
 class WorkerEvent:
 	EVENT_INCOMING_REQUEST = 1
 	EVENT_INCOMING_RESPONSE = 2
@@ -357,24 +366,40 @@ class WorkerThread:
 			elif rpc_type == 'instantiate_class':
 				logging.debug(f'remote call to instantiate class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
-					common.add_to_class_db(defw.resmgr, class_id)
+					if not common.has_class_entry(class_id):
+						common.add_to_class_db(defw.resmgr, class_id)
 				else:
-					try:
-						instance = common.get_class_from_db(class_id)
-					except:
-						my_class = getattr(module, class_name)
-						# TODO: Instantiating a class can result in a blocking
-						# call
-						instance = my_class(*args, **kwargs)
-						common.add_to_class_db(instance, class_id)
+					if get_instance_mode(module) == INSTANCE_MODE_SINGLETON:
+						try:
+							instance = common.get_singleton_instance(mname, class_name)
+						except DEFwNotFound:
+							my_class = getattr(module, class_name)
+							# TODO: Instantiating a class can result in a blocking
+							# call
+							instance = my_class(*args, **kwargs)
+							common.add_singleton_instance(instance, mname, class_name)
+						if not common.has_class_entry(class_id):
+							common.bind_singleton_alias(class_id, mname, class_name, instance)
+					else:
+						try:
+							instance = common.get_class_from_db(class_id)
+						except DEFwNotFound:
+							my_class = getattr(module, class_name)
+							# TODO: Instantiating a class can result in a blocking
+							# call
+							instance = my_class(*args, **kwargs)
+							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
 				logging.debug(f'remote call to destroy class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					common.del_entry_from_class_db(class_id)
 				else:
 					instance = common.get_class_from_db(class_id)
-					del(instance)
-					common.del_entry_from_class_db(class_id)
+					if common.is_singleton_alias(class_id):
+						common.del_entry_from_class_db(class_id)
+					else:
+						del(instance)
+						common.del_entry_from_class_db(class_id)
 			elif rpc_type == 'method_call':
 				instance = common.get_class_from_db(class_id)
 				if type(instance).__name__ != class_name:
@@ -503,4 +528,3 @@ def connect_to_agent(wr):
 		return wr.wait()
 
 	return rc, None
-
