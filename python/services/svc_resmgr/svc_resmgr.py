@@ -42,7 +42,6 @@ class DEFwResMgr:
 		self.__reload_resources(query=True)
 
 	def __grab_agent_info(self, agent_dict, db, skip_self=False, query=True):
-		agent_dict.dump()
 		for k, agent in agent_dict.items():
 			ep = agent.get_ep()
 			logging.debug(f"examining -- {ep}\nself: {self.__my_ep}")
