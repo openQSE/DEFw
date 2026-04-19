@@ -117,6 +117,15 @@ def get_rpc_req_base():
 			'parameters': {'args': None, 'kwargs': None},
 			'statistics': {'send_time': None}}}
 
+#
+# Remote object identity in DEFw has two layers:
+# - class_id is the caller handle used in RPC payloads and method dispatch
+# - module_name:class_name is the identity of a shared singleton service
+#
+# For per-connection services a class_id maps to one remote object.
+# For singleton services multiple caller-generated class_ids can alias the
+# same underlying instance through global_singleton_alias_db.
+#
 global_class_db = {}
 global_singleton_db = {}
 global_singleton_alias_db = {}
@@ -194,12 +203,18 @@ def evict_singleton_instance(module_name, class_name):
 		return instance
 
 def shutdown_service_instance(instance):
+	# Service code should call this helper instead of reaching into the
+	# singleton registry directly. The framework owns the mapping from the
+	# live instance back to its singleton identity.
 	return evict_singleton_instance(
 		instance.__class__.__module__,
 		instance.__class__.__name__
 	)
 
 def bind_singleton_alias(class_id, module_name, class_name, instance):
+	# Bind the caller-visible class_id to an existing singleton instance.
+	# The class_id remains the dispatch handle on later method calls even
+	# though the object's real identity is module_name:class_name.
 	key = get_singleton_key(module_name, class_name)
 	with global_class_db_lock:
 		if class_id in global_class_db:

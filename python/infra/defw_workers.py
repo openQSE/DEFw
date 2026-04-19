@@ -372,8 +372,10 @@ class WorkerThread:
 				else:
 					if get_instance_mode(module) == INSTANCE_MODE_SINGLETON:
 						my_class = getattr(module, class_name)
-						# Serialize singleton lookup and creation so competing
-						# instantiate_class RPCs cannot race each other.
+						# For singleton services the caller-provided class_id is
+						# only an alias. The shared object identity is derived
+						# from the service module and class name so independent
+						# callers reuse one server-side instance.
 						instance = common.get_or_create_singleton_instance(
 							mname, class_name,
 							lambda: my_class(*args, **kwargs)

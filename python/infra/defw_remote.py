@@ -42,9 +42,12 @@ class BaseRemote(object):
 		elif target:
 			self.__service_module = type(self).__module__
 
-		# if we're provided a class_id, it means that an instance already
-		# exists and we don't need to create one. So just store the
-		# class_id for future reference.
+		# class_id is the caller-visible handle used on future RPCs.
+		# For per-connection services it identifies the remote object.
+		# For singleton services it is only an alias that the server maps
+		# to the shared instance keyed by service module and class name.
+		# If we're provided a class_id, a remote binding already exists and
+		# we do not need to instantiate a new remote object here.
 		if class_id:
 			self.__own = False
 			logging.critical(f"Class owned by remote: {class_id}")
@@ -107,5 +110,4 @@ def defwrc(error, *args, **kwargs):
 	if len(kwargs):
 		rc['kwargs'] = kwargs
 	return rc
-
 
