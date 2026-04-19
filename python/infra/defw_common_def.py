@@ -169,6 +169,30 @@ def get_or_create_singleton_instance(module_name, class_name, factory):
 		global_singleton_db[key] = instance
 		return instance
 
+def evict_singleton_instance(module_name, class_name):
+	key = get_singleton_key(module_name, class_name)
+	with global_singleton_db_lock:
+		instance = global_singleton_db.pop(key, None)
+		aliases = [
+			class_id for class_id, alias_key in global_singleton_alias_db.items()
+			if alias_key == key
+		]
+		for class_id in aliases:
+			global_singleton_alias_db.pop(class_id, None)
+			global_class_db.pop(class_id, None)
+		if instance is not None or aliases:
+			logging.debug(
+				f"evicted singleton instance for {class_name} with key {key} "
+				f"and removed {len(aliases)} alias entries"
+			)
+		return instance
+
+def shutdown_service_instance(instance):
+	return evict_singleton_instance(
+		instance.__class__.__module__,
+		instance.__class__.__name__
+	)
+
 def bind_singleton_alias(class_id, module_name, class_name, instance):
 	add_to_class_db(instance, class_id)
 	global_singleton_alias_db[class_id] = get_singleton_key(module_name, class_name)
