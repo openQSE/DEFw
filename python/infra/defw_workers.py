@@ -370,14 +370,13 @@ class WorkerThread:
 						common.add_to_class_db(defw.resmgr, class_id)
 				else:
 					if get_instance_mode(module) == INSTANCE_MODE_SINGLETON:
-						try:
-							instance = common.get_singleton_instance(mname, class_name)
-						except DEFwNotFound:
-							my_class = getattr(module, class_name)
-							# TODO: Instantiating a class can result in a blocking
-							# call
-							instance = my_class(*args, **kwargs)
-							common.add_singleton_instance(instance, mname, class_name)
+						my_class = getattr(module, class_name)
+						# Serialize singleton lookup and creation so competing
+						# instantiate_class RPCs cannot race each other.
+						instance = common.get_or_create_singleton_instance(
+							mname, class_name,
+							lambda: my_class(*args, **kwargs)
+						)
 						if not common.has_class_entry(class_id):
 							common.bind_singleton_alias(class_id, mname, class_name, instance)
 					else:

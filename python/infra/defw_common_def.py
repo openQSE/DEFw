@@ -120,6 +120,7 @@ def get_rpc_req_base():
 global_class_db = {}
 global_singleton_db = {}
 global_singleton_alias_db = {}
+global_singleton_db_lock = threading.Lock()
 
 def system_shutdown():
 	global g_system_shutdown
@@ -158,19 +159,15 @@ def del_entry_from_class_db(class_id):
 def get_singleton_key(module_name, class_name):
 	return f"{module_name}:{class_name}"
 
-def add_singleton_instance(instance, module_name, class_name):
+def get_or_create_singleton_instance(module_name, class_name, factory):
 	key = get_singleton_key(module_name, class_name)
-	if key in global_singleton_db:
-		raise DEFwError(f"Duplicate singleton instance for {key}")
-	logging.debug(f"created singleton instance for {class_name} with key {key}")
-	global_singleton_db[key] = instance
-	return instance
-
-def get_singleton_instance(module_name, class_name):
-	key = get_singleton_key(module_name, class_name)
-	if key in global_singleton_db:
-		return global_singleton_db[key]
-	raise DEFwNotFound(f"no singleton {key} in database")
+	with global_singleton_db_lock:
+		if key in global_singleton_db:
+			return global_singleton_db[key]
+		instance = factory()
+		logging.debug(f"created singleton instance for {class_name} with key {key}")
+		global_singleton_db[key] = instance
+		return instance
 
 def bind_singleton_alias(class_id, module_name, class_name, instance):
 	add_to_class_db(instance, class_id)
