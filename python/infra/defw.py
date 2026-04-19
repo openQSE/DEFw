@@ -216,6 +216,21 @@ def get_result_details(result):
 	return ''
 
 
+def format_experiment_result(result):
+	lines = [f"status: {result['status']}"]
+	if 'kwargs' in result and result['kwargs']:
+		for key, value in result['kwargs'].items():
+			lines.append(f"{key}: {value}")
+	if 'args' in result and result['args']:
+		lines.append("args:")
+		for value in result['args']:
+			lines.append(f"  - {value}")
+	if 'error' in result:
+		lines.append("error:")
+		lines.append(str(result['error']))
+	return "\n".join(lines)
+
+
 def formatGlobalTestResultsTable(status=None):
 	global global_test_results
 
@@ -259,6 +274,23 @@ def formatGlobalTestResultsTable(status=None):
 			row['details'],
 		]))
 	return "\n".join(lines)
+
+
+def formatGlobalTestResultsReport(status=None):
+	global global_test_results
+
+	report = [formatGlobalTestResultsTable(status=status)]
+	status_filter = status.upper() if isinstance(status, str) else None
+	for suite in global_test_results.get()['Tests']:
+		for result in suite['SubTests']:
+			if status_filter and result['status'] != status_filter:
+				continue
+			if 'error' not in result:
+				continue
+			report.append("")
+			report.append(f"[{suite['name']}::{result['name']}]")
+			report.append(format_experiment_result(result))
+	return "\n".join(report)
 
 class Documentation:
 	def __init__(self, base_name):
@@ -1169,7 +1201,7 @@ def dumpGlobalTestResults(fname=None, status=None, desc=None):
 	global global_test_results
 
 	results = global_test_results.get()
-	table = formatGlobalTestResultsTable(status=status)
+	report = formatGlobalTestResultsReport(status=status)
 
 	if fname:
 		fpath = fname
@@ -1181,9 +1213,9 @@ def dumpGlobalTestResults(fname=None, status=None, desc=None):
 				Dumper=DEFwDumper, indent=2,
 				sort_keys=False))
 	else:
-		print(table)
+		print(report)
 
-	return table
+	return report
 
 def setup_external_paths(paths, prepend=False):
 	global defw_tmp_dir
