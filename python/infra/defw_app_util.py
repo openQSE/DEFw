@@ -27,6 +27,7 @@ class DEFwServiceProcess:
 	listen_port: int
 	telnet_port: int
 	log_dir: str
+	pid: int
 	process: subprocess.Popen
 	stdout_path: str
 	stderr_path: str
@@ -34,13 +35,27 @@ class DEFwServiceProcess:
 	stderr_handle: object
 
 	def shutdown(self, timeout=5):
-		if self.process.poll() is None:
-			self.process.terminate()
+		if self.pid > 0:
 			try:
-				self.process.wait(timeout=timeout)
-			except subprocess.TimeoutExpired:
-				self.process.kill()
-				self.process.wait(timeout=timeout)
+				os.kill(self.pid, signal.SIGTERM)
+			except ProcessLookupError:
+				self.pid = 0
+			start = time.time()
+			while self.pid > 0 and time.time() - start < timeout:
+				try:
+					os.kill(self.pid, 0)
+				except ProcessLookupError:
+					self.pid = 0
+					break
+				time.sleep(0.1)
+			if self.pid > 0:
+				try:
+					os.kill(self.pid, signal.SIGKILL)
+				except ProcessLookupError:
+					pass
+				self.pid = 0
+		if self.process.poll() is None:
+			self.process.wait(timeout=timeout)
 		self.stdout_handle.close()
 		self.stderr_handle.close()
 
@@ -68,8 +83,11 @@ def _allocate_ports(count=2):
 
 	with _PORT_LOCK:
 		if _NEXT_PORT is None:
-			base = int(os.environ.get('DEFW_EXPERIMENT_PORT_BASE', '28000'))
-			_NEXT_PORT = max(base, defw.me.my_listenport() + 10)
+			base = int(os.environ.get(
+				'DEFW_EXPERIMENT_PORT_BASE',
+				str(defw.me.my_listenport() + 10),
+			))
+			_NEXT_PORT = base
 		start = _NEXT_PORT
 		_NEXT_PORT += count
 	return list(range(start, start + count))
@@ -111,6 +129,17 @@ def _build_service_env(service_spec):
 	return env, agent_name, listen_port, telnet_port, log_dir
 
 
+def _wait_for_daemon_pid(log_dir, timeout=5):
+	pid_path = os.path.join(log_dir, 'pid')
+	start = time.time()
+	while time.time() - start < timeout:
+		if os.path.isfile(pid_path):
+			with open(pid_path, 'r', encoding='utf-8') as handle:
+				return int(handle.read().strip())
+		time.sleep(0.1)
+	raise DEFwError(f"Timed out waiting for daemon pid in {log_dir}")
+
+
 def defw_spawn_services(services):
 	specs = _normalize_service_specs(services)
 	defwp = os.path.join(cdefw_global.get_defw_path(), 'src', 'defwp')
@@ -123,25 +152,29 @@ def defw_spawn_services(services):
 		stdout_handle = open(stdout_path, 'w', encoding='utf-8')
 		stderr_handle = open(stderr_path, 'w', encoding='utf-8')
 		process = subprocess.Popen(
-			[defwp],
+			[defwp, '-d'],
 			env=env,
 			stdout=stdout_handle,
 			stderr=stderr_handle,
 			start_new_session=True,
 		)
-		time.sleep(0.2)
-		if process.poll() is not None:
+		try:
+			pid = _wait_for_daemon_pid(log_dir)
+		except Exception:
+			process.wait(timeout=5)
 			stdout_handle.close()
 			stderr_handle.close()
 			raise DEFwError(
 				f"Service {spec['module']} exited early with rc={process.returncode}"
 			)
+		process.wait(timeout=5)
 		handle = DEFwServiceProcess(
 			module=spec['module'],
 			agent_name=agent_name,
 			listen_port=listen_port,
 			telnet_port=telnet_port,
 			log_dir=log_dir,
+			pid=pid,
 			process=process,
 			stdout_path=stdout_path,
 			stderr_path=stderr_path,
