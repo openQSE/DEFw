@@ -12,7 +12,57 @@ class DEFwResult(dict):
 		return self.__str__()
 
 	def __str__(self):
-		return yaml.dump(dict(self), sort_keys=False).strip()
+		return _format_result_yaml_like(dict(self)).strip()
+
+
+def _format_scalar(value):
+	rendered = yaml.safe_dump(value,
+				 sort_keys=False,
+				 default_flow_style=True).strip()
+	if rendered.endswith("\n..."):
+		rendered = rendered[:-4]
+	elif rendered == "...":
+		rendered = ""
+	return rendered
+
+
+def _format_result_yaml_like(value, indent=0):
+	prefix = ' ' * indent
+	if isinstance(value, dict):
+		lines = []
+		for key, item in value.items():
+			if isinstance(item, str) and '\n' in item:
+				lines.append(f"{prefix}{key}: |")
+				for line in item.splitlines():
+					lines.append(f"{prefix}  {line}")
+			elif isinstance(item, dict):
+				lines.append(f"{prefix}{key}:")
+				lines.append(_format_result_yaml_like(item, indent + 2))
+			elif isinstance(item, list):
+				lines.append(f"{prefix}{key}:")
+				lines.append(_format_result_yaml_like(item, indent + 2))
+			else:
+				lines.append(f"{prefix}{key}: {_format_scalar(item)}")
+		return "\n".join(lines)
+	if isinstance(value, list):
+		lines = []
+		for item in value:
+			if isinstance(item, str) and '\n' in item:
+				lines.append(f"{prefix}- |")
+				for line in item.splitlines():
+					lines.append(f"{prefix}  {line}")
+			elif isinstance(item, (dict, list)):
+				lines.append(f"{prefix}-")
+				lines.append(_format_result_yaml_like(item, indent + 2))
+			else:
+				lines.append(f"{prefix}- {_format_scalar(item)}")
+		return "\n".join(lines)
+	if isinstance(value, str) and '\n' in value:
+		lines = [f"{prefix}|"]
+		for line in value.splitlines():
+			lines.append(f"{prefix}  {line}")
+		return "\n".join(lines)
+	return f"{prefix}{_format_scalar(value)}"
 
 class BaseRemote(object):
 	# the idea of the *args and **kwargs in the __init__ method is for subclasses
