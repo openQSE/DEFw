@@ -49,6 +49,12 @@ module directories with `DEFW_EXTERNAL_SERVICES_PATH`,
 `DEFW_EXTERNAL_SERVICE_APIS_PATH`, and
 `DEFW_EXTERNAL_EXPERIMENTS_PATH`.
 
+In the current implementation, the Python infrastructure is also where
+remote object lifecycle is defined. The client-side API base class
+creates caller handles, the worker thread lazily imports service
+modules, and the worker-side registries keep track of live remote
+objects and singleton service instances.
+
 ```mermaid
 flowchart LR
     subgraph Native["C Backend"]
@@ -80,6 +86,111 @@ flowchart LR
     ExternalApi["External service-apis dir"] --> Loader
     ExternalExp["External experiments dir"] --> Loader
 ```
+
+## Remote Invocation Model
+DEFw's remote APIs are Python classes derived from `BaseRemote` in
+`python/infra/defw_remote.py`. A service API object is local to the
+caller, but its methods are forwarded as RPCs to a Python object living
+on the target DEFw process.
+
+The normal flow is:
+1. The client creates a service API object, usually from a service-info
+   record returned by the resource manager.
+2. `BaseRemote` generates a `class_id` caller handle unless one is
+   supplied explicitly.
+3. `BaseRemote` sends an `instantiate_class` RPC for the target Python
+   service class.
+4. `python/infra/defw_workers.py` imports the target module on demand
+   with `importlib.import_module()`, then creates or reuses the server
+   object.
+5. Later method calls are sent as `method_call` RPCs carrying the same
+   `class_id`.
+6. The worker resolves the handle to the server-side object and invokes
+   the requested Python method.
+7. When the caller proxy is destroyed, `BaseRemote` sends a
+   `destroy_class` RPC.
+
+This means the C layer owns transport and process runtime, while Python
+owns object identity, service lifecycle, and method dispatch.
+
+## Service Instance Modes
+Service modules can declare their instantiation policy through
+`svc_info['instance_mode']`.
+
+Supported modes are:
+- `per_connection`: the default. Each caller-created remote proxy gets a
+  distinct server-side Python object.
+- `singleton`: all callers for the same service module and class share
+  one server-side Python object.
+
+The instance mode is read in `python/infra/defw_workers.py` and applied
+when `instantiate_class` is handled. This keeps singleton policy in the
+Python framework rather than in the transport layer.
+
+## Object Identity And Singleton Aliases
+DEFw now has two distinct identity layers for remote objects:
+
+- `class_id`: the caller-visible handle carried in RPC messages and used
+  for later method dispatch.
+- `module_name:class_name`: the identity of a singleton service object
+  on the server side.
+
+This distinction is important:
+
+- For `per_connection` services, one `class_id` maps to one server-side
+  object.
+- For `singleton` services, multiple caller-generated `class_id` values
+  can alias the same underlying server-side instance.
+
+The registries for this live in `python/infra/defw_common_def.py`:
+- `global_class_db`: `class_id -> instance`
+- `global_singleton_db`: `module_name:class_name -> instance`
+- `global_singleton_alias_db`: `class_id -> module_name:class_name`
+
+The alias model lets independent clients create their own proxies
+without coordinating UUIDs while still landing on one shared singleton
+service instance.
+
+## Singleton Lifecycle
+Singleton services are created lazily on first use. When a singleton
+service receives its first `instantiate_class`, the worker creates the
+service object and stores it in the singleton registry. Later callers
+reuse that object and only add new caller-handle aliases.
+
+Singleton teardown is explicit:
+- destroying one caller proxy removes only that caller's `class_id`
+  alias
+- shutting down the service should remove the underlying singleton entry
+
+Service code should call
+`python/infra/defw_common_def.shutdown_service_instance(self)` during
+service shutdown rather than manipulating the singleton registry
+directly. This keeps registry cleanup opaque to service implementations.
+
+## Module Loading And Reloading
+DEFw lazily imports Python service modules on first use with
+`importlib.import_module()`. A loaded module is not re-executed on every
+RPC under normal operation.
+
+Module reload is available only as a debugging aid through the DEFw
+preferences layer:
+- default behavior: no forced reload on RPC dispatch
+- debug behavior: reload the module before dispatch if the debug reload
+  preference is enabled
+
+This matters for singleton services because repeatedly reloading a
+module while keeping long-lived service objects alive underneath it is a
+fragile runtime model. The default behavior is therefore load-on-first-
+use, not reload-on-every-call.
+
+## Resource Manager Special Case
+The resource manager service, `DEFwResMgr`, is treated specially in the
+worker dispatch path. The active resource manager object already exists
+on the server side, so the worker binds caller handles to that existing
+object rather than constructing a fresh one on demand.
+
+Conceptually, this is the same shared-instance model used by singleton
+services, but it remains a dedicated special case in the current code.
 
 ## Running DEFw
 1. Install Python dependencies:
@@ -144,7 +255,7 @@ the current DEFw code and configuration files in this repository.
 - `src/`: C runtime, SWIG inputs, generated wrappers, shared libraries,
   and `defwp`
 - `python/infra/`: framework bootstrap, module loading, transport, and
-  agent lifecycle
+  agent lifecycle, RPC dispatch, object registries, and preferences
 - `python/config/`: YAML templates expanded from environment variables
 - `python/services/`: service implementations
 - `python/service-apis/`: client-facing API layers
@@ -154,4 +265,3 @@ the current DEFw code and configuration files in this repository.
 # DEFw Wiki Documentation
 Documentation is automatically generated by deepwiki.com
 https://deepwiki.com/openQSE/DEFw
-
