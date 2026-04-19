@@ -5,7 +5,7 @@ from defw_agent_info import Capability, DEFwServiceInfo
 
 
 class TestCounter:
-	def __init__(self):
+	def __init__(self, start=True):
 		self._instance_id = str(uuid.uuid4())
 		self._count = 0
 

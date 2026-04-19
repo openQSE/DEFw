@@ -5,7 +5,7 @@ from defw_exception import DEFwError
 
 
 class TestEcho:
-	def __init__(self):
+	def __init__(self, start=True):
 		self._instance_id = str(uuid.uuid4())
 
 	def query(self):
