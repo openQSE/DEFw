@@ -181,9 +181,9 @@ class YamlGlobalTestResults:
 					total_duration += r['duration']
 					if r['status'] == 'FAIL':
 						sstatus = 'FAIL'
+					elif r['status'] == 'SKIP' and sstatus != 'FAIL':
+						sstatus = 'SKIP'
 				e['duration'] = total_duration
-				# TODO: Pass the DEFw for now until we clean up the tests
-				sstatus = 'PASS'
 				e['status'] = sstatus
 				e['submission'] = timefmt
 
@@ -192,6 +192,73 @@ class YamlGlobalTestResults:
 		for t in rc['Tests']:
 			t['SubTests'] = t['SubTests'].get()
 		return rc
+
+
+def normalize_experiment_result(result):
+	if isinstance(result, dict) and 'status' in result:
+		rc = copy.deepcopy(result)
+	elif isinstance(result, bool):
+		rc = {'status': 'PASS' if result else 'FAIL'}
+	elif result is None:
+		rc = {'status': 'PASS'}
+	else:
+		rc = {'status': 'PASS', 'args': [result]}
+	return rc
+
+
+def get_result_details(result):
+	if 'error' in result:
+		return str(result['error']).splitlines()[0]
+	if 'kwargs' in result and result['kwargs']:
+		return ', '.join(f"{k}={v}" for k, v in result['kwargs'].items())
+	if 'args' in result and result['args']:
+		return ', '.join(str(v) for v in result['args'])
+	return ''
+
+
+def formatGlobalTestResultsTable(status=None):
+	global global_test_results
+
+	status_filter = status.upper() if isinstance(status, str) else None
+	rows = []
+	for suite in global_test_results.get()['Tests']:
+		for result in suite['SubTests']:
+			if status_filter and result['status'] != status_filter:
+				continue
+			rows.append({
+				'experiment': f"{suite['name']}::{result['name']}",
+				'status': result['status'],
+				'duration': f"{result.get('duration', 0):.3f}s",
+				'details': get_result_details(result),
+			})
+
+	headers = ['Experiment', 'Status', 'Duration', 'Details']
+	if not rows:
+		return "No experiment results recorded."
+
+	widths = [len(h) for h in headers]
+	for row in rows:
+		widths[0] = max(widths[0], len(row['experiment']))
+		widths[1] = max(widths[1], len(row['status']))
+		widths[2] = max(widths[2], len(row['duration']))
+		widths[3] = max(widths[3], len(row['details']))
+
+	def format_row(values):
+		return " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values))
+
+	sep = "-+-".join("-" * width for width in widths)
+	lines = [
+		format_row(headers),
+		sep,
+	]
+	for row in rows:
+		lines.append(format_row([
+			row['experiment'],
+			row['status'],
+			row['duration'],
+			row['details'],
+		]))
+	return "\n".join(lines)
 
 class Documentation:
 	def __init__(self, base_name):
@@ -392,6 +459,7 @@ class Script(MethodInterceptor):
 		name = self.name.replace(self.__prefix, '')
 
 		preferences = common.global_pref
+		start_time = time.time()
 
 		module = __import__(self.name)
 		# force a reload in case it has changed since it has
@@ -415,6 +483,17 @@ class Script(MethodInterceptor):
 					raise e
 				else:
 					rc = {'status': 'FAIL', 'error': traceback.format_exc()}
+		duration = time.time() - start_time
+		if method_name == 'run':
+			result = normalize_experiment_result(rc)
+			result['duration'] = duration
+			global_test_results[self.__parent_suite] = {
+				'name': name,
+				'status': result['status'],
+				'duration': result['duration'],
+				**{k: v for k, v in result.items()
+				   if k not in ['name', 'status', 'duration']},
+			}
 		return rc
 
 	def run(self, progress=-1):
@@ -1090,6 +1169,7 @@ def dumpGlobalTestResults(fname=None, status=None, desc=None):
 	global global_test_results
 
 	results = global_test_results.get()
+	table = formatGlobalTestResultsTable(status=status)
 
 	if fname:
 		fpath = fname
@@ -1101,7 +1181,9 @@ def dumpGlobalTestResults(fname=None, status=None, desc=None):
 				Dumper=DEFwDumper, indent=2,
 				sort_keys=False))
 	else:
-		print(yaml.dump(results, Dumper=DEFwDumper, indent=2, sort_keys=False))
+		print(table)
+
+	return table
 
 def setup_external_paths(paths, prepend=False):
 	global defw_tmp_dir
