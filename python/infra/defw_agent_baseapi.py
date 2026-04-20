@@ -25,10 +25,11 @@ class BaseAgentAPI(BaseRemote):
 					obj = c(start=False)
 					svcs.append(obj.query())
 			except Exception:
-				logging.exception(
+				logging.defw_stacktrace(
 					"Failed to query service metadata for %s from %s",
 					getattr(c, "__name__", c),
 					getattr(module, "__name__", module),
+					exc_info=True,
 				)
 		return svcs
 

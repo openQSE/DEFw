@@ -55,7 +55,7 @@ class Process:
 	def kill(self):
 		logging.debug(f"Kill process with pid: {self.__pid}")
 		stack_trace_str = "".join(traceback.format_stack())
-		logging.debug(f"{stack_trace_str}")
+		logging.defw_stacktrace(f"{stack_trace_str}")
 		self.__process.kill()
 		try:
 			os.waitpid(self.__pid, 0)
@@ -78,5 +78,4 @@ class Process:
 
 	def getpid(self):
 		return self.__pid
-
 

@@ -55,9 +55,10 @@ class WorkerEvent:
 			self.msg_yaml = None
 			if msg:
 				self.msg_yaml = yaml.load(msg, Loader=yaml.Loader)
-		logging.debug("workerEvent generated from: ")
 		stack_trace_str = "".join(traceback.format_stack())
-		logging.debug(f"{stack_trace_str}")
+		logging.defw_stacktrace(
+			f"workerEvent generated from:\n{stack_trace_str}"
+		)
 
 	def __check_type(self, we_type):
 		if we_type != WorkerEvent.EVENT_INCOMING_REQUEST and \
@@ -121,7 +122,9 @@ class WorkerRequest:
 		logging.debug(f"WorkRequest({self.type2str(self.wr_type)}, " \
 					  f"{self.blocking}, {self.req_uuid})")
 		stack_trace_str = "".join(traceback.format_stack())
-		logging.debug(f"{stack_trace_str}")
+		logging.defw_stacktrace(
+			f"WorkRequest stack trace:\n{stack_trace_str}"
+		)
 
 	def __check_type(self, wr_type):
 		if wr_type != WorkerRequest.WR_SEND_MSG and \

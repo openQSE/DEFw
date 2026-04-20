@@ -201,7 +201,10 @@ def _shutdown_spawned_services():
 	try:
 		defw_shutdown_services()
 	except Exception:
-		logging.exception("Failed to shut down spawned DEFw services")
+		logging.defw_stacktrace(
+			"Failed to shut down spawned DEFw services",
+			exc_info=True,
+		)
 
 
 atexit.register(_shutdown_spawned_services)
