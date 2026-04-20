@@ -12,6 +12,8 @@ FAIL = -1
 
 def run():
 	services = defw_spawn_services('svc_test_echo')
+	first = None
+	second = None
 	try:
 		resmgr = defw_get_resource_mgr()
 		first = defw_reserve_service_by_name(resmgr, "TestEcho")[0]
@@ -25,4 +27,10 @@ def run():
 			second_instance_id=second_id,
 		)
 	finally:
+		for api in (first, second):
+			if api is not None:
+				try:
+					api.shutdown()
+				except Exception:
+					pass
 		defw_shutdown_services(services)

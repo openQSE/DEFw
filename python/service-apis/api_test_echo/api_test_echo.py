@@ -13,3 +13,6 @@ class TestEcho(BaseRemote):
 
 	def raise_error(self):
 		pass
+
+	def shutdown(self):
+		pass

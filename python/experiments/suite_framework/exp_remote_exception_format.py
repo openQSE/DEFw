@@ -12,6 +12,7 @@ FAIL = -1
 
 def run():
 	services = defw_spawn_services('svc_test_echo')
+	echo = None
 	try:
 		resmgr = defw_get_resource_mgr()
 		echo = defw_reserve_service_by_name(resmgr, "TestEcho")[0]
@@ -31,4 +32,9 @@ def run():
 			)
 		return defwrc(FAIL, msg="remote exception was not raised")
 	finally:
+		if echo is not None:
+			try:
+				echo.shutdown()
+			except Exception:
+				pass
 		defw_shutdown_services(services)

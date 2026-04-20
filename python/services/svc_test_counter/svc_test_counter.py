@@ -8,6 +8,7 @@ class TestCounter:
 	def __init__(self, start=True):
 		self._instance_id = str(uuid.uuid4())
 		self._count = 0
+		self._ref_count = 0
 
 	def query(self):
 		cap = Capability(1, 1, "default test counter capability")
@@ -21,9 +22,12 @@ class TestCounter:
 		)
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
+		self._ref_count += 1
 		return None
 
 	def release(self, services=None):
+		if self._ref_count > 0:
+			self._ref_count -= 1
 		return None
 
 	def get_instance_id(self):
@@ -37,5 +41,9 @@ class TestCounter:
 		return self._count
 
 	def shutdown(self):
-		common.shutdown_service_instance(self)
-		return True
+		if self._ref_count > 0:
+			self._ref_count -= 1
+		if self._ref_count == 0:
+			common.shutdown_service_instance(self)
+			return True
+		return False

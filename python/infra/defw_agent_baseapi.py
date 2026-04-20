@@ -41,7 +41,7 @@ class BaseAgentAPI(BaseRemote):
 		if mod_name in services:
 			mod = services[mod_name]
 			for c in mod.service_classes:
-				if class_name == c.__class__.__name__:
+				if class_name == c.__name__:
 					obj = c()
 					return obj.reserve(svc_info, client_ep, *args, **kwargs)
 
@@ -61,4 +61,3 @@ def query_service_info(ep, name=None):
 				return svc
 		return []
 	return svcs
-

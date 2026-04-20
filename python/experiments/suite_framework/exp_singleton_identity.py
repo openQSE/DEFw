@@ -12,6 +12,8 @@ FAIL = -1
 
 def run():
 	services = defw_spawn_services('svc_test_counter')
+	first = None
+	second = None
 	try:
 		resmgr = defw_get_resource_mgr()
 		first = defw_reserve_service_by_name(resmgr, "TestCounter")[0]
@@ -27,4 +29,10 @@ def run():
 			count_after_increment=final_count,
 		)
 	finally:
+		for api in (first, second):
+			if api is not None:
+				try:
+					api.shutdown()
+				except Exception:
+					pass
 		defw_shutdown_services(services)
