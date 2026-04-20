@@ -55,6 +55,29 @@ def normalize_scripts(config):
 	return scripts
 
 
+def apply_script_selector(config, selector):
+	if not selector:
+		return config
+	if "::" in selector:
+		suite_name, script_name = selector.split("::", 1)
+		suite_name = suite_name.strip()
+		script_name = script_name.strip()
+		if not suite_name or not script_name:
+			raise ValueError("Script selector must be suite::script")
+		if config.get("suite") != suite_name:
+			raise ValueError(
+				f"Selector suite '{suite_name}' does not match config suite "
+				f"'{config.get('suite')}'"
+			)
+	else:
+		script_name = selector.strip()
+		if not script_name:
+			raise ValueError("Script selector must not be empty")
+	config = dict(config)
+	config["scripts"] = [script_name]
+	return config
+
+
 def join_modules(config):
 	modules = list(DEFAULT_MODULES)
 	for module in config.get("modules", []):
@@ -153,6 +176,10 @@ def parse_args():
 		action="store_true",
 		help="Print the resolved command and environment, then exit",
 	)
+	parser.add_argument(
+		"--script",
+		help="Run only one script, optionally as suite::script",
+	)
 	return parser.parse_args()
 
 
@@ -167,6 +194,7 @@ def main():
 
 	config_path = resolve_config_path(args.config)
 	config = load_config(config_path)
+	config = apply_script_selector(config, args.script)
 	env = build_environment(config)
 	cmd = build_command(config)
 
