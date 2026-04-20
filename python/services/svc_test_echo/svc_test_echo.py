@@ -1,5 +1,6 @@
 import uuid
 
+import defw_common_def as common
 from defw_agent_info import Capability, DEFwServiceInfo
 from defw_exception import DEFwError
 
@@ -33,3 +34,7 @@ class TestEcho:
 
 	def raise_error(self):
 		raise DEFwError("intentional self-test error")
+
+	def shutdown(self):
+		common.shutdown_service_instance(self)
+		return True
