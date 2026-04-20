@@ -84,7 +84,23 @@ class DEFwResMgr:
 					elif db == self.__active_clients_db:
 						i.add_loc_db(DEFwResMgr.ACTV_CLT)
 
+	def __prune_db(self, agent_dict, db):
+		current_ids = set(agent_dict.keys())
+		with self.__db_lock:
+			stale_ids = [agent_id for agent_id in db.keys() if agent_id not in current_ids]
+			for agent_id in stale_ids:
+				logging.debug(f"Pruning stale resource manager entry {agent_id}")
+				del db[agent_id]
+
 	def __reload_resources(self, query=True):
+		client_agents.reload()
+		active_client_agents.reload()
+		service_agents.reload()
+		active_service_agents.reload()
+		self.__prune_db(client_agents, self.__clients_db)
+		self.__prune_db(active_client_agents, self.__active_clients_db)
+		self.__prune_db(service_agents, self.__services_db)
+		self.__prune_db(active_service_agents, self.__active_services_db)
 		self.__grab_agent_info(client_agents, self.__clients_db, query=query)
 		# TODO: I'm disabling the resmgr trying to query itself for now.
 		# Figure out how to properly handle this

@@ -240,7 +240,7 @@ class DEFwAgents:
 
 	def reload(self):
 		with self.__dict_lock:
-			self.max = 0
+			snapshot = {}
 			agent = None
 			defw_lock_agent_lists()
 			try:
@@ -259,14 +259,15 @@ class DEFwAgents:
 								agent.node_type,
 								remote_uuid,
 								blk_uuid = blk_uuid)
-						if agent.name not in self.agent_dict:
-							self.max += 1
-						self.agent_dict[ep.get_id()] = Agent(ep)
+						snapshot[ep.get_id()] = Agent(ep)
 						logging.debug(f"Found Agent:\n{ep}")
 						defw_release_agent_blk_unlocked(agent, False)
 			except:
 				pass
 			defw_release_agent_lists()
+			self.agent_dict.clear()
+			self.agent_dict.update(snapshot)
+			self.max = len(self.agent_dict)
 
 	def get_spec_agent(self, ep):
 		self.reload()
@@ -323,5 +324,4 @@ class DEFwActiveClientAgents(DEFwAgents):
 	def __init__(self):
 		self.__agent_dict = {}
 		super().__init__(self.__agent_dict, defw_get_next_active_client_agent)
-
 
