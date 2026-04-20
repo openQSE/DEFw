@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import yaml
 
@@ -107,6 +108,42 @@ def write_pref_file(config, log_dir):
 	with open(pref_path, "w", encoding="utf-8") as stream:
 		yaml.safe_dump(pref, stream, sort_keys=False)
 	return str(pref_path)
+
+
+def find_process_log_dirs(start_time, excluded_roots=None, search_root=Path("/tmp")):
+	log_files = ("defw_out.log", "defw_py.log", "pid")
+	if not search_root.is_dir():
+		return []
+	excluded_roots = [Path(root).resolve() for root in (excluded_roots or [])]
+	dirs = []
+	for entry in search_root.iterdir():
+		if not entry.is_dir():
+			continue
+		entry_resolved = entry.resolve()
+		if any(
+			entry_resolved == root or root in entry_resolved.parents
+			for root in excluded_roots
+		):
+			continue
+		try:
+			if entry.stat().st_mtime < start_time - 1:
+				continue
+		except FileNotFoundError:
+			continue
+		if any((entry / log_file).exists() for log_file in log_files):
+			dirs.append(entry)
+	return sorted(dirs)
+
+
+def collect_process_logs(log_dir, start_time):
+	log_root = Path(log_dir).resolve()
+	collection_dir = log_root / "process_logs"
+	collection_dir.mkdir(parents=True, exist_ok=True)
+	for src_dir in find_process_log_dirs(start_time, excluded_roots=[log_root]):
+		dst_dir = collection_dir / src_dir.name
+		if dst_dir.exists():
+			shutil.rmtree(dst_dir)
+		shutil.copytree(src_dir, dst_dir)
 
 
 def build_environment(config):
@@ -250,7 +287,12 @@ def main():
 			print(f"  {key}={env[key]}")
 		return 0
 
-	completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
+	log_dir = env["DEFW_LOG_DIR"]
+	start_time = time.time()
+	try:
+		completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
+	finally:
+		collect_process_logs(log_dir, start_time)
 	return completed.returncode
 
 
