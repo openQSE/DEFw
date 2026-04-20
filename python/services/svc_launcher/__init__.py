@@ -19,11 +19,10 @@ svc_info = {'name': 'Launcher',
 service_classes = [Launcher]
 
 def initialize():
-	logging.debug("Initializing the launcher module")
+	logging.defw_service("Initializing the launcher module")
 	pass
 
 def uninitialize():
-	logging.debug("Uninitializing the launcher module")
+	logging.defw_service("Uninitializing the launcher module")
 	common.shutdown = True
 	pass
-

@@ -35,7 +35,7 @@ class Process:
 							stdin=subprocess.PIPE, start_new_session=True)
 			self.__pid = self.__process.pid
 		except Exception as e:
-			logging.critical(f"hit exception: {e}")
+			logging.defw_service(f"hit exception: {e}")
 			raise e
 		return self.__pid
 
@@ -44,7 +44,7 @@ class Process:
 		return output, error, self.__process.returncode
 
 	def kill(self):
-		logging.debug(f"Kill process with pid: {self.__pid}")
+		logging.defw_service(f"Kill process with pid: {self.__pid}")
 		self.__process.kill()
 		try:
 			os.waitpid(self.__pid, 0)
@@ -52,7 +52,7 @@ class Process:
 			pass
 
 	def terminate(self):
-		logging.debug(f"Terminate process with pid: {self.__pid}")
+		logging.defw_service(f"Terminate process with pid: {self.__pid}")
 		self.__process.terminate()
 		try:
 			os.waitpid(self.__pid, 0)
@@ -84,7 +84,7 @@ class Launcher:
 				for pid, proc in self.__proc_dict.items():
 					exists = psutil.pid_exists(pid)
 					if proc.poll() is not None:
-						logging.debug(f"{pid} terminated with rc {proc.returncode()}")
+						logging.defw_service(f"{pid} terminated with rc {proc.returncode()}")
 						stdout, stderr, rc = proc.get_result()
 						proc.kill()
 						self.__dead_procs[pid] = (stdout, stderr, rc)
@@ -92,7 +92,7 @@ class Launcher:
 					if pid in self.__proc_dict.keys():
 						del self.__proc_dict[pid]
 			sleep(0.0001)
-		logging.debug("Monitor thread shutdown")
+		logging.defw_service("Monitor thread shutdown")
 
 	def compose_remote_cmd(self, exe, env, use, modules, python_env):
 		cmd = ''
@@ -118,7 +118,7 @@ class Launcher:
 
 	def launch(self, cmd, env=None, path='', wait=False,
 			   target=None, muse='', modules='', python_env=''):
-		logging.debug(f"Starting {cmd} on {target}")
+		logging.defw_service(f"Starting {cmd} on {target}")
 		if target and target != socket.gethostname():
 			self.run_cmd_on_target(cmd, env, muse, modules, python_env, target)
 			return 0
@@ -165,7 +165,7 @@ class Launcher:
 					rm_pid.append(pid)
 				for pid in rm_pid:
 					del self.__proc_dict[pid]
-		logging.debug("Launcher Service shutdown requested")
+		logging.defw_service("Launcher Service shutdown requested")
 		self.__shutdown = True
 
 	def blocking_wait(self, pid=-1):
@@ -197,11 +197,10 @@ class Launcher:
 		return info
 
 	def test(self):
-		logging.debug("Testing Launcher")
+		logging.defw_service("Testing Launcher")
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
-		logging.debug(f"{client_ep} reserved the {svc}")
+		logging.defw_service(f"{client_ep} reserved the {svc}")
 
 	def release(self, services):
 		self.runner_shutdown = True
-
