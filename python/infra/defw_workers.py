@@ -262,18 +262,18 @@ class WorkerThread:
 			logging.defw_worker(f"Received event {we.type2str([we.ev_type])}")
 
 			if we.ev_type == WorkerEvent.EVENT_INCOMING_REQUEST:
-				logging.debug(f"handling request {we.msg_yaml}")
+				logging.defw_rpc(f"handling request {we.msg_yaml}")
 				self.spawn_temporary_worker(self.handle_rpc_req, we.msg_yaml, we.uuid)
 			elif we.ev_type == WorkerEvent.EVENT_INCOMING_RESPONSE:
 				# find request
-				logging.debug(f"handling response {we.msg_yaml}")
+				logging.defw_rpc(f"handling response {we.msg_yaml}")
 				try:
 					with self.req_db_lock:
 						wr = self.req_db[we.msg_yaml['rpc']['req-uuid']]
 						del self.req_db[we.msg_yaml['rpc']['req-uuid']]
 					wr.queue.put(we)
 				except:
-					logging.critical(f"Unmatched response. DB = {self.req_db}")
+					logging.defw_rpc(f"Unmatched response. DB = {self.req_db}")
 			elif we.ev_type == WorkerEvent.EVENT_REFRESH:
 				logging.defw_worker("Refreshing Agents")
 				self.spawn_temporary_worker(self.refresh_agents)
@@ -306,7 +306,7 @@ class WorkerThread:
 					logging.defw_worker(f"Queuing Event Complete on WR {we.uuid}")
 					wr.queue.put(we)
 				except:
-					logging.critical(f"Unmatched response. DB = {self.req_db}")
+					logging.defw_rpc(f"Unmatched response. DB = {self.req_db}")
 			elif we.ev_type == WorkerEvent.EVENT_SHUTDOWN:
 				shutdown = True
 				# shutdown any waiting events
@@ -325,7 +325,7 @@ class WorkerThread:
 
 		start_rep_req_handle = time.time()
 
-		logging.debug("Calling handle_rpc_type")
+		logging.defw_rpc("Calling handle_rpc_type")
 
 		common.g_rpc_metrics.add_rpc_req_time(y['rpc']['statistics']['send_time'],
 								   time.time())
@@ -333,9 +333,9 @@ class WorkerThread:
 		# check to see if this is for me
 		target = y['rpc']['dst']
 		if not target == me.my_endpoint():
-			logging.debug("Message is not for me")
-			logging.debug(target)
-			logging.debug(me.my_endpoint())
+			logging.defw_rpc("Message is not for me")
+			logging.defw_rpc(target)
+			logging.defw_rpc(me.my_endpoint())
 			return
 		source = y['rpc']['src']
 		hostname = source.hostname
@@ -361,29 +361,29 @@ class WorkerThread:
 		elif rpc_type == 'instantiate_class' or rpc_type == 'destroy_class':
 			class_name = y['rpc']['class']
 			class_id = y['rpc']['class_id']
-			logging.debug(f"instantiate_class {class_name} with {class_id}")
+			logging.defw_rpc(f"instantiate_class {class_name} with {class_id}")
 		else:
 			raise DEFwError('Unexpected rpc')
 
 		# any remote invocation implies that module which needs to be
 		# imported is in the python/icpa-be/
-		logging.debug("module name is: %s " % mname)
-		logging.debug("rpc type is: %s " % rpc_type)
+		logging.defw_rpc("module name is: %s " % mname)
+		logging.defw_rpc("rpc type is: %s " % rpc_type)
 		module = importlib.import_module(mname)
 		if common.get_debug_module_reload():
 			importlib.reload(module)
-		logging.debug(f"module is: {module.__name__}")
+		logging.defw_rpc(f"module is: {module.__name__}")
 		args = y['rpc']['parameters']['args']
 		kwargs = y['rpc']['parameters']['kwargs']
 		defw_exception_string = None
 		try:
 			if rpc_type == 'function_call':
-				logging.debug(f'remote call to function {function_name}')
+				logging.defw_rpc(f'remote call to function {function_name}')
 				module_func = getattr(module, function_name)
 				if hasattr(module_func, '__call__'):
 					rc = module_func(*args, **kwargs)
 			elif rpc_type == 'instantiate_class':
-				logging.debug(f'remote call to instantiate class {class_name}')
+				logging.defw_rpc(f'remote call to instantiate class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					if not common.has_class_entry(class_id):
 						common.add_to_class_db(defw.resmgr, class_id)
@@ -410,7 +410,7 @@ class WorkerThread:
 							instance = my_class(*args, **kwargs)
 							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
-				logging.debug(f'remote call to destroy class {class_name}')
+				logging.defw_rpc(f'remote call to destroy class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					common.del_entry_from_class_db(class_id)
 				else:
@@ -427,7 +427,7 @@ class WorkerThread:
 								   f"but id refers to class {type(instance).__name__}")
 				start = time.time()
 				rc = getattr(instance, method_name)(*args, **kwargs)
-				logging.debug(f'remote call to method call {class_name}.{method_name} took '\
+				logging.defw_rpc(f'remote call to method call {class_name}.{method_name} took '\
 							  f'{time.time() - start}')
 		except Exception as e:
 			# NOTE: I can just send the exception as is to the other end, however,
@@ -478,8 +478,8 @@ def put_request(msg, uuid):
 						 uuid=uuid, msg=msg)
 		worker_thread.put_ev(we)
 	except:
-		logging.critical(f"Recieved a bad request:\n{msg}")
-	logging.debug("Putting request")
+		logging.defw_rpc(f"Recieved a bad request:\n{msg}")
+	logging.defw_rpc("Putting request")
 
 def put_response(msg, uuid):
 	try:
@@ -487,8 +487,8 @@ def put_response(msg, uuid):
 						 uuid=uuid, msg=msg)
 		worker_thread.put_ev(we)
 	except:
-		logging.critical(f"Recieved a bad response:\n{msg}")
-	logging.debug("Putting response")
+		logging.defw_rpc(f"Recieved a bad response:\n{msg}")
+	logging.defw_rpc("Putting response")
 
 def put_refresh():
 	we = WorkerEvent(WorkerEvent.EVENT_REFRESH)
