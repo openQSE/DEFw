@@ -326,6 +326,25 @@ class DEFwResMgr:
 
 		return r
 
+	def __dedup_service_infos(self, service_infos):
+		unique_infos = []
+		seen = set()
+		for info in service_infos:
+			info_key = (
+				info.get_key(),
+				info.get_service_name(),
+				info.get_class_name(),
+				info.get_module_name(),
+			)
+			if info_key in seen:
+				logging.debug(
+					f"Skipping duplicate service info for key={info_key}: {info}"
+				)
+				continue
+			seen.add(info_key)
+			unique_infos.append(info)
+		return unique_infos
+
 	"""
 	List all available Agents in the DEFw Network
 
@@ -344,6 +363,7 @@ class DEFwResMgr:
 		self.__reload_resources(query=True)
 		all_info += self.get_info(self.__active_services_db, svc_name, svc_type, svc_caps)
 		all_info += self.get_info(self.__services_db, svc_name, svc_type, svc_caps)
+		all_info = self.__dedup_service_infos(all_info)
 		logging.debug(f"all_info({all_info})")
 		return all_info
 
