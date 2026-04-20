@@ -42,7 +42,6 @@ class DEFwResMgr:
 		self.__reload_resources(query=True)
 
 	def __grab_agent_info(self, agent_dict, db, skip_self=False, query=True):
-		agent_dict.dump()
 		for k, agent in agent_dict.items():
 			ep = agent.get_ep()
 			logging.debug(f"examining -- {ep}\nself: {self.__my_ep}")
@@ -60,15 +59,19 @@ class DEFwResMgr:
 				svc_info = client_api.query()
 			with self.__db_lock:
 				if aname in db:
-					logging.debug(f"{aname} is already in the {db}")
-					continue
-				db[aname] = \
-					{'agent': agent,
-					'api': client_api,
-					'info': svc_info}
-				if not 'state' in db[aname]:
-					logging.debug(f"Setting {aname} stat to CONNECTED")
-					db[aname]['state'] = AGENT_STATE_CONNECTED
+					logging.debug(f"Refreshing cached agent info for {aname}")
+					db[aname]['agent'] = agent
+					db[aname]['api'] = client_api
+					if query:
+						db[aname]['info'] = svc_info
+				else:
+					db[aname] = \
+						{'agent': agent,
+						'api': client_api,
+						'info': svc_info}
+					if not 'state' in db[aname]:
+						logging.debug(f"Setting {aname} stat to CONNECTED")
+						db[aname]['state'] = AGENT_STATE_CONNECTED
 
 				for i in db[aname]['info']:
 					i.add_key(aname)
@@ -376,4 +379,3 @@ class DEFwResMgr:
 							   self.__class__.__module__,
 							   cap, -1)
 		return info
-

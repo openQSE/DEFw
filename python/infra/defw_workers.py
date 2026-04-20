@@ -13,6 +13,30 @@ import defw
 from collections import deque
 import time
 
+INSTANCE_MODE_SINGLETON = 'singleton'
+INSTANCE_MODE_PER_CONNECTION = 'per_connection'
+
+
+def get_instance_mode(module):
+	svc_info = getattr(module, 'svc_info', None)
+	if svc_info and 'instance_mode' in svc_info:
+		return svc_info['instance_mode']
+
+	package_name = getattr(module, '__package__', None)
+	if package_name and package_name != module.__name__:
+		try:
+			service_package = importlib.import_module(package_name)
+			service_metadata = getattr(service_package, 'svc_info', None)
+			if service_metadata and 'instance_mode' in service_metadata:
+				return service_metadata['instance_mode']
+		except Exception as exc:
+			logging.debug(
+				f"Unable to load service package metadata for {module.__name__}: {exc}"
+			)
+
+	return INSTANCE_MODE_PER_CONNECTION
+
+
 class WorkerEvent:
 	EVENT_INCOMING_REQUEST = 1
 	EVENT_INCOMING_RESPONSE = 2
@@ -105,9 +129,9 @@ class WorkerRequest:
 			   raise DEFwError(f"Bad Request type {wr_type}")
 
 	def type2str(self, wr_type):
-		if WorkerRequest.WR_SEND_MSG:
+		if wr_type == WorkerRequest.WR_SEND_MSG:
 			return 'WR_SEND_SMG'
-		if WorkerRequest.WR_CONNECT:
+		if wr_type == WorkerRequest.WR_CONNECT:
 			return 'WR_CONNECT'
 		return 'UNKNOWN_WORKREQUEST'
 
@@ -343,7 +367,8 @@ class WorkerThread:
 		logging.debug("module name is: %s " % mname)
 		logging.debug("rpc type is: %s " % rpc_type)
 		module = importlib.import_module(mname)
-		importlib.reload(module)
+		if common.get_debug_module_reload():
+			importlib.reload(module)
 		logging.debug(f"module is: {module.__name__}")
 		args = y['rpc']['parameters']['args']
 		kwargs = y['rpc']['parameters']['kwargs']
@@ -357,24 +382,41 @@ class WorkerThread:
 			elif rpc_type == 'instantiate_class':
 				logging.debug(f'remote call to instantiate class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
-					common.add_to_class_db(defw.resmgr, class_id)
+					if not common.has_class_entry(class_id):
+						common.add_to_class_db(defw.resmgr, class_id)
 				else:
-					try:
-						instance = common.get_class_from_db(class_id)
-					except:
+					if get_instance_mode(module) == INSTANCE_MODE_SINGLETON:
 						my_class = getattr(module, class_name)
-						# TODO: Instantiating a class can result in a blocking
-						# call
-						instance = my_class(*args, **kwargs)
-						common.add_to_class_db(instance, class_id)
+						# For singleton services the caller-provided class_id is
+						# only an alias. The shared object identity is derived
+						# from the service module and class name so independent
+						# callers reuse one server-side instance.
+						instance = common.get_or_create_singleton_instance(
+							mname, class_name,
+							lambda: my_class(*args, **kwargs)
+						)
+						if not common.has_class_entry(class_id):
+							common.bind_singleton_alias(class_id, mname, class_name, instance)
+					else:
+						try:
+							instance = common.get_class_from_db(class_id)
+						except DEFwNotFound:
+							my_class = getattr(module, class_name)
+							# TODO: Instantiating a class can result in a blocking
+							# call
+							instance = my_class(*args, **kwargs)
+							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
 				logging.debug(f'remote call to destroy class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					common.del_entry_from_class_db(class_id)
 				else:
 					instance = common.get_class_from_db(class_id)
-					del(instance)
-					common.del_entry_from_class_db(class_id)
+					if common.is_singleton_alias(class_id):
+						common.del_entry_from_class_db(class_id)
+					else:
+						del(instance)
+						common.del_entry_from_class_db(class_id)
 			elif rpc_type == 'method_call':
 				instance = common.get_class_from_db(class_id)
 				if type(instance).__name__ != class_name:
@@ -503,4 +545,3 @@ def connect_to_agent(wr):
 		return wr.wait()
 
 	return rc, None
-

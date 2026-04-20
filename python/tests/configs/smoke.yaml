@@ -1,0 +1,13 @@
+suite: framework
+scripts:
+  - remote_exception_format
+modules:
+  - api_test_echo
+master:
+  agent_name: master-resmgr
+  listen_port: 25100
+  telnet_port: 25101
+  experiment_port_base: 25110
+  report_mode: both
+  log_level: DEBUG
+  log_dir: /tmp/defw-framework-smoke

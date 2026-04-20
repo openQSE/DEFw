@@ -20,25 +20,43 @@ class DEFwError(Exception):
 		exception_list = exception_list[:-2]
 		exception_list.extend(traceback.format_tb(sys.exc_info()[2]))
 		exception_list.extend(traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1]))
-		self.stacktrace = exception_str = "Traceback (most recent call last):\n"
-		self.stacktrace = "\n".join(exception_list)
+		self.stacktrace = self._normalize_stacktrace(exception_list)
 
 	def __repr__(self):
 		return self.__str__()
 
 	def __str__(self):
-		output = {'DEFwError': {'node-name': self.node_name,
-				  'msg': self.msg, 'arg': self.arg,
-				  'file name': self.filename,
-				  'line number': self.lineno,
-				  'function': self.function,
-				  'stacktrace': self.stacktrace}}
-		try:
-			#y = yaml.dump(output, Dumper=DEFwDumper, indent=2, sort_keys=False, default_style='', default_flow_style=False)
-			y = yaml.dump(output, Dumper=DEFwDumper, default_style='', default_flow_style=False)
-		except Exception as e:
-			print(type(e), e)
-		return y
+		lines = [
+			"DEFwError:",
+			f"  node-name: {self.node_name}",
+			f"  msg: {self.msg}",
+			f"  arg: {self.arg}",
+			f"  file name: {self.filename}",
+			f"  line number: {self.lineno}",
+			f"  function: {self.function}",
+			"  stacktrace:",
+		]
+		if self.stacktrace:
+			lines.extend(f"    {line}"
+					 for line in self._normalize_stacktrace(self.stacktrace).splitlines())
+		return "\n".join(lines)
+
+	@staticmethod
+	def _normalize_stacktrace(stacktrace):
+		if isinstance(stacktrace, list):
+			lines = []
+			for entry in stacktrace:
+				for line in str(entry).splitlines():
+					line = line.rstrip()
+					if line:
+						lines.append(line)
+			return "\n".join(lines)
+		lines = []
+		for line in str(stacktrace).splitlines():
+			line = line.rstrip()
+			if line:
+				lines.append(line)
+		return "\n".join(lines)
 
 	def populate(self, node_name, msg, arg, halt, filename, lineno, function, code_context, index, stacktrace):
 		self.node_name = node_name
@@ -50,7 +68,7 @@ class DEFwError(Exception):
 		self.function = function
 		self.code_context = code_context
 		self.index = index
-		self.stacktrace = stacktrace
+		self.stacktrace = self._normalize_stacktrace(stacktrace)
 
 	def print_exception_info(self):
 		print("Exception at: ", self.filename,":", self.lineno, ":", self.function)

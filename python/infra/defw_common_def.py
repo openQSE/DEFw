@@ -117,7 +117,20 @@ def get_rpc_req_base():
 			'parameters': {'args': None, 'kwargs': None},
 			'statistics': {'send_time': None}}}
 
+#
+# Remote object identity in DEFw has two layers:
+# - class_id is the caller handle used in RPC payloads and method dispatch
+# - module_name:class_name is the identity of a shared singleton service
+#
+# For per-connection services a class_id maps to one remote object.
+# For singleton services multiple caller-generated class_ids can alias the
+# same underlying instance through global_singleton_alias_db.
+#
 global_class_db = {}
+global_singleton_db = {}
+global_singleton_alias_db = {}
+global_class_db_lock = threading.Lock()
+global_singleton_db_lock = threading.Lock()
 
 def system_shutdown():
 	global g_system_shutdown
@@ -130,28 +143,95 @@ def is_system_up():
 	return not g_system_shutdown
 
 def add_to_class_db(instance, class_id):
-	if class_id in global_class_db:
-		raise DEFwError("Duplicate class_id. Contention in timing")
-	logging.debug(f"created instance for {type(instance).__name__} "\
-			      f"with id {class_id}")
-	global_class_db[class_id] = instance
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			raise DEFwError("Duplicate class_id. Contention in timing")
+		logging.debug(f"created instance for {type(instance).__name__} "\
+				      f"with id {class_id}")
+		global_class_db[class_id] = instance
+
+def has_class_entry(class_id):
+	with global_class_db_lock:
+		return class_id in global_class_db
 
 def get_class_from_db(class_id):
-	if class_id in global_class_db:
-		return global_class_db[class_id]
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			return global_class_db[class_id]
 	logging.debug(f"Request for class not in the database {class_id}")
 	raise DEFwNotFound(f'no {class_id} in database')
 
 def del_entry_from_class_db(class_id):
-	if class_id in global_class_db:
-		instance = global_class_db[class_id]
-		logging.debug(f"removing instance for {type(instance).__name__} "\
-					"with id {class_id}")
-		del global_class_db[class_id]
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			instance = global_class_db[class_id]
+			logging.debug(f"removing instance for {type(instance).__name__} "\
+						"with id {class_id}")
+			del global_class_db[class_id]
+			global_singleton_alias_db.pop(class_id, None)
+
+def get_singleton_key(module_name, class_name):
+	return f"{module_name}:{class_name}"
+
+def get_or_create_singleton_instance(module_name, class_name, factory):
+	key = get_singleton_key(module_name, class_name)
+	with global_singleton_db_lock:
+		if key in global_singleton_db:
+			return global_singleton_db[key]
+		instance = factory()
+		logging.debug(f"created singleton instance for {class_name} with key {key}")
+		global_singleton_db[key] = instance
+		return instance
+
+def evict_singleton_instance(module_name, class_name):
+	key = get_singleton_key(module_name, class_name)
+	with global_singleton_db_lock:
+		instance = global_singleton_db.pop(key, None)
+		with global_class_db_lock:
+			aliases = [
+				class_id for class_id, alias_key in global_singleton_alias_db.items()
+				if alias_key == key
+			]
+			for class_id in aliases:
+				global_singleton_alias_db.pop(class_id, None)
+				global_class_db.pop(class_id, None)
+		if instance is not None or aliases:
+			logging.debug(
+				f"evicted singleton instance for {class_name} with key {key} "
+				f"and removed {len(aliases)} alias entries"
+			)
+		return instance
+
+def shutdown_service_instance(instance):
+	# Service code should call this helper instead of reaching into the
+	# singleton registry directly. The framework owns the mapping from the
+	# live instance back to its singleton identity.
+	return evict_singleton_instance(
+		instance.__class__.__module__,
+		instance.__class__.__name__
+	)
+
+def bind_singleton_alias(class_id, module_name, class_name, instance):
+	# Bind the caller-visible class_id to an existing singleton instance.
+	# The class_id remains the dispatch handle on later method calls even
+	# though the object's real identity is module_name:class_name.
+	key = get_singleton_key(module_name, class_name)
+	with global_class_db_lock:
+		if class_id in global_class_db:
+			raise DEFwError("Duplicate class_id. Contention in timing")
+		logging.debug(f"created instance for {type(instance).__name__} "\
+				      f"with id {class_id}")
+		global_class_db[class_id] = instance
+		global_singleton_alias_db[class_id] = key
+
+def is_singleton_alias(class_id):
+	with global_class_db_lock:
+		return class_id in global_singleton_alias_db
 
 def dump_class_db():
-	for k, v in global_class_db.items():
-		logging.debug("id = %f, name = %s" % (k, type(v).__name__))
+	with global_class_db_lock:
+		for k, v in global_class_db.items():
+			logging.debug("id = %f, name = %s" % (k, type(v).__name__))
 
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
@@ -186,7 +266,8 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'loglevel': 'critical',
 		   'halt_on_exception': False, 'remote copy': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
-		   'cmd verbosity': True}
+		   'cmd verbosity': True,
+		   'debug module reload': False}
 
 global_pref = GLOBAL_PREF_DEF
 
@@ -241,6 +322,21 @@ def set_script_remote_cp(enable):
 	global global_pref
 	global_pref['remote copy'] = enable
 	save_pref()
+
+def set_debug_module_reload(enable):
+	'''
+	Enable or disable module reloads on remote RPC dispatch for debugging.
+	'''
+	global global_pref
+	global_pref['debug module reload'] = bool(enable)
+	save_pref()
+
+def get_debug_module_reload():
+	'''
+	Return whether debug module reload is enabled for remote RPC dispatch.
+	'''
+	global global_pref
+	return global_pref['debug module reload']
 
 def set_logging_level_helper(levelno):
 	global FILE_HANDLER
@@ -400,4 +496,3 @@ def save_pref():
 def dump_pref():
 	global global_pref
 	print(yaml.dump(global_pref, Dumper=DEFwDumper, indent=2, sort_keys=True))
-

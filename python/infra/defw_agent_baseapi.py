@@ -23,8 +23,12 @@ class BaseAgentAPI(BaseRemote):
 				for c in module.service_classes:
 					obj = c(start=False)
 					svcs.append(obj.query())
-			except:
-				pass
+			except Exception:
+				logging.exception(
+					"Failed to query service metadata for %s from %s",
+					getattr(c, "__name__", c),
+					getattr(module, "__name__", module),
+				)
 		return svcs
 
 	'''
@@ -57,5 +61,4 @@ def query_service_info(ep, name=None):
 				return svc
 		return []
 	return svcs
-
 
