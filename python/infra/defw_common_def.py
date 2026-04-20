@@ -7,21 +7,23 @@ from collections import deque
 
 FILE_HANDLER = None
 CUSTOM_LEVELS = {}
+CUSTOM_LEVEL_NAMES = set()
+CUSTOM_LEVEL_GROUPS = {}
 
 # DEFAULT LOG LEVELS
-DEFW_LOG_LEVEL_INFRA =			30
-DEFW_LOG_LEVEL_SERVICES =		31
-DEFW_LOG_LEVEL_EXPERIMENTS = 	32
-DEFW_LOG_LEVEL_WORKER =			33
-DEFW_LOG_LEVEL_STACKTRACE =		34
-DEFW_LOG_LEVEL_APP =			35
+DEFW_LOG_LEVEL_CORE =			30
+DEFW_LOG_LEVEL_WORKER =			31
+DEFW_LOG_LEVEL_SERVICE =		32
+DEFW_LOG_LEVEL_APP =			33
+DEFW_LOG_LEVEL_RPC =			34
+DEFW_LOG_LEVEL_STACKTRACE =		35
 
-DEFW_LOG_LEVEL_INFRA_NAME =				"DEFW_INFRA"
-DEFW_LOG_LEVEL_SERVICES_NAME =			"DEFW_SERVICES"
-DEFW_LOG_LEVEL_EXPERIMENTS_NAME =		"DEFW_EXPERIMENTS"
-DEFW_LOG_LEVEL_WORKER_NAME =			"DEFW_WORKERS"
-DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
+DEFW_LOG_LEVEL_CORE_NAME =				"DEFW_CORE"
+DEFW_LOG_LEVEL_WORKER_NAME =			"DEFW_WORKER"
+DEFW_LOG_LEVEL_SERVICE_NAME =			"DEFW_SERVICE"
 DEFW_LOG_LEVEL_APP_NAME =				"DEFW_APP"
+DEFW_LOG_LEVEL_RPC_NAME =				"DEFW_RPC"
+DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
 
 DEFW_STATUS_STRING = 'DEFw STATUS: '
 DEFW_STATUS_SUCCESS = 'Success'
@@ -347,34 +349,84 @@ def get_debug_module_reload():
 	global global_pref
 	return global_pref['debug module reload']
 
-def set_logging_level_helper(levelno):
+def _resolve_log_levels(level):
+	if isinstance(level, int):
+		return [level]
+	if not isinstance(level, str):
+		raise ValueError(f"Unsupported log level specification: {level}")
+
+	resolved = []
+	seen = set()
+	for token in level.split(','):
+		name = token.strip()
+		if not name:
+			continue
+		name_upper = name.upper()
+		if name_upper in CUSTOM_LEVEL_GROUPS:
+			for group_level in CUSTOM_LEVEL_GROUPS[name_upper]:
+				if group_level not in seen:
+					resolved.append(group_level)
+					seen.add(group_level)
+		elif name_upper in CUSTOM_LEVELS:
+			levelno = CUSTOM_LEVELS[name_upper]
+			if levelno not in seen:
+				resolved.append(levelno)
+				seen.add(levelno)
+		else:
+			levelno = getattr(logging, name_upper)
+			if levelno not in seen:
+				resolved.append(levelno)
+				seen.add(levelno)
+	if not resolved:
+		raise ValueError("At least one log level must be provided")
+	return resolved
+
+
+def set_logging_level_helper(levelnos):
 	global FILE_HANDLER
-	global CUSTOM_LEVELS
+	global CUSTOM_LEVEL_NAMES
 
 	root_logger = logging.getLogger('')
 	for handler in root_logger.handlers[:]:
 		root_logger.removeHandler(handler)
 
-	root_logger.setLevel(levelno)
+	if isinstance(levelnos, int):
+		levelnos = [levelnos]
 
-	FILE_HANDLER.setLevel(levelno)
+	standard_levels = [levelno for levelno in levelnos
+				   if levelno not in CUSTOM_LEVEL_NAMES]
+	custom_levels = [levelno for levelno in levelnos
+				 if levelno in CUSTOM_LEVEL_NAMES]
+	root_levels = list(levelnos) if levelnos else [logging.CRITICAL]
+	root_logger.setLevel(min(root_levels))
+
+	FILE_HANDLER.setLevel(min(root_levels))
 	for filt in FILE_HANDLER.filters[:]:
 		FILE_HANDLER.removeFilter(filt)
-	if levelno in CUSTOM_LEVELS.values():
-		FILE_HANDLER.addFilter(ExclusiveLevelFilter(levelno))
+	if custom_levels:
+		FILE_HANDLER.addFilter(SelectedLevelsFilter(custom_levels,
+									 standard_levels))
 
 	root_logger.addHandler(FILE_HANDLER)
 
-class ExclusiveLevelFilter(logging.Filter):
-	def __init__(self, levelno):
+class SelectedLevelsFilter(logging.Filter):
+	def __init__(self, custom_levels, standard_levels):
 		super().__init__()
-		self.levelno = levelno
+		self.custom_levels = set(custom_levels)
+		self.standard_levels = list(standard_levels)
 
 	def filter(self, record):
-		return record.levelno == self.levelno or record.levelno == logging.CRITICAL
+		if record.levelno in self.custom_levels:
+			return True
+		if record.levelno in CUSTOM_LEVEL_NAMES:
+			return False
+		if not self.standard_levels:
+			return record.levelno == logging.CRITICAL
+		return record.levelno >= min(self.standard_levels)
 
-def add_logging_level(log_level, level_name):
+def add_logging_level(log_level, level_name, alias_names=None):
 	global CUSTOM_LEVELS
+	global CUSTOM_LEVEL_NAMES
 
 	func_name = level_name.lower()
 	logging.addLevelName(log_level, level_name.upper())
@@ -384,27 +436,37 @@ def add_logging_level(log_level, level_name):
 			logging.getLogger()._log(log_level, message, args, **kwargs)
 
 	CUSTOM_LEVELS[level_name.upper()] = log_level
+	CUSTOM_LEVEL_NAMES.add(log_level)
 
 	setattr(logging, func_name, custom_level_logger)
+	if alias_names:
+		for alias_name in alias_names:
+			CUSTOM_LEVELS[alias_name.upper()] = log_level
+			setattr(logging, alias_name.lower(), custom_level_logger)
+
+def add_logging_group(group_name, level_names):
+	global CUSTOM_LEVEL_GROUPS
+
+	CUSTOM_LEVEL_GROUPS[group_name.upper()] = [
+		CUSTOM_LEVELS[level_name.upper()] for level_name in level_names
+	]
 
 def set_logging_level(level, save=True):
 	'''
-	Set Python log level. One of: critical, debug, error, fatal
+	Set Python logging selection string.
+	Examples: critical, debug, DEFW_ALL, DEFW_CORE,DEFW_RPC
 	'''
 	global global_pref
 	global CUSTOM_LEVELS
 
 	try:
-		if level.upper() in CUSTOM_LEVELS:
-			log_level = CUSTOM_LEVELS[level.upper()]
-		else:
-			log_level = getattr(logging, level.upper())
-		set_logging_level_helper(log_level)
+		log_levels = _resolve_log_levels(level)
+		set_logging_level_helper(log_levels)
 		if save:
 			global_pref['loglevel'] = level
 	except Exception as e:
 		logging.critical(f"error encountered {e}")
-		logging.critical("Log level must be one of: critical, debug, error, fatal")
+		logging.critical("Log level must be one or more comma-separated standard or DEFw log levels")
 	if save:
 		save_pref()
 
@@ -424,12 +486,39 @@ def setup_log_file():
 	FILE_HANDLER.setFormatter(logging.Formatter(printformat))
 
 def setup_log_levels():
-	add_logging_level(DEFW_LOG_LEVEL_INFRA, DEFW_LOG_LEVEL_INFRA_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_SERVICES, DEFW_LOG_LEVEL_SERVICES_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_EXPERIMENTS, DEFW_LOG_LEVEL_EXPERIMENTS_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_WORKER, DEFW_LOG_LEVEL_WORKER_NAME)
+	add_logging_level(
+		DEFW_LOG_LEVEL_CORE,
+		DEFW_LOG_LEVEL_CORE_NAME,
+		alias_names=["DEFW_INFRA"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_WORKER,
+		DEFW_LOG_LEVEL_WORKER_NAME,
+		alias_names=["DEFW_WORKERS"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_SERVICE,
+		DEFW_LOG_LEVEL_SERVICE_NAME,
+		alias_names=["DEFW_SERVICES"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_APP,
+		DEFW_LOG_LEVEL_APP_NAME,
+		alias_names=["DEFW_EXPERIMENTS"],
+	)
+	add_logging_level(DEFW_LOG_LEVEL_RPC, DEFW_LOG_LEVEL_RPC_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_STACKTRACE, DEFW_LOG_LEVEL_STACKTRACE_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_APP, DEFW_LOG_LEVEL_APP_NAME)
+	add_logging_group(
+		"DEFW_ALL",
+		[
+			DEFW_LOG_LEVEL_CORE_NAME,
+			DEFW_LOG_LEVEL_WORKER_NAME,
+			DEFW_LOG_LEVEL_SERVICE_NAME,
+			DEFW_LOG_LEVEL_APP_NAME,
+			DEFW_LOG_LEVEL_RPC_NAME,
+			DEFW_LOG_LEVEL_STACKTRACE_NAME,
+		],
+	)
 
 def set_cmd_verbosity(value):
 	'''
