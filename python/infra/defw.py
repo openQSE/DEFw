@@ -217,6 +217,15 @@ def get_result_details(result):
 	return ''
 
 
+def summarize_result_details(result, max_width=80):
+	details = get_result_details(result).replace('\n', ' ').strip()
+	if len(details) <= max_width:
+		return details
+	if max_width <= 3:
+		return details[:max_width]
+	return details[:max_width - 3] + '...'
+
+
 def format_experiment_result(result):
 	lines = [f"status: {result['status']}"]
 	if 'kwargs' in result and result['kwargs']:
@@ -232,6 +241,16 @@ def format_experiment_result(result):
 	return "\n".join(lines)
 
 
+def get_report_mode():
+	mode = os.environ.get('DEFW_REPORT_MODE',
+			       preferences.get('report_mode', 'both'))
+	mode = str(mode).strip().lower()
+	if mode not in ('summary', 'detail', 'both'):
+		logging.warning(f"Unknown DEFW_REPORT_MODE '{mode}', using 'both'")
+		return 'both'
+	return mode
+
+
 def formatGlobalTestResultsTable(status=None):
 	global global_test_results
 
@@ -245,10 +264,10 @@ def formatGlobalTestResultsTable(status=None):
 				'experiment': f"{suite['name']}::{result['name']}",
 				'status': result['status'],
 				'duration': f"{result.get('duration', 0):.3f}s",
-				'details': get_result_details(result),
+				'summary': summarize_result_details(result),
 			})
 
-	headers = ['Experiment', 'Status', 'Duration', 'Details']
+	headers = ['Experiment', 'Status', 'Duration', 'Summary']
 	if not rows:
 		return "No experiment results recorded."
 
@@ -257,7 +276,7 @@ def formatGlobalTestResultsTable(status=None):
 		widths[0] = max(widths[0], len(row['experiment']))
 		widths[1] = max(widths[1], len(row['status']))
 		widths[2] = max(widths[2], len(row['duration']))
-		widths[3] = max(widths[3], len(row['details']))
+		widths[3] = max(widths[3], len(row['summary']))
 
 	def format_row(values):
 		return " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values))
@@ -272,26 +291,40 @@ def formatGlobalTestResultsTable(status=None):
 			row['experiment'],
 			row['status'],
 			row['duration'],
-			row['details'],
+			row['summary'],
 		]))
 	return "\n".join(lines)
 
 
-def formatGlobalTestResultsReport(status=None):
+def formatGlobalTestResultsDetail(status=None):
 	global global_test_results
 
-	report = [formatGlobalTestResultsTable(status=status)]
 	status_filter = status.upper() if isinstance(status, str) else None
+	report = []
 	for suite in global_test_results.get()['Tests']:
 		for result in suite['SubTests']:
 			if status_filter and result['status'] != status_filter:
 				continue
-			if 'error' not in result:
-				continue
-			report.append("")
 			report.append(f"[{suite['name']}::{result['name']}]")
 			report.append(format_experiment_result(result))
+			report.append("")
+	if report and not report[-1]:
+		report.pop()
+	if not report:
+		return "No experiment results recorded."
 	return "\n".join(report)
+
+
+def formatGlobalTestResultsReport(status=None):
+	mode = get_report_mode()
+	if mode == 'summary':
+		return formatGlobalTestResultsTable(status=status)
+	if mode == 'detail':
+		return formatGlobalTestResultsDetail(status=status)
+	return "\n\n".join([
+		formatGlobalTestResultsTable(status=status),
+		formatGlobalTestResultsDetail(status=status),
+	])
 
 class Documentation:
 	def __init__(self, base_name):
