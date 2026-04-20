@@ -109,18 +109,30 @@ class DEFwResMgr:
 			return db[aid]['state']
 
 	def __register(self, global_agent_dict, local_agent_dict, ep, info, query=True):
+		agent_id = ep.get_id()
+		logging.debug(
+			f"__register(name={ep.name}, id={agent_id}, query={query})"
+		)
 		agent = global_agent_dict.get_agent(ep)
 		self.__reload_resources(query)
 		if not agent:
-			if ep.name in local_agent_dict:
-				self.set_state(local_agent_dict, ep.get_id(), AGENT_STATE_ERROR)
+			logging.debug(
+				f"Unknown agent during register: name={ep.name}, id={agent_id}, "
+				f"known local keys={list(local_agent_dict.keys())}"
+			)
+			if agent_id in local_agent_dict:
+				self.set_state(local_agent_dict, agent_id, AGENT_STATE_ERROR)
 			logging.debug(f"Registration from an unknown client {ep}, {global_agent_dict}")
 			logging.debug(f"Dict size: {global_agent_dict.get_num_connected_agents()}")
 			for k, agent in global_agent_dict.items():
 				logging.debug(f"agent {k} - {agent.get_ep()}")
 			raise DEFwAgentNotFound(f"Registration from an unknown client {ep}, {global_agent_dict}")
 		else:
-			self.set_state(local_agent_dict, ep.get_id(), AGENT_STATE_REGISTERED)
+			logging.debug(
+				f"Registering known agent: name={ep.name}, id={agent_id}, "
+				f"local keys before state update={list(local_agent_dict.keys())}"
+			)
+			self.set_state(local_agent_dict, agent_id, AGENT_STATE_REGISTERED)
 		return
 
 	def __deregister(self, global_agent_dict, local_agent_dict, ep):
@@ -253,15 +265,51 @@ class DEFwResMgr:
 		DEFwAgentNotFound: If agent is not registered
 	"""
 	def deregister(self, ep):
-		if ep.name not in self.__clients_db and \
-		   ep.name not in self.__services_db:
-			   raise DEFwAgentNotFound(f"agent {ep.name} not found")
-		if ep.name in self.__services_db:
-			self.__services_db[ep.name]['api'].unregister()
-			del self.__services_db[ep.name]
-		else:
-			self.__clients_db[ep.name]['api'].unregister()
-			del self.__clients_db[ep.name]
+		agent_id = ep.get_id()
+		logging.debug(
+			f"resmgr.deregister(name={ep.name}, id={agent_id})"
+		)
+		logging.debug(
+			f"resmgr.deregister clients keys={list(self.__clients_db.keys())}, "
+			f"services keys={list(self.__services_db.keys())}, "
+			f"active clients keys={list(self.__active_clients_db.keys())}, "
+			f"active services keys={list(self.__active_services_db.keys())}"
+		)
+		if agent_id not in self.__clients_db and \
+		   agent_id not in self.__services_db and \
+		   agent_id not in self.__active_clients_db and \
+		   agent_id not in self.__active_services_db:
+			   raise DEFwAgentNotFound(
+				   f"agent {ep.name} ({agent_id}) not found"
+			   )
+		if agent_id in self.__services_db:
+			logging.debug(
+				f"Deregistering service entry name={ep.name}, id={agent_id} "
+				f"from services db"
+			)
+			self.__services_db[agent_id]['api'].unregister()
+			del self.__services_db[agent_id]
+		if agent_id in self.__active_services_db:
+			logging.debug(
+				f"Deregistering service entry name={ep.name}, id={agent_id} "
+				f"from active services db"
+			)
+			self.__active_services_db[agent_id]['api'].unregister()
+			del self.__active_services_db[agent_id]
+		if agent_id in self.__clients_db:
+			logging.debug(
+				f"Deregistering client entry name={ep.name}, id={agent_id} "
+				f"from clients db"
+			)
+			self.__clients_db[agent_id]['api'].unregister()
+			del self.__clients_db[agent_id]
+		if agent_id in self.__active_clients_db:
+			logging.debug(
+				f"Deregistering client entry name={ep.name}, id={agent_id} "
+				f"from active clients db"
+			)
+			self.__active_clients_db[agent_id]['api'].unregister()
+			del self.__active_clients_db[agent_id]
 		return
 
 	def get_info(self, db, svc_name, svc_type, svc_caps):
