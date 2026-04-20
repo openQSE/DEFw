@@ -64,7 +64,7 @@ class Endpoint:
 		return nt
 
 	def dump(self):
-		logging.debug(yaml.dump(self.get(), sort_keys=False))
+		logging.defw_core(yaml.dump(self.get(), sort_keys=False))
 		print(yaml.dump(self.get(), sort_keys=False))
 
 class Agent:
@@ -215,7 +215,7 @@ class DEFwAgents:
 		self.reload()
 		for name, agent in self.agent_dict.items():
 			ag_ep = agent.get_ep()
-			logging.debug(f"Comparing {ag_ep} with {endpoint}")
+			logging.defw_core(f"Comparing {ag_ep} with {endpoint}")
 			if ag_ep == endpoint:
 				return agent
 		return None
@@ -260,7 +260,7 @@ class DEFwAgents:
 								remote_uuid,
 								blk_uuid = blk_uuid)
 						snapshot[ep.get_id()] = Agent(ep)
-						logging.debug(f"Found Agent:\n{ep}")
+						logging.defw_core(f"Found Agent:\n{ep}")
 						defw_release_agent_blk_unlocked(agent, False)
 			except:
 				pass
@@ -324,4 +324,3 @@ class DEFwActiveClientAgents(DEFwAgents):
 	def __init__(self):
 		self.__agent_dict = {}
 		super().__init__(self.__agent_dict, defw_get_next_active_client_agent)
-

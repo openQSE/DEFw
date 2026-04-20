@@ -71,7 +71,7 @@ class TNH(telnetsrvlib.TelnetHandler):
 				try:
 					try:
 						line = self.raw_input(self.PROMPT)
-						logging.debug(line)
+						logging.defw_core(line)
 						#self.write(line)
 						encoding = getattr(sys.stdin, "encoding", None)
 						#logging.debug(encoding)
@@ -95,7 +95,7 @@ class TNH(telnetsrvlib.TelnetHandler):
 					self.write("\nKeyboardInterrupt\n")
 					self.console.resetbuffer()
 					self.more = 0
-		logging.debug("Exiting handler")
+		logging.defw_core("Exiting handler")
 	def raw_input(self, prompt=""):
 		#self.write(prompt)
 		return self.readline()

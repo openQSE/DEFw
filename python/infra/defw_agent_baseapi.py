@@ -55,13 +55,13 @@ class BaseAgentAPI(BaseRemote):
 							class_name,
 							lambda: c(),
 						)
-						logging.debug(
+						logging.defw_core(
 							f"Reserving singleton service {class_name} "
 							f"through shared instance {id(obj)}"
 						)
 					else:
 						obj = c()
-						logging.debug(
+						logging.defw_core(
 							f"Reserving per-connection service {class_name} "
 							f"through temporary instance {id(obj)}"
 						)
@@ -72,13 +72,13 @@ class BaseAgentAPI(BaseRemote):
 		pass
 
 def query_service_info(ep, name=None):
-	logging.debug(f"Query service on endpoint {ep}")
+	logging.defw_core(f"Query service on endpoint {ep}")
 	client_api = BaseAgentAPI(target=ep)
 	svcs = client_api.query()
-	logging.debug(f"Got service infos: {svcs}")
+	logging.defw_core(f"Got service infos: {svcs}")
 	if name:
 		for svc in svcs:
-			logging.debug(f"SVC info ---{type(svc)}--- is {svc.get_service_name()} <-> {name}")
+			logging.defw_core(f"SVC info ---{type(svc)}--- is {svc.get_service_name()} <-> {name}")
 			if name == svc.get_service_name():
 				return svc
 		return []

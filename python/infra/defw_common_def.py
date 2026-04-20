@@ -97,14 +97,14 @@ class RPCMetrics:
 		del(rspdb['window'])
 		for k, v in methodb.items():
 			del(v['window'])
-		logging.critical("RPC request timing statistics")
-		logging.critical(yaml.dump(reqdb,
+		logging.defw_core("RPC request timing statistics")
+		logging.defw_core(yaml.dump(reqdb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
-		logging.critical("RPC response timing statistics")
-		logging.critical(yaml.dump(rspdb,
+		logging.defw_core("RPC response timing statistics")
+		logging.defw_core(yaml.dump(rspdb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
-		logging.critical("RPC method timing statistics")
-		logging.critical(yaml.dump(methodb,
+		logging.defw_core("RPC method timing statistics")
+		logging.defw_core(yaml.dump(methodb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
 
 g_rpc_metrics = RPCMetrics()
@@ -136,19 +136,19 @@ global_singleton_db_lock = threading.Lock()
 
 def system_shutdown():
 	global g_system_shutdown
-	logging.debug("System Shutting down")
+	logging.defw_core("System Shutting down")
 	g_system_shutdown = True
 
 def is_system_up():
 	global g_system_shutdown
-	logging.debug(f"System is {not g_system_shutdown}")
+	logging.defw_core(f"System is {not g_system_shutdown}")
 	return not g_system_shutdown
 
 def add_to_class_db(instance, class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			raise DEFwError("Duplicate class_id. Contention in timing")
-		logging.debug(f"created instance for {type(instance).__name__} "\
+		logging.defw_core(f"created instance for {type(instance).__name__} "\
 				      f"with id {class_id}")
 		global_class_db[class_id] = instance
 
@@ -160,14 +160,14 @@ def get_class_from_db(class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			return global_class_db[class_id]
-	logging.debug(f"Request for class not in the database {class_id}")
+	logging.defw_core(f"Request for class not in the database {class_id}")
 	raise DEFwNotFound(f'no {class_id} in database')
 
 def del_entry_from_class_db(class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			instance = global_class_db[class_id]
-			logging.debug(f"removing instance for {type(instance).__name__} "\
+			logging.defw_core(f"removing instance for {type(instance).__name__} "\
 						"with id {class_id}")
 			del global_class_db[class_id]
 			global_singleton_alias_db.pop(class_id, None)
@@ -181,7 +181,7 @@ def get_or_create_singleton_instance(module_name, class_name, factory):
 		if key in global_singleton_db:
 			return global_singleton_db[key]
 		instance = factory()
-		logging.debug(f"created singleton instance for {class_name} with key {key}")
+		logging.defw_core(f"created singleton instance for {class_name} with key {key}")
 		global_singleton_db[key] = instance
 		return instance
 
@@ -198,7 +198,7 @@ def evict_singleton_instance(module_name, class_name):
 				global_singleton_alias_db.pop(class_id, None)
 				global_class_db.pop(class_id, None)
 		if instance is not None or aliases:
-			logging.debug(
+			logging.defw_core(
 				f"evicted singleton instance for {class_name} with key {key} "
 				f"and removed {len(aliases)} alias entries"
 			)
@@ -213,7 +213,7 @@ def shutdown_service_instance(instance):
 		if getattr(defw, 'resmgr', None):
 			defw.resmgr.deregister(defw.me.my_endpoint())
 	except Exception as exc:
-		logging.debug(
+		logging.defw_core(
 			f"Failed to deregister service {instance.__class__.__name__} "
 			f"before shutdown: {exc}"
 		)
@@ -230,7 +230,7 @@ def bind_singleton_alias(class_id, module_name, class_name, instance):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			raise DEFwError("Duplicate class_id. Contention in timing")
-		logging.debug(f"created instance for {type(instance).__name__} "\
+		logging.defw_core(f"created instance for {type(instance).__name__} "\
 				      f"with id {class_id}")
 		global_class_db[class_id] = instance
 		global_singleton_alias_db[class_id] = key
@@ -242,7 +242,7 @@ def is_singleton_alias(class_id):
 def dump_class_db():
 	with global_class_db_lock:
 		for k, v in global_class_db.items():
-			logging.debug("id = %f, name = %s" % (k, type(v).__name__))
+			logging.defw_core("id = %f, name = %s" % (k, type(v).__name__))
 
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
@@ -290,7 +290,7 @@ def set_editor(editor):
 	if shutil.which(editor):
 		global_pref['editor'] = shutil.which(editor)
 	else:
-		logging.critical("%s is not found" % (str(editor)))
+		logging.defw_core("%s is not found" % (str(editor)))
 	save_pref()
 
 def set_halt_on_exception(exc):
@@ -302,7 +302,7 @@ def set_halt_on_exception(exc):
 	global global_pref
 
 	if type(exc) is not bool:
-		logging.critical("Must be True or False")
+		logging.defw_core("Must be True or False")
 		global_pref['halt_on_exception'] = False
 		return
 	global_pref['halt_on_exception'] = exc
@@ -465,8 +465,8 @@ def set_logging_level(level, save=True):
 		if save:
 			global_pref['loglevel'] = level
 	except Exception as e:
-		logging.critical(f"error encountered {e}")
-		logging.critical("Log level must be one or more comma-separated standard or DEFw log levels")
+		logging.defw_core(f"error encountered {e}")
+		logging.defw_core("Log level must be one or more comma-separated standard or DEFw log levels")
 	if save:
 		save_pref()
 

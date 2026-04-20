@@ -268,7 +268,7 @@ class TelnetHandler(socketserver.BaseRequestHandler):
 
 	def setterm(self, term):
 		"Set the curses structures for this terminal"
-		logging.debug("Setting termtype to %s" % (term, ))
+		logging.defw_core("Setting termtype to %s" % (term, ))
 		curses.setupterm(term) # This will raise if the termtype is not supported
 		self.TERM = term
 		self.ESCSEQ = {}
@@ -284,7 +284,7 @@ class TelnetHandler(socketserver.BaseRequestHandler):
 
 	def setup(self):
 		"Connect incoming connection to a telnet session"
-		logging.debug("calling setterm from setup")
+		logging.defw_core("calling setterm from setup")
 		self.setterm(self.TERM)
 		self.sock = self.request
 		for k in self.DOACK.keys():
@@ -339,11 +339,11 @@ class TelnetHandler(socketserver.BaseRequestHandler):
 				try:
 					self.setterm(subreq[2:])
 				except:
-					logging.debug("Terminal type not known")
+					logging.defw_core("Terminal type not known")
 		elif cmd == SB:
 			pass
 		else:
-			logging.debug("Unhandled option: %s %s" % (cmdtxt, opttxt, ))
+			logging.defw_core("Unhandled option: %s %s" % (cmdtxt, opttxt, ))
 
 	def sendcommand(self, cmd, opt=None):
 		"Send a telnet command (IAC)"
@@ -754,7 +754,7 @@ class TelnetHandler(socketserver.BaseRequestHandler):
 							break
 				else:
 					self.write("Unknown command '%s'\n" % cmd)
-		logging.debug("Exiting handler")
+		logging.defw_core("Exiting handler")
 
 if __name__ == '__main__':
 	"Testing - Accept a single connection"
@@ -777,4 +777,3 @@ if __name__ == '__main__':
 	tns.serve_forever()
 
 # vim: set syntax=python ai showmatch:
-
