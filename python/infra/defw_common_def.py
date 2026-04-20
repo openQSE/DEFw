@@ -569,30 +569,18 @@ def load_pref():
 				for k, v in GLOBAL_PREF_DEF.items():
 					if not k in global_pref:
 						global_pref[k] = v
-	save_pref()
+	if 'DEFW_PY_LOGLEVEL' in os.environ:
+		global_pref['py_loglevel'] = os.environ['DEFW_PY_LOGLEVEL']
+	set_logging_level(global_pref['py_loglevel'], save=False)
 	return global_pref
 
 def save_pref():
 	'''
-	Save the DEFw preferences.
-		editor - the editor of choice to use for editing scripts
-		halt_on_exception - True to throw an exception on first error
-				    False to continue running scripts
-		py_loglevel - Python logging selection string
+	Apply the current DEFw preferences without writing them to disk.
+	The preference file is treated as read-only runtime input.
 	'''
 	global global_pref
-
-	try:
-		global_pref_file = os.environ['DEFW_PREF_PATH']
-	except:
-		global_pref_file = os.path.join(cdefw_global.get_defw_tmp_dir(), 'defw_pref.yaml')
-
-	with open(global_pref_file, 'w') as f:
-		f.write(yaml.dump(global_pref, Dumper=DEFwDumper, indent=2, sort_keys=False))
-
-	with open(global_pref_file, 'r') as f:
-		p = yaml.load(f, Loader=yaml.FullLoader)
-		set_logging_level(p['py_loglevel'], save=False)
+	set_logging_level(global_pref['py_loglevel'], save=False)
 
 def dump_pref():
 	global global_pref
