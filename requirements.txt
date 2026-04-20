@@ -3,3 +3,4 @@ netifaces
 psutil
 paramiko
 scons
+rich
