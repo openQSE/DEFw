@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import textwrap
 
 import yaml
 
@@ -117,19 +116,14 @@ def build_python_command(config):
 	if not isinstance(suite, str) or not suite.strip():
 		raise ValueError("Config must define a suite name")
 	scripts = normalize_scripts(config)
-	indented_scripts = ",\n".join(f"    {script!r}" for script in scripts)
-	return textwrap.dedent(
-		f"""
-		import defw
-
-		suite = defw.experiments[{suite!r}].scripts
-		for script_name in [
-		{indented_scripts}
-		]:
-		    print(suite[script_name].run())
-		defw.dumpGlobalTestResults()
-		"""
-	).strip()
+	lines = [
+		"import defw",
+		f"suite = defw.experiments[{suite!r}].scripts",
+	]
+	for script in scripts:
+		lines.append(f"print(suite[{script!r}].run())")
+	lines.append("defw.dumpGlobalTestResults()")
+	return "\n".join(lines)
 
 
 def build_command(config):
