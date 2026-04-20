@@ -206,6 +206,15 @@ def shutdown_service_instance(instance):
 	# Service code should call this helper instead of reaching into the
 	# singleton registry directly. The framework owns the mapping from the
 	# live instance back to its singleton identity.
+	try:
+		import defw
+		if getattr(defw, 'resmgr', None):
+			defw.resmgr.deregister(defw.me.my_endpoint())
+	except Exception as exc:
+		logging.debug(
+			f"Failed to deregister service {instance.__class__.__name__} "
+			f"before shutdown: {exc}"
+		)
 	return evict_singleton_instance(
 		instance.__class__.__module__,
 		instance.__class__.__name__

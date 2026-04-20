@@ -237,7 +237,7 @@ class DEFwResMgr:
 		DEFwCommError: If Resource Manager is not reachable
 	"""
 	def register_service(self, service_ep, context=None):
-		self.__register(service_agents, self.__services_db, ep, context)
+		self.__register(service_agents, self.__services_db, service_ep, context)
 
 	"""
 	De-register an agent
@@ -256,7 +256,7 @@ class DEFwResMgr:
 		if ep.name not in self.__clients_db and \
 		   ep.name not in self.__services_db:
 			   raise DEFwAgentNotFound(f"agent {ep.name} not found")
-		if ep.name in self__services_db:
+		if ep.name in self.__services_db:
 			self.__services_db[ep.name]['api'].unregister()
 			del self.__services_db[ep.name]
 		else:
