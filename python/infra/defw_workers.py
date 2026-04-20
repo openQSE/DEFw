@@ -18,8 +18,23 @@ INSTANCE_MODE_PER_CONNECTION = 'per_connection'
 
 
 def get_instance_mode(module):
-	svc_info = getattr(module, 'svc_info', {})
-	return svc_info.get('instance_mode', INSTANCE_MODE_PER_CONNECTION)
+	svc_info = getattr(module, 'svc_info', None)
+	if svc_info and 'instance_mode' in svc_info:
+		return svc_info['instance_mode']
+
+	package_name = getattr(module, '__package__', None)
+	if package_name and package_name != module.__name__:
+		try:
+			service_package = importlib.import_module(package_name)
+			service_metadata = getattr(service_package, 'svc_info', None)
+			if service_metadata and 'instance_mode' in service_metadata:
+				return service_metadata['instance_mode']
+		except Exception as exc:
+			logging.debug(
+				f"Unable to load service package metadata for {module.__name__}: {exc}"
+			)
+
+	return INSTANCE_MODE_PER_CONNECTION
 
 
 class WorkerEvent:
