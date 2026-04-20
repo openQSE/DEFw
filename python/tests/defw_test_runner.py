@@ -10,6 +10,17 @@ import time
 
 import yaml
 
+try:
+	from rich.progress import (
+		BarColumn,
+		Progress,
+		SpinnerColumn,
+		TextColumn,
+		TimeElapsedColumn,
+	)
+except ImportError:
+	Progress = None
+
 
 TESTS_DIR = Path(__file__).resolve().parent
 PYTHON_DIR = TESTS_DIR.parent
@@ -31,6 +42,7 @@ DEFAULT_PREF = {
 	"cmd verbosity": True,
 	"debug module reload": False,
 }
+PROGRESS_PREFIX = "__DEFW_PROGRESS__:"
 
 
 def list_configs():
@@ -66,6 +78,10 @@ def normalize_scripts(config):
 		if not isinstance(script, str) or not script.strip():
 			raise ValueError("Each script entry must be a non-empty string")
 	return scripts
+
+
+def get_script_names(config):
+	return normalize_scripts(config)
 
 
 def apply_script_selector(config, selector):
@@ -200,13 +216,14 @@ def build_python_command(config):
 	suite = config.get("suite")
 	if not isinstance(suite, str) or not suite.strip():
 		raise ValueError("Config must define a suite name")
-	scripts = normalize_scripts(config)
+	scripts = get_script_names(config)
 	lines = [
 		"import defw",
 		f"suite = defw.experiments[{suite!r}].scripts",
 	]
 	for script in scripts:
-		lines.append(f"print(suite[{script!r}].run())")
+		lines.append(f"suite[{script!r}].run()")
+		lines.append(f"print({(PROGRESS_PREFIX + script)!r}, flush=True)")
 	lines.append("defw.dumpGlobalTestResults()")
 	return "\n".join(lines)
 
@@ -217,6 +234,43 @@ def build_command(config):
 		"-c",
 		build_python_command(config),
 	]
+
+
+def stream_runner_output(cmd, env, total_scripts):
+	if Progress is None:
+		completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
+		return completed.returncode
+
+	with subprocess.Popen(
+		cmd,
+		env=env,
+		cwd=str(DEFW_ROOT),
+		stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT,
+		text=True,
+		bufsize=1,
+	) as process:
+		assert process.stdout is not None
+		with Progress(
+			SpinnerColumn(),
+			TextColumn("[progress.description]{task.description}"),
+			BarColumn(),
+			TextColumn("{task.completed}/{task.total}"),
+			TimeElapsedColumn(),
+			transient=True,
+		) as progress:
+			task_id = progress.add_task("Running DEFw tests", total=total_scripts)
+			for line in process.stdout:
+				if line.startswith(PROGRESS_PREFIX):
+					progress.advance(task_id)
+					script_name = line[len(PROGRESS_PREFIX):].strip()
+					progress.update(
+						task_id,
+						description=f"Completed {script_name or 'test'}",
+					)
+					continue
+				print(line, end="")
+			return process.wait()
 
 
 def parse_args():
@@ -257,6 +311,7 @@ def main():
 	config_path = resolve_config_path(args.config)
 	config = load_config(config_path)
 	config = apply_script_selector(config, args.script)
+	scripts = get_script_names(config)
 	env = build_environment(config)
 	cmd = build_command(config)
 
@@ -290,10 +345,10 @@ def main():
 	log_dir = env["DEFW_LOG_DIR"]
 	start_time = time.time()
 	try:
-		completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
+		returncode = stream_runner_output(cmd, env, len(scripts))
 	finally:
 		collect_process_logs(log_dir, start_time)
-	return completed.returncode
+	return returncode
 
 
 if __name__ == "__main__":
