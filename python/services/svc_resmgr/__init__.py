@@ -1,4 +1,5 @@
-from defw_util import prformat, fg, bg
+import logging
+
 from .svc_resmgr import DEFwResMgr
 
 SERVICE_NAME = 'DEFwResMgr'
@@ -21,7 +22,7 @@ service_classes = [DEFwResMgr]
 
 def initialize():
 	# Initialize the service. EX: start threads/processes, etc
-	prformat(fg.green+fg.bold, "registering the Resource Manager")
+	logging.defw_service("registering the Resource Manager")
 
 def uninitialize():
-	prformat(fg.green+fg.bold, "unregistering the Resource Manager")
+	logging.defw_service("unregistering the Resource Manager")
