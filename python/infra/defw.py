@@ -1349,6 +1349,16 @@ def resolve_environment_vars(config):
 
 		recurse_dictionary(config, "", config, resolve_env_var)
 
+
+def get_process_tmp_dir(tmp_root, process_name, pid=None):
+	if pid is None:
+		pid = os.getpid()
+	root = Path(tmp_root)
+	parent = root if root.name == "tmp" else root.parent
+	if str(parent) == "":
+		parent = root
+	return str(parent / f"{process_name}_{pid}")
+
 def configure_defw():
 	global defw_path
 	global only_load
@@ -1410,10 +1420,6 @@ def configure_defw():
 			cdefw_global.set_defw_mode(cy['defw']['shell'])
 			cdefw_global.set_defw_type(cy['defw']['type'])
 			try:
-				cdefw_global.set_defw_tmp_dir(cy['defw']['tmp'])
-			except:
-				pass
-			try:
 				cdefw_global.set_listen_address(int(cy['defw']['listen-address']))
 			except:
 				cdefw_global.set_listen_address("")
@@ -1432,6 +1438,15 @@ def configure_defw():
 				cdefw_global.set_node_name(cy['defw']['name'])
 			except:
 				cdefw_global.set_node_name(generate_random_string(5))
+			try:
+				cdefw_global.set_defw_tmp_dir(
+					get_process_tmp_dir(
+						cy['defw']['tmp'],
+						cy['defw']['name'],
+					)
+				)
+			except:
+				pass
 			try:
 				if cy['defw']['loglevel'].upper() == 'ERROR':
 					cdefw_global.set_log_level(EN_LOG_LEVEL_ERROR)

@@ -1,4 +1,5 @@
 import atexit
+import glob
 import logging
 import os
 import signal
@@ -129,13 +130,24 @@ def _build_service_env(service_spec):
 	return env, agent_name, listen_port, telnet_port, log_dir
 
 
-def _wait_for_daemon_pid(log_dir, timeout=5):
-	pid_path = os.path.join(log_dir, 'pid')
+def _wait_for_daemon_pid(log_dir, agent_name, timeout=5):
+	pid_paths = [os.path.join(log_dir, 'pid')]
+	search_root = os.path.dirname(log_dir)
+	if search_root:
+		pid_paths.extend(
+			glob.glob(os.path.join(search_root, f"{agent_name}_*", "pid"))
+		)
 	start = time.time()
 	while time.time() - start < timeout:
-		if os.path.isfile(pid_path):
-			with open(pid_path, 'r', encoding='utf-8') as handle:
-				return int(handle.read().strip())
+		for pid_path in pid_paths:
+			if os.path.isfile(pid_path):
+				with open(pid_path, 'r', encoding='utf-8') as handle:
+					return int(handle.read().strip())
+		if search_root:
+			pid_paths = [os.path.join(log_dir, 'pid')]
+			pid_paths.extend(
+				glob.glob(os.path.join(search_root, f"{agent_name}_*", "pid"))
+			)
 		time.sleep(0.1)
 	raise DEFwError(f"Timed out waiting for daemon pid in {log_dir}")
 
@@ -159,7 +171,7 @@ def defw_spawn_services(services):
 			start_new_session=True,
 		)
 		try:
-			pid = _wait_for_daemon_pid(log_dir)
+			pid = _wait_for_daemon_pid(log_dir, agent_name)
 		except Exception:
 			process.wait(timeout=5)
 			stdout_handle.close()
