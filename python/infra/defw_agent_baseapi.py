@@ -1,4 +1,5 @@
 import defw
+import defw_common_def as common
 from defw_remote import BaseRemote
 from defw_util import prformat, fg, bg
 import os, traceback, logging
@@ -36,13 +37,33 @@ class BaseAgentAPI(BaseRemote):
 	'''
 	def reserve(self, svc_info, client_ep, *args, **kwargs):
 		from defw import services
+		from defw_workers import (
+			INSTANCE_MODE_SINGLETON,
+			get_instance_mode,
+		)
 		class_name = svc_info.get_class_name()
 		mod_name = svc_info.get_module_name()
 		if mod_name in services:
 			mod = services[mod_name]
+			instance_mode = get_instance_mode(mod)
 			for c in mod.service_classes:
 				if class_name == c.__name__:
-					obj = c()
+					if instance_mode == INSTANCE_MODE_SINGLETON:
+						obj = common.get_or_create_singleton_instance(
+							mod_name,
+							class_name,
+							lambda: c(),
+						)
+						logging.debug(
+							f"Reserving singleton service {class_name} "
+							f"through shared instance {id(obj)}"
+						)
+					else:
+						obj = c()
+						logging.debug(
+							f"Reserving per-connection service {class_name} "
+							f"through temporary instance {id(obj)}"
+						)
 					return obj.reserve(svc_info, client_ep, *args, **kwargs)
 
 	def release(self, services):
