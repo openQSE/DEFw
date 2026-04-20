@@ -212,7 +212,7 @@ atexit.register(_shutdown_spawned_services)
 
 def defw_get_resource_mgr(timeout=SYSTEM_UP_TIMEOUT):
 	if not defw.wait_resmgr(timeout):
-		logging.debug("Couldn't find a resmgr")
+		logging.defw_app("Couldn't find a resmgr")
 		raise DEFwReserveError("Couldn't find a resmgr")
 
 	return defw.resmgr
@@ -226,13 +226,13 @@ def defw_reserve_service_by_name(resmgr, svc_name, svc_type=-1,
 		if service_infos and len(service_infos) > 0:
 			break
 		wait += 1
-		logging.debug(f"Waiting to connect to {svc_name}")
+		logging.defw_app(f"Waiting to connect to {svc_name}")
 		sleep(1)
 
 	if len(service_infos) == 0:
 		raise DEFwReserveError(f"Couldn't connect to a {svc_name}, {svc_type}, {svc_cap}")
 
-	logging.debug(f"Received service_infos: {service_infos}")
+	logging.defw_app(f"Received service_infos: {service_infos}")
 
 	svc_apis = defw.connect_to_resource(service_infos, svc_name)
 
