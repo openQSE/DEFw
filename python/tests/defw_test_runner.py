@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -18,6 +19,17 @@ DEFAULT_MODULES = [
 	"svc_resmgr",
 	"api_resmgr",
 ]
+DEFAULT_PY_LOG_LEVEL = "critical"
+DEFAULT_PREF = {
+	"editor": shutil.which("vim"),
+	"py_loglevel": DEFAULT_PY_LOG_LEVEL,
+	"halt_on_exception": False,
+	"remote copy": False,
+	"RPC timeout": 300,
+	"num_intfs": 3,
+	"cmd verbosity": True,
+	"debug module reload": False,
+}
 
 
 def list_configs():
@@ -86,6 +98,17 @@ def join_modules(config):
 	return ",".join(modules)
 
 
+def write_pref_file(config, log_dir):
+	master = config.get("master", {})
+	Path(log_dir).mkdir(parents=True, exist_ok=True)
+	pref_path = Path(log_dir) / "defw_pref.yaml"
+	pref = dict(DEFAULT_PREF)
+	pref["py_loglevel"] = str(master.get("py_loglevel", DEFAULT_PY_LOG_LEVEL))
+	with open(pref_path, "w", encoding="utf-8") as stream:
+		yaml.safe_dump(pref, stream, sort_keys=False)
+	return str(pref_path)
+
+
 def build_environment(config):
 	master = config.get("master", {})
 	env = os.environ.copy()
@@ -104,6 +127,7 @@ def build_environment(config):
 		"experiment_port_base",
 		int(listen_port) + 10,
 	))
+	pref_path = write_pref_file(config, log_dir)
 
 	env["LD_LIBRARY_PATH"] = (
 		f"{src_path}{os.pathsep}{env['LD_LIBRARY_PATH']}"
@@ -124,6 +148,7 @@ def build_environment(config):
 	env["DEFW_PARENT_ADDR"] = master.get("parent_addr", "127.0.0.1")
 	env["DEFW_PARENT_PORT"] = listen_port
 	env["DEFW_LOG_DIR"] = log_dir
+	env["DEFW_PREF_PATH"] = pref_path
 	env["DEFW_LOG_LEVEL"] = log_level
 	env["DEFW_REPORT_MODE"] = report_mode
 	env["DEFW_EXPERIMENT_PORT_BASE"] = experiment_port_base
@@ -216,6 +241,7 @@ def main():
 			"DEFW_PARENT_ADDR",
 			"DEFW_PARENT_PORT",
 			"DEFW_LOG_DIR",
+			"DEFW_PREF_PATH",
 			"DEFW_LOG_LEVEL",
 			"DEFW_REPORT_MODE",
 			"DEFW_EXPERIMENT_PORT_BASE",
