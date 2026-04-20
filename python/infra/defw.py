@@ -567,10 +567,10 @@ class Script(MethodInterceptor):
 		return rc
 
 	def run(self, progress=-1):
-		self.execute_method_by_name('run')
+		return self.execute_method_by_name('run')
 
 	def initialize(self, progress=-1):
-		self.execute_method_by_name('initialize')
+		return self.execute_method_by_name('initialize')
 
 	def show(self):
 		with open(self.__abs_path, 'r') as f:
