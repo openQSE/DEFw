@@ -274,7 +274,7 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 	rpc['rpc']['statistics']['recv_time'] = 0
 	return rpc
 
-GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'loglevel': 'critical',
+GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'py_loglevel': 'critical',
 		   'halt_on_exception': False, 'remote copy': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
 		   'cmd verbosity': True,
@@ -463,7 +463,7 @@ def set_logging_level(level, save=True):
 		log_levels = _resolve_log_levels(level)
 		set_logging_level_helper(log_levels)
 		if save:
-			global_pref['loglevel'] = level
+			global_pref['py_loglevel'] = level
 	except Exception as e:
 		logging.defw_core(f"error encountered {e}")
 		logging.defw_core("Log level must be one or more comma-separated standard or DEFw log levels")
@@ -545,7 +545,7 @@ def load_pref():
 		editor - the editor of choice to use for editing scripts
 		halt_on_exception - True to throw an exception on first error
 				    False to continue running scripts
-		log_level - Python log level. One of: critical, debug, error, fatal
+		py_loglevel - Python logging selection string
 	'''
 	global GLOBAL_PREF_DEF
 	global global_pref
@@ -561,6 +561,9 @@ def load_pref():
 			if not global_pref:
 				global_pref = GLOBAL_PREF_DEF
 			else:
+				if 'py_loglevel' not in global_pref and 'loglevel' in global_pref:
+					global_pref['py_loglevel'] = global_pref['loglevel']
+				global_pref.pop('loglevel', None)
 				#compare with the default and fill in any entries
 				#which might not be there.
 				for k, v in GLOBAL_PREF_DEF.items():
@@ -575,7 +578,7 @@ def save_pref():
 		editor - the editor of choice to use for editing scripts
 		halt_on_exception - True to throw an exception on first error
 				    False to continue running scripts
-		log_level - Python log level. One of: critical, debug, error, fatal
+		py_loglevel - Python logging selection string
 	'''
 	global global_pref
 
@@ -589,7 +592,7 @@ def save_pref():
 
 	with open(global_pref_file, 'r') as f:
 		p = yaml.load(f, Loader=yaml.FullLoader)
-		set_logging_level(p['loglevel'], save=False)
+		set_logging_level(p['py_loglevel'], save=False)
 
 def dump_pref():
 	global global_pref
