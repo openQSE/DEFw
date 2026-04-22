@@ -7,21 +7,23 @@ from collections import deque
 
 FILE_HANDLER = None
 CUSTOM_LEVELS = {}
+CUSTOM_LEVEL_NAMES = set()
+CUSTOM_LEVEL_GROUPS = {}
 
 # DEFAULT LOG LEVELS
-DEFW_LOG_LEVEL_INFRA =			30
-DEFW_LOG_LEVEL_SERVICES =		31
-DEFW_LOG_LEVEL_EXPERIMENTS = 	32
-DEFW_LOG_LEVEL_WORKER =			33
-DEFW_LOG_LEVEL_STACKTRACE =		34
-DEFW_LOG_LEVEL_APP =			35
+DEFW_LOG_LEVEL_CORE =			30
+DEFW_LOG_LEVEL_WORKER =			31
+DEFW_LOG_LEVEL_SERVICE =		32
+DEFW_LOG_LEVEL_APP =			33
+DEFW_LOG_LEVEL_RPC =			34
+DEFW_LOG_LEVEL_STACKTRACE =		35
 
-DEFW_LOG_LEVEL_INFRA_NAME =				"DEFW_INFRA"
-DEFW_LOG_LEVEL_SERVICES_NAME =			"DEFW_SERVICES"
-DEFW_LOG_LEVEL_EXPERIMENTS_NAME =		"DEFW_EXPERIMENTS"
-DEFW_LOG_LEVEL_WORKER_NAME =			"DEFW_WORKERS"
-DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
+DEFW_LOG_LEVEL_CORE_NAME =				"DEFW_CORE"
+DEFW_LOG_LEVEL_WORKER_NAME =			"DEFW_WORKER"
+DEFW_LOG_LEVEL_SERVICE_NAME =			"DEFW_SERVICE"
 DEFW_LOG_LEVEL_APP_NAME =				"DEFW_APP"
+DEFW_LOG_LEVEL_RPC_NAME =				"DEFW_RPC"
+DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
 
 DEFW_STATUS_STRING = 'DEFw STATUS: '
 DEFW_STATUS_SUCCESS = 'Success'
@@ -95,14 +97,14 @@ class RPCMetrics:
 		del(rspdb['window'])
 		for k, v in methodb.items():
 			del(v['window'])
-		logging.critical("RPC request timing statistics")
-		logging.critical(yaml.dump(reqdb,
+		logging.defw_core("RPC request timing statistics")
+		logging.defw_core(yaml.dump(reqdb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
-		logging.critical("RPC response timing statistics")
-		logging.critical(yaml.dump(rspdb,
+		logging.defw_core("RPC response timing statistics")
+		logging.defw_core(yaml.dump(rspdb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
-		logging.critical("RPC method timing statistics")
-		logging.critical(yaml.dump(methodb,
+		logging.defw_core("RPC method timing statistics")
+		logging.defw_core(yaml.dump(methodb,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
 
 g_rpc_metrics = RPCMetrics()
@@ -134,19 +136,19 @@ global_singleton_db_lock = threading.Lock()
 
 def system_shutdown():
 	global g_system_shutdown
-	logging.debug("System Shutting down")
+	logging.defw_core("System Shutting down")
 	g_system_shutdown = True
 
 def is_system_up():
 	global g_system_shutdown
-	logging.debug(f"System is {not g_system_shutdown}")
+	logging.defw_core(f"System is {not g_system_shutdown}")
 	return not g_system_shutdown
 
 def add_to_class_db(instance, class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			raise DEFwError("Duplicate class_id. Contention in timing")
-		logging.debug(f"created instance for {type(instance).__name__} "\
+		logging.defw_core(f"created instance for {type(instance).__name__} "\
 				      f"with id {class_id}")
 		global_class_db[class_id] = instance
 
@@ -158,14 +160,14 @@ def get_class_from_db(class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			return global_class_db[class_id]
-	logging.debug(f"Request for class not in the database {class_id}")
+	logging.defw_core(f"Request for class not in the database {class_id}")
 	raise DEFwNotFound(f'no {class_id} in database')
 
 def del_entry_from_class_db(class_id):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			instance = global_class_db[class_id]
-			logging.debug(f"removing instance for {type(instance).__name__} "\
+			logging.defw_core(f"removing instance for {type(instance).__name__} "\
 						"with id {class_id}")
 			del global_class_db[class_id]
 			global_singleton_alias_db.pop(class_id, None)
@@ -179,7 +181,7 @@ def get_or_create_singleton_instance(module_name, class_name, factory):
 		if key in global_singleton_db:
 			return global_singleton_db[key]
 		instance = factory()
-		logging.debug(f"created singleton instance for {class_name} with key {key}")
+		logging.defw_core(f"created singleton instance for {class_name} with key {key}")
 		global_singleton_db[key] = instance
 		return instance
 
@@ -196,7 +198,7 @@ def evict_singleton_instance(module_name, class_name):
 				global_singleton_alias_db.pop(class_id, None)
 				global_class_db.pop(class_id, None)
 		if instance is not None or aliases:
-			logging.debug(
+			logging.defw_core(
 				f"evicted singleton instance for {class_name} with key {key} "
 				f"and removed {len(aliases)} alias entries"
 			)
@@ -206,6 +208,15 @@ def shutdown_service_instance(instance):
 	# Service code should call this helper instead of reaching into the
 	# singleton registry directly. The framework owns the mapping from the
 	# live instance back to its singleton identity.
+	try:
+		import defw
+		if getattr(defw, 'resmgr', None):
+			defw.resmgr.deregister(defw.me.my_endpoint())
+	except Exception as exc:
+		logging.defw_core(
+			f"Failed to deregister service {instance.__class__.__name__} "
+			f"before shutdown: {exc}"
+		)
 	return evict_singleton_instance(
 		instance.__class__.__module__,
 		instance.__class__.__name__
@@ -219,7 +230,7 @@ def bind_singleton_alias(class_id, module_name, class_name, instance):
 	with global_class_db_lock:
 		if class_id in global_class_db:
 			raise DEFwError("Duplicate class_id. Contention in timing")
-		logging.debug(f"created instance for {type(instance).__name__} "\
+		logging.defw_core(f"created instance for {type(instance).__name__} "\
 				      f"with id {class_id}")
 		global_class_db[class_id] = instance
 		global_singleton_alias_db[class_id] = key
@@ -231,7 +242,7 @@ def is_singleton_alias(class_id):
 def dump_class_db():
 	with global_class_db_lock:
 		for k, v in global_class_db.items():
-			logging.debug("id = %f, name = %s" % (k, type(v).__name__))
+			logging.defw_core("id = %f, name = %s" % (k, type(v).__name__))
 
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
@@ -263,7 +274,7 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 	rpc['rpc']['statistics']['recv_time'] = 0
 	return rpc
 
-GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'loglevel': 'critical',
+GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'py_loglevel': 'critical',
 		   'halt_on_exception': False, 'remote copy': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
 		   'cmd verbosity': True,
@@ -279,7 +290,7 @@ def set_editor(editor):
 	if shutil.which(editor):
 		global_pref['editor'] = shutil.which(editor)
 	else:
-		logging.critical("%s is not found" % (str(editor)))
+		logging.defw_core("%s is not found" % (str(editor)))
 	save_pref()
 
 def set_halt_on_exception(exc):
@@ -291,7 +302,7 @@ def set_halt_on_exception(exc):
 	global global_pref
 
 	if type(exc) is not bool:
-		logging.critical("Must be True or False")
+		logging.defw_core("Must be True or False")
 		global_pref['halt_on_exception'] = False
 		return
 	global_pref['halt_on_exception'] = exc
@@ -338,34 +349,84 @@ def get_debug_module_reload():
 	global global_pref
 	return global_pref['debug module reload']
 
-def set_logging_level_helper(levelno):
+def _resolve_log_levels(level):
+	if isinstance(level, int):
+		return [level]
+	if not isinstance(level, str):
+		raise ValueError(f"Unsupported log level specification: {level}")
+
+	resolved = []
+	seen = set()
+	for token in level.split(','):
+		name = token.strip()
+		if not name:
+			continue
+		name_upper = name.upper()
+		if name_upper in CUSTOM_LEVEL_GROUPS:
+			for group_level in CUSTOM_LEVEL_GROUPS[name_upper]:
+				if group_level not in seen:
+					resolved.append(group_level)
+					seen.add(group_level)
+		elif name_upper in CUSTOM_LEVELS:
+			levelno = CUSTOM_LEVELS[name_upper]
+			if levelno not in seen:
+				resolved.append(levelno)
+				seen.add(levelno)
+		else:
+			levelno = getattr(logging, name_upper)
+			if levelno not in seen:
+				resolved.append(levelno)
+				seen.add(levelno)
+	if not resolved:
+		raise ValueError("At least one log level must be provided")
+	return resolved
+
+
+def set_logging_level_helper(levelnos):
 	global FILE_HANDLER
-	global CUSTOM_LEVELS
+	global CUSTOM_LEVEL_NAMES
 
 	root_logger = logging.getLogger('')
 	for handler in root_logger.handlers[:]:
 		root_logger.removeHandler(handler)
 
-	root_logger.setLevel(levelno)
+	if isinstance(levelnos, int):
+		levelnos = [levelnos]
 
-	FILE_HANDLER.setLevel(levelno)
+	standard_levels = [levelno for levelno in levelnos
+				   if levelno not in CUSTOM_LEVEL_NAMES]
+	custom_levels = [levelno for levelno in levelnos
+				 if levelno in CUSTOM_LEVEL_NAMES]
+	root_levels = list(levelnos) if levelnos else [logging.CRITICAL]
+	root_logger.setLevel(min(root_levels))
+
+	FILE_HANDLER.setLevel(min(root_levels))
 	for filt in FILE_HANDLER.filters[:]:
 		FILE_HANDLER.removeFilter(filt)
-	if levelno in CUSTOM_LEVELS.values():
-		FILE_HANDLER.addFilter(ExclusiveLevelFilter(levelno))
+	if custom_levels:
+		FILE_HANDLER.addFilter(SelectedLevelsFilter(custom_levels,
+									 standard_levels))
 
 	root_logger.addHandler(FILE_HANDLER)
 
-class ExclusiveLevelFilter(logging.Filter):
-	def __init__(self, levelno):
+class SelectedLevelsFilter(logging.Filter):
+	def __init__(self, custom_levels, standard_levels):
 		super().__init__()
-		self.levelno = levelno
+		self.custom_levels = set(custom_levels)
+		self.standard_levels = list(standard_levels)
 
 	def filter(self, record):
-		return record.levelno == self.levelno or record.levelno == logging.CRITICAL
+		if record.levelno in self.custom_levels:
+			return True
+		if record.levelno in CUSTOM_LEVEL_NAMES:
+			return False
+		if not self.standard_levels:
+			return record.levelno == logging.CRITICAL
+		return record.levelno >= min(self.standard_levels)
 
-def add_logging_level(log_level, level_name):
+def add_logging_level(log_level, level_name, alias_names=None):
 	global CUSTOM_LEVELS
+	global CUSTOM_LEVEL_NAMES
 
 	func_name = level_name.lower()
 	logging.addLevelName(log_level, level_name.upper())
@@ -375,27 +436,37 @@ def add_logging_level(log_level, level_name):
 			logging.getLogger()._log(log_level, message, args, **kwargs)
 
 	CUSTOM_LEVELS[level_name.upper()] = log_level
+	CUSTOM_LEVEL_NAMES.add(log_level)
 
 	setattr(logging, func_name, custom_level_logger)
+	if alias_names:
+		for alias_name in alias_names:
+			CUSTOM_LEVELS[alias_name.upper()] = log_level
+			setattr(logging, alias_name.lower(), custom_level_logger)
+
+def add_logging_group(group_name, level_names):
+	global CUSTOM_LEVEL_GROUPS
+
+	CUSTOM_LEVEL_GROUPS[group_name.upper()] = [
+		CUSTOM_LEVELS[level_name.upper()] for level_name in level_names
+	]
 
 def set_logging_level(level, save=True):
 	'''
-	Set Python log level. One of: critical, debug, error, fatal
+	Set Python logging selection string.
+	Examples: critical, debug, DEFW_ALL, DEFW_CORE,DEFW_RPC
 	'''
 	global global_pref
 	global CUSTOM_LEVELS
 
 	try:
-		if level.upper() in CUSTOM_LEVELS:
-			log_level = CUSTOM_LEVELS[level.upper()]
-		else:
-			log_level = getattr(logging, level.upper())
-		set_logging_level_helper(log_level)
+		log_levels = _resolve_log_levels(level)
+		set_logging_level_helper(log_levels)
 		if save:
-			global_pref['loglevel'] = level
+			global_pref['py_loglevel'] = level
 	except Exception as e:
-		logging.critical(f"error encountered {e}")
-		logging.critical("Log level must be one of: critical, debug, error, fatal")
+		logging.defw_core(f"error encountered {e}")
+		logging.defw_core("Log level must be one or more comma-separated standard or DEFw log levels")
 	if save:
 		save_pref()
 
@@ -415,12 +486,39 @@ def setup_log_file():
 	FILE_HANDLER.setFormatter(logging.Formatter(printformat))
 
 def setup_log_levels():
-	add_logging_level(DEFW_LOG_LEVEL_INFRA, DEFW_LOG_LEVEL_INFRA_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_SERVICES, DEFW_LOG_LEVEL_SERVICES_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_EXPERIMENTS, DEFW_LOG_LEVEL_EXPERIMENTS_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_WORKER, DEFW_LOG_LEVEL_WORKER_NAME)
+	add_logging_level(
+		DEFW_LOG_LEVEL_CORE,
+		DEFW_LOG_LEVEL_CORE_NAME,
+		alias_names=["DEFW_INFRA"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_WORKER,
+		DEFW_LOG_LEVEL_WORKER_NAME,
+		alias_names=["DEFW_WORKERS"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_SERVICE,
+		DEFW_LOG_LEVEL_SERVICE_NAME,
+		alias_names=["DEFW_SERVICES"],
+	)
+	add_logging_level(
+		DEFW_LOG_LEVEL_APP,
+		DEFW_LOG_LEVEL_APP_NAME,
+		alias_names=["DEFW_EXPERIMENTS"],
+	)
+	add_logging_level(DEFW_LOG_LEVEL_RPC, DEFW_LOG_LEVEL_RPC_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_STACKTRACE, DEFW_LOG_LEVEL_STACKTRACE_NAME)
-	add_logging_level(DEFW_LOG_LEVEL_APP, DEFW_LOG_LEVEL_APP_NAME)
+	add_logging_group(
+		"DEFW_ALL",
+		[
+			DEFW_LOG_LEVEL_CORE_NAME,
+			DEFW_LOG_LEVEL_WORKER_NAME,
+			DEFW_LOG_LEVEL_SERVICE_NAME,
+			DEFW_LOG_LEVEL_APP_NAME,
+			DEFW_LOG_LEVEL_RPC_NAME,
+			DEFW_LOG_LEVEL_STACKTRACE_NAME,
+		],
+	)
 
 def set_cmd_verbosity(value):
 	'''
@@ -447,7 +545,7 @@ def load_pref():
 		editor - the editor of choice to use for editing scripts
 		halt_on_exception - True to throw an exception on first error
 				    False to continue running scripts
-		log_level - Python log level. One of: critical, debug, error, fatal
+		py_loglevel - Python logging selection string
 	'''
 	global GLOBAL_PREF_DEF
 	global global_pref
@@ -463,35 +561,26 @@ def load_pref():
 			if not global_pref:
 				global_pref = GLOBAL_PREF_DEF
 			else:
+				if 'py_loglevel' not in global_pref and 'loglevel' in global_pref:
+					global_pref['py_loglevel'] = global_pref['loglevel']
+				global_pref.pop('loglevel', None)
 				#compare with the default and fill in any entries
 				#which might not be there.
 				for k, v in GLOBAL_PREF_DEF.items():
 					if not k in global_pref:
 						global_pref[k] = v
-	save_pref()
+	if 'DEFW_PY_LOGLEVEL' in os.environ:
+		global_pref['py_loglevel'] = os.environ['DEFW_PY_LOGLEVEL']
+	set_logging_level(global_pref['py_loglevel'], save=False)
 	return global_pref
 
 def save_pref():
 	'''
-	Save the DEFw preferences.
-		editor - the editor of choice to use for editing scripts
-		halt_on_exception - True to throw an exception on first error
-				    False to continue running scripts
-		log_level - Python log level. One of: critical, debug, error, fatal
+	Apply the current DEFw preferences without writing them to disk.
+	The preference file is treated as read-only runtime input.
 	'''
 	global global_pref
-
-	try:
-		global_pref_file = os.environ['DEFW_PREF_PATH']
-	except:
-		global_pref_file = os.path.join(cdefw_global.get_defw_tmp_dir(), 'defw_pref.yaml')
-
-	with open(global_pref_file, 'w') as f:
-		f.write(yaml.dump(global_pref, Dumper=DEFwDumper, indent=2, sort_keys=False))
-
-	with open(global_pref_file, 'r') as f:
-		p = yaml.load(f, Loader=yaml.FullLoader)
-		set_logging_level(p['loglevel'], save=False)
+	set_logging_level(global_pref['py_loglevel'], save=False)
 
 def dump_pref():
 	global global_pref

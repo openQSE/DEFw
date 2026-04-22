@@ -1,4 +1,5 @@
 import atexit
+import glob
 import logging
 import os
 import signal
@@ -129,13 +130,24 @@ def _build_service_env(service_spec):
 	return env, agent_name, listen_port, telnet_port, log_dir
 
 
-def _wait_for_daemon_pid(log_dir, timeout=5):
-	pid_path = os.path.join(log_dir, 'pid')
+def _wait_for_daemon_pid(log_dir, agent_name, timeout=5):
+	pid_paths = [os.path.join(log_dir, 'pid')]
+	search_root = os.path.dirname(log_dir)
+	if search_root:
+		pid_paths.extend(
+			glob.glob(os.path.join(search_root, f"{agent_name}_*", "pid"))
+		)
 	start = time.time()
 	while time.time() - start < timeout:
-		if os.path.isfile(pid_path):
-			with open(pid_path, 'r', encoding='utf-8') as handle:
-				return int(handle.read().strip())
+		for pid_path in pid_paths:
+			if os.path.isfile(pid_path):
+				with open(pid_path, 'r', encoding='utf-8') as handle:
+					return int(handle.read().strip())
+		if search_root:
+			pid_paths = [os.path.join(log_dir, 'pid')]
+			pid_paths.extend(
+				glob.glob(os.path.join(search_root, f"{agent_name}_*", "pid"))
+			)
 		time.sleep(0.1)
 	raise DEFwError(f"Timed out waiting for daemon pid in {log_dir}")
 
@@ -159,7 +171,7 @@ def defw_spawn_services(services):
 			start_new_session=True,
 		)
 		try:
-			pid = _wait_for_daemon_pid(log_dir)
+			pid = _wait_for_daemon_pid(log_dir, agent_name)
 		except Exception:
 			process.wait(timeout=5)
 			stdout_handle.close()
@@ -201,7 +213,10 @@ def _shutdown_spawned_services():
 	try:
 		defw_shutdown_services()
 	except Exception:
-		logging.exception("Failed to shut down spawned DEFw services")
+		logging.defw_stacktrace(
+			"Failed to shut down spawned DEFw services",
+			exc_info=True,
+		)
 
 
 atexit.register(_shutdown_spawned_services)
@@ -209,7 +224,7 @@ atexit.register(_shutdown_spawned_services)
 
 def defw_get_resource_mgr(timeout=SYSTEM_UP_TIMEOUT):
 	if not defw.wait_resmgr(timeout):
-		logging.debug("Couldn't find a resmgr")
+		logging.defw_app("Couldn't find a resmgr")
 		raise DEFwReserveError("Couldn't find a resmgr")
 
 	return defw.resmgr
@@ -223,13 +238,13 @@ def defw_reserve_service_by_name(resmgr, svc_name, svc_type=-1,
 		if service_infos and len(service_infos) > 0:
 			break
 		wait += 1
-		logging.debug(f"Waiting to connect to {svc_name}")
+		logging.defw_app(f"Waiting to connect to {svc_name}")
 		sleep(1)
 
 	if len(service_infos) == 0:
 		raise DEFwReserveError(f"Couldn't connect to a {svc_name}, {svc_type}, {svc_cap}")
 
-	logging.debug(f"Received service_infos: {service_infos}")
+	logging.defw_app(f"Received service_infos: {service_infos}")
 
 	svc_apis = defw.connect_to_resource(service_infos, svc_name)
 

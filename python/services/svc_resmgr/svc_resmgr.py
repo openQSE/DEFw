@@ -44,14 +44,14 @@ class DEFwResMgr:
 	def __grab_agent_info(self, agent_dict, db, skip_self=False, query=True):
 		for k, agent in agent_dict.items():
 			ep = agent.get_ep()
-			logging.debug(f"examining -- {ep}\nself: {self.__my_ep}")
+			logging.defw_service(f"examining -- {ep}\nself: {self.__my_ep}")
 			if ep == self.__my_ep and skip_self:
 				continue
-			logging.debug(f"Getting client ep for {ep.get_id()}")
+			logging.defw_service(f"Getting client ep for {ep.get_id()}")
 			try:
 				client_api = BaseAgentAPI(target=ep)
 			except:
-				logging.debug(f"Agent with bad EP: {ep.get_id()}")
+				logging.defw_service(f"Agent with bad EP: {ep.get_id()}")
 				continue
 			aname = ep.get_id()
 			svc_info = []
@@ -59,7 +59,7 @@ class DEFwResMgr:
 				svc_info = client_api.query()
 			with self.__db_lock:
 				if aname in db:
-					logging.debug(f"Refreshing cached agent info for {aname}")
+					logging.defw_service(f"Refreshing cached agent info for {aname}")
 					db[aname]['agent'] = agent
 					db[aname]['api'] = client_api
 					if query:
@@ -70,7 +70,7 @@ class DEFwResMgr:
 						'api': client_api,
 						'info': svc_info}
 					if not 'state' in db[aname]:
-						logging.debug(f"Setting {aname} stat to CONNECTED")
+						logging.defw_service(f"Setting {aname} stat to CONNECTED")
 						db[aname]['state'] = AGENT_STATE_CONNECTED
 
 				for i in db[aname]['info']:
@@ -84,7 +84,23 @@ class DEFwResMgr:
 					elif db == self.__active_clients_db:
 						i.add_loc_db(DEFwResMgr.ACTV_CLT)
 
+	def __prune_db(self, agent_dict, db):
+		current_ids = set(agent_dict.keys())
+		with self.__db_lock:
+			stale_ids = [agent_id for agent_id in db.keys() if agent_id not in current_ids]
+			for agent_id in stale_ids:
+				logging.defw_service(f"Pruning stale resource manager entry {agent_id}")
+				del db[agent_id]
+
 	def __reload_resources(self, query=True):
+		client_agents.reload()
+		active_client_agents.reload()
+		service_agents.reload()
+		active_service_agents.reload()
+		self.__prune_db(client_agents, self.__clients_db)
+		self.__prune_db(active_client_agents, self.__active_clients_db)
+		self.__prune_db(service_agents, self.__services_db)
+		self.__prune_db(active_service_agents, self.__active_services_db)
 		self.__grab_agent_info(client_agents, self.__clients_db, query=query)
 		# TODO: I'm disabling the resmgr trying to query itself for now.
 		# Figure out how to properly handle this
@@ -109,18 +125,30 @@ class DEFwResMgr:
 			return db[aid]['state']
 
 	def __register(self, global_agent_dict, local_agent_dict, ep, info, query=True):
+		agent_id = ep.get_id()
+		logging.defw_service(
+			f"__register(name={ep.name}, id={agent_id}, query={query})"
+		)
 		agent = global_agent_dict.get_agent(ep)
 		self.__reload_resources(query)
 		if not agent:
-			if ep.name in local_agent_dict:
-				self.set_state(local_agent_dict, ep.get_id(), AGENT_STATE_ERROR)
-			logging.debug(f"Registration from an unknown client {ep}, {global_agent_dict}")
-			logging.debug(f"Dict size: {global_agent_dict.get_num_connected_agents()}")
+			logging.defw_service(
+				f"Unknown agent during register: name={ep.name}, id={agent_id}, "
+				f"known local keys={list(local_agent_dict.keys())}"
+			)
+			if agent_id in local_agent_dict:
+				self.set_state(local_agent_dict, agent_id, AGENT_STATE_ERROR)
+			logging.defw_service(f"Registration from an unknown client {ep}, {global_agent_dict}")
+			logging.defw_service(f"Dict size: {global_agent_dict.get_num_connected_agents()}")
 			for k, agent in global_agent_dict.items():
-				logging.debug(f"agent {k} - {agent.get_ep()}")
+				logging.defw_service(f"agent {k} - {agent.get_ep()}")
 			raise DEFwAgentNotFound(f"Registration from an unknown client {ep}, {global_agent_dict}")
 		else:
-			self.set_state(local_agent_dict, ep.get_id(), AGENT_STATE_REGISTERED)
+			logging.defw_service(
+				f"Registering known agent: name={ep.name}, id={agent_id}, "
+				f"local keys before state update={list(local_agent_dict.keys())}"
+			)
+			self.set_state(local_agent_dict, agent_id, AGENT_STATE_REGISTERED)
 		return
 
 	def __deregister(self, global_agent_dict, local_agent_dict, ep):
@@ -143,15 +171,15 @@ class DEFwResMgr:
 		DEFwCommError: If Resource Manager is not reachable
 	"""
 	def register_agent(self, ep, context=None):
-		logging.debug(f"Agent with ep {ep} registering. Current Agents in the system")
+		logging.defw_service(f"Agent with ep {ep} registering. Current Agents in the system")
 		client_agents.dump()
 		self.__register(client_agents, self.__clients_db, ep, context, query=False)
 		self.__clients_db[ep.get_id()]['context'] = context
 		state = self.get_state(self.__clients_db, ep.get_id())
-		logging.debug(f"Agent with ep {ep} has registered. Now in State {state}")
+		logging.defw_service(f"Agent with ep {ep} has registered. Now in State {state}")
 
 	def deregister_agent(self, ep):
-		logging.debug(f"Agent with ep {ep} deregistering")
+		logging.defw_service(f"Agent with ep {ep} deregistering")
 		self.__deregister(client_agents, self.__clients_db, ep)
 
 	def ready_agents(self):
@@ -162,7 +190,7 @@ class DEFwResMgr:
 		registered = 0
 		with self.__db_lock:
 			for agent, info in self.__clients_db.items():
-				logging.debug(f"{agent} is in state {info['state']}")
+				logging.defw_service(f"{agent} is in state {info['state']}")
 				if info['state'] & AGENT_STATE_REGISTERED:
 					registered += 1
 		if (total <= registered):
@@ -182,7 +210,7 @@ class DEFwResMgr:
 					continue
 				else:
 					raise e
-		logging.debug(f"wait_agents complete: {self.__clients_db}")
+		logging.defw_service(f"wait_agents complete: {self.__clients_db}")
 
 	def dereg_agents(self):
 		registered = 0
@@ -190,7 +218,7 @@ class DEFwResMgr:
 			for agent, info in self.__clients_db.items():
 				if info['state'] & AGENT_STATE_REGISTERED:
 					registered += 1
-		logging.debug(f"Agents still registered = {registered}")
+		logging.defw_service(f"Agents still registered = {registered}")
 		if (registered > 0):
 			raise DEFwInProgress(f"Clients still registered {registered}")
 
@@ -207,11 +235,11 @@ class DEFwResMgr:
 					continue
 				else:
 					raise e
-		logging.debug(f"wait for agent deregistration complete: {self.__clients_db}")
+		logging.defw_service(f"wait for agent deregistration complete: {self.__clients_db}")
 
 	def get_agents_context(self):
 		contexts = {}
-		logging.debug(f"Currently registered: {self.__clients_db}")
+		logging.defw_service(f"Currently registered: {self.__clients_db}")
 		num_clients = 0
 		with self.__db_lock:
 			num_clients = len(self.__clients_db)
@@ -237,7 +265,7 @@ class DEFwResMgr:
 		DEFwCommError: If Resource Manager is not reachable
 	"""
 	def register_service(self, service_ep, context=None):
-		self.__register(service_agents, self.__services_db, ep, context)
+		self.__register(service_agents, self.__services_db, service_ep, context)
 
 	"""
 	De-register an agent
@@ -253,15 +281,51 @@ class DEFwResMgr:
 		DEFwAgentNotFound: If agent is not registered
 	"""
 	def deregister(self, ep):
-		if ep.name not in self.__clients_db and \
-		   ep.name not in self.__services_db:
-			   raise DEFwAgentNotFound(f"agent {ep.name} not found")
-		if ep.name in self__services_db:
-			self.__services_db[ep.name]['api'].unregister()
-			del self.__services_db[ep.name]
-		else:
-			self.__clients_db[ep.name]['api'].unregister()
-			del self.__clients_db[ep.name]
+		agent_id = ep.get_id()
+		logging.defw_service(
+			f"resmgr.deregister(name={ep.name}, id={agent_id})"
+		)
+		logging.defw_service(
+			f"resmgr.deregister clients keys={list(self.__clients_db.keys())}, "
+			f"services keys={list(self.__services_db.keys())}, "
+			f"active clients keys={list(self.__active_clients_db.keys())}, "
+			f"active services keys={list(self.__active_services_db.keys())}"
+		)
+		if agent_id not in self.__clients_db and \
+		   agent_id not in self.__services_db and \
+		   agent_id not in self.__active_clients_db and \
+		   agent_id not in self.__active_services_db:
+			   raise DEFwAgentNotFound(
+				   f"agent {ep.name} ({agent_id}) not found"
+			   )
+		if agent_id in self.__services_db:
+			logging.defw_service(
+				f"Deregistering service entry name={ep.name}, id={agent_id} "
+				f"from services db"
+			)
+			self.__services_db[agent_id]['api'].unregister()
+			del self.__services_db[agent_id]
+		if agent_id in self.__active_services_db:
+			logging.defw_service(
+				f"Deregistering service entry name={ep.name}, id={agent_id} "
+				f"from active services db"
+			)
+			self.__active_services_db[agent_id]['api'].unregister()
+			del self.__active_services_db[agent_id]
+		if agent_id in self.__clients_db:
+			logging.defw_service(
+				f"Deregistering client entry name={ep.name}, id={agent_id} "
+				f"from clients db"
+			)
+			self.__clients_db[agent_id]['api'].unregister()
+			del self.__clients_db[agent_id]
+		if agent_id in self.__active_clients_db:
+			logging.defw_service(
+				f"Deregistering client entry name={ep.name}, id={agent_id} "
+				f"from active clients db"
+			)
+			self.__active_clients_db[agent_id]['api'].unregister()
+			del self.__active_clients_db[agent_id]
 		return
 
 	def get_info(self, db, svc_name, svc_type, svc_caps):
@@ -274,9 +338,28 @@ class DEFwResMgr:
 				if i.is_match(svc_name, svc_type, svc_caps):
 					r.append(i)
 				else:
-					logging.debug(f"No match found with ({svc_name}, {svc_type}, {svc_caps}")
+					logging.defw_service(f"No match found with ({svc_name}, {svc_type}, {svc_caps}")
 
 		return r
+
+	def __dedup_service_infos(self, service_infos):
+		unique_infos = []
+		seen = set()
+		for info in service_infos:
+			info_key = (
+				info.get_key(),
+				info.get_service_name(),
+				info.get_class_name(),
+				info.get_module_name(),
+			)
+			if info_key in seen:
+				logging.defw_service(
+					f"Skipping duplicate service info for key={info_key}: {info}"
+				)
+				continue
+			seen.add(info_key)
+			unique_infos.append(info)
+		return unique_infos
 
 	"""
 	List all available Agents in the DEFw Network
@@ -291,12 +374,13 @@ class DEFwResMgr:
 		DEFwCommError: If Resource Manager is not reachable
 	"""
 	def get_services(self, svc_name, svc_type=-1, svc_caps=-1):
-		logging.debug(f"get_services({svc_name}, {svc_type}, {svc_caps})")
+		logging.defw_service(f"get_services({svc_name}, {svc_type}, {svc_caps})")
 		all_info = []
 		self.__reload_resources(query=True)
 		all_info += self.get_info(self.__active_services_db, svc_name, svc_type, svc_caps)
 		all_info += self.get_info(self.__services_db, svc_name, svc_type, svc_caps)
-		logging.debug(f"all_info({all_info})")
+		all_info = self.__dedup_service_infos(all_info)
+		logging.defw_service(f"all_info({all_info})")
 		return all_info
 
 	"""

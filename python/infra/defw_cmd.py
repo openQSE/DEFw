@@ -4,20 +4,20 @@ import defw_common_def
 
 def exec_cmd(cmd, exception=True):
 	if defw_common_def.is_cmd_verbosity():
-		logging.critical("executing -> " + cmd)
+		logging.defw_core("executing -> " + cmd)
 	args = shlex.split(cmd)
 	try:
 		out = subprocess.Popen(args, stderr=subprocess.STDOUT,
 			stdout=subprocess.PIPE)
 	except Exception as e:
-		logging.critical("Failed to execute cmd: " + cmd)
-		logging.critical(e)
+		logging.defw_core("Failed to execute cmd: " + cmd)
+		logging.defw_core(e)
 		return [None, -1]
 	t = out.communicate()[0],out.returncode
 	if t[1] != 0 and exception:
 		raise DEFwError(cmd+"\n"+"rc = "+str(t[1])+"\n"+t[0].decode("utf-8"))
 	elif t[1] != 0:
-		logging.critical("Failed to execute cmd: " + cmd + " with rc = " + str(t[1]))
+		logging.defw_core("Failed to execute cmd: " + cmd + " with rc = " + str(t[1]))
 	return t
 
 class DEFwCmd(threading.Thread):
@@ -69,7 +69,7 @@ def defw_exec_remote_cmd(cmd, host, username='', ignore_err=False, deamonize=Fal
 	ssh.connect(hostname=host, timeout=3, banner_timeout=3, username=username)
 	stdin, stdout, stderr = ssh.exec_command(cmd)
 
-	logging.debug(f"Run:\n\t{cmd}\non\n\t{host}")
+	logging.defw_core(f"Run:\n\t{cmd}\non\n\t{host}")
 
 	out = ''
 	err = ''
@@ -82,4 +82,3 @@ def defw_exec_remote_cmd(cmd, host, username='', ignore_err=False, deamonize=Fal
 	stderr.close()
 	ssh.close()
 	return out, err
-

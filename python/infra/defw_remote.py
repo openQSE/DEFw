@@ -109,7 +109,7 @@ class BaseRemote(object):
 		# we do not need to instantiate a new remote object here.
 		if class_id:
 			self.__own = False
-			logging.critical(f"Class owned by remote: {class_id}")
+			logging.defw_core(f"Class owned by remote: {class_id}")
 			self.__class_id = class_id
 		else:
 			self.__class_id = str(uuid.uuid1())
@@ -136,7 +136,7 @@ class BaseRemote(object):
 								self.__class_id,
 								self.__blocking,
 								*args, **kwargs)
-					logging.debug(f"Time taken in {attr.__name__} is {time.time() - start}")
+					logging.defw_core(f"Time taken in {attr.__name__} is {time.time() - start}")
 				else:
 					result = attr(*args, **kwargs)
 				return result

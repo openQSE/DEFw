@@ -12,6 +12,8 @@ FAIL = -1
 
 def run():
 	services = defw_spawn_services('svc_test_counter')
+	first = None
+	second = None
 	try:
 		resmgr = defw_get_resource_mgr()
 		first = defw_reserve_service_by_name(resmgr, "TestCounter")[0]
@@ -26,4 +28,9 @@ def run():
 			second_instance_id=second_id,
 		)
 	finally:
+		if second is not None:
+			try:
+				second.shutdown()
+			except Exception:
+				pass
 		defw_shutdown_services(services)

@@ -7,7 +7,7 @@ from defw_exception import DEFwOperationFailure
 def run():
 	# connect to the resource manager
 	rsmgr = defw_get_resource_mgr()
-	logging.debug(f"{os.getpid()}: got resmgr {rsmgr}")
+	logging.defw_app(f"{os.getpid()}: got resmgr {rsmgr}")
 
 	# publish it to the resource manager
 	rsmgr.register_agent(me.my_endpoint(), f"I'm {os.getpid()}")
@@ -20,7 +20,7 @@ def run():
 
 	rsmgr.wait_agents_deregistration()
 
-	logging.debug(f"Agent Contexts: {contexts}")
+	logging.defw_app(f"Agent Contexts: {contexts}")
 
 if __name__ == '__main__':
 	run()

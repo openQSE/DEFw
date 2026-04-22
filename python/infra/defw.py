@@ -246,7 +246,7 @@ def get_report_mode():
 			       preferences.get('report_mode', 'both'))
 	mode = str(mode).strip().lower()
 	if mode not in ('summary', 'detail', 'both'):
-		logging.warning(f"Unknown DEFW_REPORT_MODE '{mode}', using 'both'")
+		logging.defw_core(f"Unknown DEFW_REPORT_MODE '{mode}', using 'both'")
 		return 'both'
 	return mode
 
@@ -500,12 +500,12 @@ class Script(MethodInterceptor):
 		try:
 			module_run = getattr(module, 'initialize')
 		except Exception as e:
-			logging.critical(e)
+			logging.defw_core(e)
 			return
 		# run the script
 		if hasattr(module_run, '__call__'):
 			try:
-				logging.critical("Initializing Module: %s" % str(self.name))
+				logging.defw_core("Initializing Module: %s" % str(self.name))
 				rc = module_run()
 			except Exception as e:
 				if preferences['halt_on_exception']:
@@ -516,7 +516,7 @@ class Script(MethodInterceptor):
 					if type(e) == DEFwError and e.halt:
 						raise e
 					else:
-						logging.critical("Initializing %s failed" % str(self.name))
+						logging.defw_core("Initializing %s failed" % str(self.name))
 
 	def execute_method_by_name(self, method_name):
 		global global_test_results
@@ -534,7 +534,7 @@ class Script(MethodInterceptor):
 		try:
 			module_run = getattr(module, method_name)
 		except Exception as e:
-			logging.critical(e)
+			logging.defw_core(e)
 			return
 			# run the script
 		try:
@@ -584,7 +584,7 @@ class Script(MethodInterceptor):
 		try:
 			subprocess.call(preferences['editor']+" "+self.__abs_path, shell=True)
 		except:
-			logging.critical("No editor available")
+			logging.defw_core("No editor available")
 			print("No editor available")
 
 class Collection(MethodInterceptor):
@@ -773,7 +773,7 @@ class ASuite(MethodInterceptor):
 				importlib.reload(module)
 				try:
 					if type(module.skip.skip_list) != list:
-						logging.critical('malformed skip list')
+						logging.defw_core('malformed skip list')
 						continue
 					try:
 						self.__skip_list = module.skip.skip_list
@@ -784,7 +784,7 @@ class ASuite(MethodInterceptor):
 					except:
 						pass
 				except Exception as e:
-					logging.critical(str(e))
+					logging.defw_core(str(e))
 					pass
 				del(module)
 
@@ -1072,9 +1072,9 @@ class Myself:
 		# Write the pid of the process in the file so it can be used to
 		# monitor my life
 		pid_path = os.path.join(cdefw_global.get_defw_tmp_dir(), 'pid')
-		logging.debug(f"Path to PID file is {pid_path}")
+		logging.defw_core(f"Path to PID file is {pid_path}")
 		with open(pid_path, 'w') as f:
-			logging.debug(f"WRITING PID TO FILE: {os.getpid()}")
+			logging.defw_core(f"WRITING PID TO FILE: {os.getpid()}")
 			f.write(str(os.getpid()))
 
 
@@ -1131,7 +1131,7 @@ class Myself:
 		from defw_workers import put_shutdown
 		put_shutdown()
 		updater_thread.join()
-		logging.critical("Shutting down the DEFw")
+		logging.defw_core("Shutting down the DEFw")
 		print_all_thread_stack_traces_to_logger()
 		# if we are in the context of the telnet server, we can not tell
 		# it to stop directly, because that'll cause a deadlock. However
@@ -1349,6 +1349,16 @@ def resolve_environment_vars(config):
 
 		recurse_dictionary(config, "", config, resolve_env_var)
 
+
+def get_process_tmp_dir(tmp_root, process_name, pid=None):
+	if pid is None:
+		pid = os.getpid()
+	root = Path(tmp_root)
+	parent = root if root.name == "tmp" else root.parent
+	if str(parent) == "":
+		parent = root
+	return str(parent / f"{process_name}_{pid}")
+
 def configure_defw():
 	global defw_path
 	global only_load
@@ -1410,10 +1420,6 @@ def configure_defw():
 			cdefw_global.set_defw_mode(cy['defw']['shell'])
 			cdefw_global.set_defw_type(cy['defw']['type'])
 			try:
-				cdefw_global.set_defw_tmp_dir(cy['defw']['tmp'])
-			except:
-				pass
-			try:
 				cdefw_global.set_listen_address(int(cy['defw']['listen-address']))
 			except:
 				cdefw_global.set_listen_address("")
@@ -1432,6 +1438,15 @@ def configure_defw():
 				cdefw_global.set_node_name(cy['defw']['name'])
 			except:
 				cdefw_global.set_node_name(generate_random_string(5))
+			try:
+				cdefw_global.set_defw_tmp_dir(
+					get_process_tmp_dir(
+						cy['defw']['tmp'],
+						cy['defw']['name'],
+					)
+				)
+			except:
+				pass
 			try:
 				if cy['defw']['loglevel'].upper() == 'ERROR':
 					cdefw_global.set_log_level(EN_LOG_LEVEL_ERROR)
@@ -1504,7 +1519,7 @@ def updater_thread():
 def connect_to_services(endpoints):
 	for ep in endpoints:
 		active_service_agents.connect(ep)
-		logging.debug(f"Connection request finished: {ep}")
+		logging.defw_core(f"Connection request finished: {ep}")
 
 def connect_to_resource(service_infos, res_name):
 	ep = resmgr.reserve(me.my_endpoint(), service_infos)
@@ -1513,10 +1528,10 @@ def connect_to_resource(service_infos, res_name):
 	for service_info in service_infos:
 		class_obj = getattr(service_apis[res_name], res_name)
 		api = class_obj(service_info)
-		logging.debug(f"API created: {res_name}: {api}")
+		logging.defw_core(f"API created: {res_name}: {api}")
 		apis.append(api)
 
-	logging.debug(f"Returning API array: {apis}")
+	logging.defw_core(f"Returning API array: {apis}")
 	return apis
 
 def wait_resmgr(timeout):
@@ -1528,7 +1543,7 @@ def wait_resmgr(timeout):
 			if resmgr:
 				return True
 			wait += 1
-			logging.debug("waiting to connect to resource manager")
+			logging.defw_core("waiting to connect to resource manager")
 			time.sleep(1)
 	else:
 		return True
@@ -1565,7 +1580,7 @@ if not cdefw_global.get_defw_initialized():
 	# Create an instance of the resource manager because we have
 	# a connection to it.
 
-	logging.debug("INSTANTIATING myself")
+	logging.defw_core("INSTANTIATING myself")
 	me = Myself(defw_cfg)
 
 	# build up a database of all the icpa back ends
@@ -1604,7 +1619,7 @@ if not cdefw_global.get_defw_initialized():
 	builtins.exit = me.exit
 
 	def sigkill_handler(signum, frame):
-		logging.critical("DEFw received a SIGKILL")
+		logging.defw_core("DEFw received a SIGKILL")
 		me.exit()
 
 	signal.signal(signal.SIGABRT, sigkill_handler)

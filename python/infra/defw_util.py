@@ -161,10 +161,7 @@ def get_thread_names():
 
 def print_thread_stack_trace_to_logger(level='debug'):
 	stack_trace_str = "".join(traceback.format_stack())
-	if level == 'critical':
-		logging.critical(f"{stack_trace_str}")
-	else:
-		logging.debug(f"{stack_trace_str}")
+	logging.defw_stacktrace(f"{stack_trace_str}")
 
 def print_all_thread_stack_traces_to_logger():
 	frames = sys._current_frames()
@@ -184,7 +181,9 @@ def print_all_thread_stack_traces_to_logger():
 		thread_name = thread_names.get(thread_id, "Unknown Thread")
 
 		# Log the stack trace with thread name
-		logging.critical(f"Thread Name: {thread_name}, ID: {thread_id}\n{stack_trace}")
+		logging.defw_stacktrace(
+			f"Thread Name: {thread_name}, ID: {thread_id}\n{stack_trace}"
+		)
 
 		# Reset stderr
 		temp_stderr.close()
@@ -211,5 +210,4 @@ def round_to_nearest_power_of_two(number):
 
 	nearest_power_of_two = 2 ** int(math.log2(number) + 0.5)
 	return nearest_power_of_two
-
 

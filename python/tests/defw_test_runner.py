@@ -3,11 +3,23 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
-import textwrap
+import time
 
 import yaml
+
+try:
+	from rich.progress import (
+		BarColumn,
+		Progress,
+		SpinnerColumn,
+		TextColumn,
+		TimeElapsedColumn,
+	)
+except ImportError:
+	Progress = None
 
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -19,6 +31,18 @@ DEFAULT_MODULES = [
 	"svc_resmgr",
 	"api_resmgr",
 ]
+DEFAULT_PY_LOG_LEVEL = "critical"
+DEFAULT_PREF = {
+	"editor": shutil.which("vim"),
+	"py_loglevel": DEFAULT_PY_LOG_LEVEL,
+	"halt_on_exception": False,
+	"remote copy": False,
+	"RPC timeout": 300,
+	"num_intfs": 3,
+	"cmd verbosity": True,
+	"debug module reload": False,
+}
+PROGRESS_PREFIX = "__DEFW_PROGRESS__:"
 
 
 def list_configs():
@@ -56,12 +80,86 @@ def normalize_scripts(config):
 	return scripts
 
 
+def get_script_names(config):
+	return normalize_scripts(config)
+
+
+def apply_script_selector(config, selector):
+	if not selector:
+		return config
+	if "::" in selector:
+		suite_name, script_name = selector.split("::", 1)
+		suite_name = suite_name.strip()
+		script_name = script_name.strip()
+		if not suite_name or not script_name:
+			raise ValueError("Script selector must be suite::script")
+		if config.get("suite") != suite_name:
+			raise ValueError(
+				f"Selector suite '{suite_name}' does not match config suite "
+				f"'{config.get('suite')}'"
+			)
+	else:
+		script_name = selector.strip()
+		if not script_name:
+			raise ValueError("Script selector must not be empty")
+	config = dict(config)
+	config["scripts"] = [script_name]
+	return config
+
+
 def join_modules(config):
 	modules = list(DEFAULT_MODULES)
 	for module in config.get("modules", []):
 		if module not in modules:
 			modules.append(module)
 	return ",".join(modules)
+
+
+def write_pref_file(config, log_dir):
+	master = config.get("master", {})
+	Path(log_dir).mkdir(parents=True, exist_ok=True)
+	pref_path = Path(log_dir) / "defw_pref.yaml"
+	pref = dict(DEFAULT_PREF)
+	pref["py_loglevel"] = str(master.get("py_loglevel", DEFAULT_PY_LOG_LEVEL))
+	with open(pref_path, "w", encoding="utf-8") as stream:
+		yaml.safe_dump(pref, stream, sort_keys=False)
+	return str(pref_path)
+
+
+def find_process_log_dirs(start_time, excluded_roots=None, search_root=Path("/tmp")):
+	log_files = ("defw_out.log", "defw_py.log", "pid")
+	if not search_root.is_dir():
+		return []
+	excluded_roots = [Path(root).resolve() for root in (excluded_roots or [])]
+	dirs = []
+	for entry in search_root.iterdir():
+		if not entry.is_dir():
+			continue
+		entry_resolved = entry.resolve()
+		if any(
+			entry_resolved == root or root in entry_resolved.parents
+			for root in excluded_roots
+		):
+			continue
+		try:
+			if entry.stat().st_mtime < start_time - 1:
+				continue
+		except FileNotFoundError:
+			continue
+		if any((entry / log_file).exists() for log_file in log_files):
+			dirs.append(entry)
+	return sorted(dirs)
+
+
+def collect_process_logs(log_dir, start_time):
+	log_root = Path(log_dir).resolve()
+	collection_dir = log_root / "process_logs"
+	collection_dir.mkdir(parents=True, exist_ok=True)
+	for src_dir in find_process_log_dirs(start_time, excluded_roots=[log_root]):
+		dst_dir = collection_dir / src_dir.name
+		if dst_dir.exists():
+			shutil.rmtree(dst_dir)
+		shutil.copytree(src_dir, dst_dir)
 
 
 def build_environment(config):
@@ -82,6 +180,7 @@ def build_environment(config):
 		"experiment_port_base",
 		int(listen_port) + 10,
 	))
+	pref_path = write_pref_file(config, log_dir)
 
 	env["LD_LIBRARY_PATH"] = (
 		f"{src_path}{os.pathsep}{env['LD_LIBRARY_PATH']}"
@@ -102,6 +201,7 @@ def build_environment(config):
 	env["DEFW_PARENT_ADDR"] = master.get("parent_addr", "127.0.0.1")
 	env["DEFW_PARENT_PORT"] = listen_port
 	env["DEFW_LOG_DIR"] = log_dir
+	env["DEFW_PREF_PATH"] = pref_path
 	env["DEFW_LOG_LEVEL"] = log_level
 	env["DEFW_REPORT_MODE"] = report_mode
 	env["DEFW_EXPERIMENT_PORT_BASE"] = experiment_port_base
@@ -116,20 +216,16 @@ def build_python_command(config):
 	suite = config.get("suite")
 	if not isinstance(suite, str) or not suite.strip():
 		raise ValueError("Config must define a suite name")
-	scripts = normalize_scripts(config)
-	indented_scripts = ",\n".join(f"    {script!r}" for script in scripts)
-	return textwrap.dedent(
-		f"""
-		import defw
-
-		suite = defw.experiments[{suite!r}].scripts
-		for script_name in [
-		{indented_scripts}
-		]:
-		    print(suite[script_name].run())
-		defw.dumpGlobalTestResults()
-		"""
-	).strip()
+	scripts = get_script_names(config)
+	lines = [
+		"import defw",
+		f"suite = defw.experiments[{suite!r}].scripts",
+	]
+	for script in scripts:
+		lines.append(f"suite[{script!r}].run()")
+		lines.append(f"print({(PROGRESS_PREFIX + script)!r}, flush=True)")
+	lines.append("defw.dumpGlobalTestResults()")
+	return "\n".join(lines)
 
 
 def build_command(config):
@@ -138,6 +234,43 @@ def build_command(config):
 		"-c",
 		build_python_command(config),
 	]
+
+
+def stream_runner_output(cmd, env, total_scripts):
+	if Progress is None:
+		completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
+		return completed.returncode
+
+	with subprocess.Popen(
+		cmd,
+		env=env,
+		cwd=str(DEFW_ROOT),
+		stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT,
+		text=True,
+		bufsize=1,
+	) as process:
+		assert process.stdout is not None
+		with Progress(
+			SpinnerColumn(),
+			TextColumn("[progress.description]{task.description}"),
+			BarColumn(),
+			TextColumn("{task.completed}/{task.total}"),
+			TimeElapsedColumn(),
+			transient=True,
+		) as progress:
+			task_id = progress.add_task("Running DEFw tests", total=total_scripts)
+			for line in process.stdout:
+				if line.startswith(PROGRESS_PREFIX):
+					progress.advance(task_id)
+					script_name = line[len(PROGRESS_PREFIX):].strip()
+					progress.update(
+						task_id,
+						description=f"Completed {script_name or 'test'}",
+					)
+					continue
+				print(line, end="")
+			return process.wait()
 
 
 def parse_args():
@@ -159,6 +292,10 @@ def parse_args():
 		action="store_true",
 		help="Print the resolved command and environment, then exit",
 	)
+	parser.add_argument(
+		"--script",
+		help="Run only one script, optionally as suite::script",
+	)
 	return parser.parse_args()
 
 
@@ -173,6 +310,8 @@ def main():
 
 	config_path = resolve_config_path(args.config)
 	config = load_config(config_path)
+	config = apply_script_selector(config, args.script)
+	scripts = get_script_names(config)
 	env = build_environment(config)
 	cmd = build_command(config)
 
@@ -194,6 +333,7 @@ def main():
 			"DEFW_PARENT_ADDR",
 			"DEFW_PARENT_PORT",
 			"DEFW_LOG_DIR",
+			"DEFW_PREF_PATH",
 			"DEFW_LOG_LEVEL",
 			"DEFW_REPORT_MODE",
 			"DEFW_EXPERIMENT_PORT_BASE",
@@ -202,8 +342,13 @@ def main():
 			print(f"  {key}={env[key]}")
 		return 0
 
-	completed = subprocess.run(cmd, env=env, cwd=str(DEFW_ROOT))
-	return completed.returncode
+	log_dir = env["DEFW_LOG_DIR"]
+	start_time = time.time()
+	try:
+		returncode = stream_runner_output(cmd, env, len(scripts))
+	finally:
+		collect_process_logs(log_dir, start_time)
+	return returncode
 
 
 if __name__ == "__main__":

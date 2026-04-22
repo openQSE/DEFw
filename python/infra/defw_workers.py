@@ -30,7 +30,7 @@ def get_instance_mode(module):
 			if service_metadata and 'instance_mode' in service_metadata:
 				return service_metadata['instance_mode']
 		except Exception as exc:
-			logging.debug(
+			logging.defw_worker(
 				f"Unable to load service package metadata for {module.__name__}: {exc}"
 			)
 
@@ -55,9 +55,10 @@ class WorkerEvent:
 			self.msg_yaml = None
 			if msg:
 				self.msg_yaml = yaml.load(msg, Loader=yaml.Loader)
-		logging.debug("workerEvent generated from: ")
 		stack_trace_str = "".join(traceback.format_stack())
-		logging.debug(f"{stack_trace_str}")
+		logging.defw_stacktrace(
+			f"workerEvent generated from:\n{stack_trace_str}"
+		)
 
 	def __check_type(self, we_type):
 		if we_type != WorkerEvent.EVENT_INCOMING_REQUEST and \
@@ -118,10 +119,12 @@ class WorkerRequest:
 			self.queue = queue.Queue()
 		else:
 			self.queue = None
-		logging.debug(f"WorkRequest({self.type2str(self.wr_type)}, " \
+		logging.defw_worker(f"WorkRequest({self.type2str(self.wr_type)}, " \
 					  f"{self.blocking}, {self.req_uuid})")
 		stack_trace_str = "".join(traceback.format_stack())
-		logging.debug(f"{stack_trace_str}")
+		logging.defw_stacktrace(
+			f"WorkRequest stack trace:\n{stack_trace_str}"
+		)
 
 	def __check_type(self, wr_type):
 		if wr_type != WorkerRequest.WR_SEND_MSG and \
@@ -138,7 +141,7 @@ class WorkerRequest:
 	def wait(self):
 		if not self.queue:
 			return None
-		logging.debug(f"Waiting for WorkRequest({self.type2str(self.wr_type)}) " \
+		logging.defw_worker(f"Waiting for WorkRequest({self.type2str(self.wr_type)}) " \
 					  f"{self.req_uuid} to complete")
 
 		t = time.time()
@@ -151,9 +154,9 @@ class WorkerRequest:
 			except queue.Empty:
 				pass
 			t = time.time()
-			logging.debug(f"cur time {str(t)}, deadline {str(self.deadline)}")
+			logging.defw_worker(f"cur time {str(t)}, deadline {str(self.deadline)}")
 			if event:
-				logging.debug(f"Completed {self.type2str(self.wr_type)} " \
+				logging.defw_worker(f"Completed {self.type2str(self.wr_type)} " \
 							  f"ev: {event.type2str([event.ev_type])} " \
 							  f"WorkRequest {self.req_uuid} exp " \
 							  f"{event.type2str(self.expected_events)}")
@@ -200,7 +203,7 @@ class WorkerThread:
 	def put_ev(self, we):
 		self.queue.put(we)
 		if we.ev_type == we.EVENT_SHUTDOWN:
-			logging.debug("Waiting for Worker thread to shutdown")
+			logging.defw_worker("Waiting for Worker thread to shutdown")
 			self.thread.join()
 
 	def add_work_request(self, work_request):
@@ -224,21 +227,21 @@ class WorkerThread:
 					from defw_agent_baseapi import query_service_info
 					si = query_service_info(active_service_agents.get_resmgr(),
 							 'DEFwResMgr')
-					logging.debug(f"Querying Resource Manager returned: {si}")
+					logging.defw_worker(f"Querying Resource Manager returned: {si}")
 					if si:
 						defw.resmgr = service_apis['Resource Manager'].service_classes[0](si)
-						logging.debug(f"Created resource manager API: {defw.resmgr}")
+						logging.defw_worker(f"Created resource manager API: {defw.resmgr}")
 						from defw import updater_queue
 						updater_queue.put({'type': 'resmgr', 'resmgr': defw.resmgr})
 					else:
 						raise DEFwNotFound("Couldn't Query resource manager")
 		except Exception as e:
-			logging.debug("Calling system up")
+			logging.defw_worker("Calling system up")
 			if common.is_system_up():
-				logging.critical("Couldn't refresh agents")
+				logging.defw_worker("Couldn't refresh agents")
 				raise e
 			pass
-		logging.debug("Feeding worker thread EVENT_REFRESH_COMPLETE")
+		logging.defw_worker("Feeding worker thread EVENT_REFRESH_COMPLETE")
 		we = WorkerEvent(WorkerEvent.EVENT_REFRESH_COMPLETE)
 		worker_thread.put_ev(we)
 
@@ -256,29 +259,29 @@ class WorkerThread:
 			except queue.Empty:
 				continue
 
-			logging.debug(f"Received event {we.type2str([we.ev_type])}")
+			logging.defw_worker(f"Received event {we.type2str([we.ev_type])}")
 
 			if we.ev_type == WorkerEvent.EVENT_INCOMING_REQUEST:
-				logging.debug(f"handling request {we.msg_yaml}")
+				logging.defw_rpc(f"handling request {we.msg_yaml}")
 				self.spawn_temporary_worker(self.handle_rpc_req, we.msg_yaml, we.uuid)
 			elif we.ev_type == WorkerEvent.EVENT_INCOMING_RESPONSE:
 				# find request
-				logging.debug(f"handling response {we.msg_yaml}")
+				logging.defw_rpc(f"handling response {we.msg_yaml}")
 				try:
 					with self.req_db_lock:
 						wr = self.req_db[we.msg_yaml['rpc']['req-uuid']]
 						del self.req_db[we.msg_yaml['rpc']['req-uuid']]
 					wr.queue.put(we)
 				except:
-					logging.critical(f"Unmatched response. DB = {self.req_db}")
+					logging.defw_rpc(f"Unmatched response. DB = {self.req_db}")
 			elif we.ev_type == WorkerEvent.EVENT_REFRESH:
-				logging.debug("Refreshing Agents")
+				logging.defw_worker("Refreshing Agents")
 				self.spawn_temporary_worker(self.refresh_agents)
 			elif we.ev_type == WorkerEvent.EVENT_REFRESH_COMPLETE:
 				del_entries = []
 				with self.req_db_lock:
 					for k, v in self.req_db.items():
-						logging.debug(f"Got a refresh event. looking at {k}:{v}")
+						logging.defw_worker(f"Got a refresh event. looking at {k}:{v}")
 						# satisfy the event in order to avoid out of order
 						# refresh events which get misinterpreted
 						# TODO: Is there a bug here?
@@ -292,27 +295,27 @@ class WorkerThread:
 									del_entries.append(k)
 						elif WorkerEvent.EVENT_REFRESH in v.expected_events:
 							raise DEFwCommError(f"Unordered events {v.expected_events}")
-					logging.debug(f"deleting entries from req_db {del_entries}")
+					logging.defw_worker(f"deleting entries from req_db {del_entries}")
 					for k in del_entries:
 						del self.req_db[k]
-				logging.debug("Finished handling refresh")
+				logging.defw_worker("Finished handling refresh")
 			elif we.ev_type == WorkerEvent.EVENT_CONN_COMPLETE:
 				try:
 					with self.req_db_lock:
 						wr = self.req_db[we.uuid]
-					logging.debug(f"Queuing Event Complete on WR {we.uuid}")
+					logging.defw_worker(f"Queuing Event Complete on WR {we.uuid}")
 					wr.queue.put(we)
 				except:
-					logging.critical(f"Unmatched response. DB = {self.req_db}")
+					logging.defw_rpc(f"Unmatched response. DB = {self.req_db}")
 			elif we.ev_type == WorkerEvent.EVENT_SHUTDOWN:
 				shutdown = True
 				# shutdown any waiting events
 				with self.req_db_lock:
 					for k, v in self.req_db.items():
 						v.queue.put(we)
-				logging.debug("Worker thread shutdown")
+				logging.defw_worker("Worker thread shutdown")
 			else:
-				logging.critical(f"Bug. Unknown event {we.ev_type}")
+				logging.defw_worker(f"Bug. Unknown event {we.ev_type}")
 
 	def handle_rpc_req(self, y, blk_uuid):
 		function_name = ''
@@ -322,7 +325,7 @@ class WorkerThread:
 
 		start_rep_req_handle = time.time()
 
-		logging.debug("Calling handle_rpc_type")
+		logging.defw_rpc("Calling handle_rpc_type")
 
 		common.g_rpc_metrics.add_rpc_req_time(y['rpc']['statistics']['send_time'],
 								   time.time())
@@ -330,9 +333,9 @@ class WorkerThread:
 		# check to see if this is for me
 		target = y['rpc']['dst']
 		if not target == me.my_endpoint():
-			logging.debug("Message is not for me")
-			logging.debug(target)
-			logging.debug(me.my_endpoint())
+			logging.defw_rpc("Message is not for me")
+			logging.defw_rpc(target)
+			logging.defw_rpc(me.my_endpoint())
 			return
 		source = y['rpc']['src']
 		hostname = source.hostname
@@ -358,29 +361,29 @@ class WorkerThread:
 		elif rpc_type == 'instantiate_class' or rpc_type == 'destroy_class':
 			class_name = y['rpc']['class']
 			class_id = y['rpc']['class_id']
-			logging.debug(f"instantiate_class {class_name} with {class_id}")
+			logging.defw_rpc(f"instantiate_class {class_name} with {class_id}")
 		else:
 			raise DEFwError('Unexpected rpc')
 
 		# any remote invocation implies that module which needs to be
 		# imported is in the python/icpa-be/
-		logging.debug("module name is: %s " % mname)
-		logging.debug("rpc type is: %s " % rpc_type)
+		logging.defw_rpc("module name is: %s " % mname)
+		logging.defw_rpc("rpc type is: %s " % rpc_type)
 		module = importlib.import_module(mname)
 		if common.get_debug_module_reload():
 			importlib.reload(module)
-		logging.debug(f"module is: {module.__name__}")
+		logging.defw_rpc(f"module is: {module.__name__}")
 		args = y['rpc']['parameters']['args']
 		kwargs = y['rpc']['parameters']['kwargs']
 		defw_exception_string = None
 		try:
 			if rpc_type == 'function_call':
-				logging.debug(f'remote call to function {function_name}')
+				logging.defw_rpc(f'remote call to function {function_name}')
 				module_func = getattr(module, function_name)
 				if hasattr(module_func, '__call__'):
 					rc = module_func(*args, **kwargs)
 			elif rpc_type == 'instantiate_class':
-				logging.debug(f'remote call to instantiate class {class_name}')
+				logging.defw_rpc(f'remote call to instantiate class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					if not common.has_class_entry(class_id):
 						common.add_to_class_db(defw.resmgr, class_id)
@@ -407,7 +410,7 @@ class WorkerThread:
 							instance = my_class(*args, **kwargs)
 							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
-				logging.debug(f'remote call to destroy class {class_name}')
+				logging.defw_rpc(f'remote call to destroy class {class_name}')
 				if me.is_resmgr() and class_name == 'DEFwResMgr':
 					common.del_entry_from_class_db(class_id)
 				else:
@@ -424,7 +427,7 @@ class WorkerThread:
 								   f"but id refers to class {type(instance).__name__}")
 				start = time.time()
 				rc = getattr(instance, method_name)(*args, **kwargs)
-				logging.debug(f'remote call to method call {class_name}.{method_name} took '\
+				logging.defw_rpc(f'remote call to method call {class_name}.{method_name} took '\
 							  f'{time.time() - start}')
 		except Exception as e:
 			# NOTE: I can just send the exception as is to the other end, however,
@@ -467,7 +470,7 @@ def put_shutdown():
 	from defw import updater_queue
 	updater_queue.put({'type': 'shutdown'})
 	# TODO need to uninitialize all active services
-	logging.debug("Putting Shutdown")
+	logging.defw_worker("Putting Shutdown")
 
 def put_request(msg, uuid):
 	try:
@@ -475,8 +478,8 @@ def put_request(msg, uuid):
 						 uuid=uuid, msg=msg)
 		worker_thread.put_ev(we)
 	except:
-		logging.critical(f"Recieved a bad request:\n{msg}")
-	logging.debug("Putting request")
+		logging.defw_rpc(f"Recieved a bad request:\n{msg}")
+	logging.defw_rpc("Putting request")
 
 def put_response(msg, uuid):
 	try:
@@ -484,19 +487,19 @@ def put_response(msg, uuid):
 						 uuid=uuid, msg=msg)
 		worker_thread.put_ev(we)
 	except:
-		logging.critical(f"Recieved a bad response:\n{msg}")
-	logging.debug("Putting response")
+		logging.defw_rpc(f"Recieved a bad response:\n{msg}")
+	logging.defw_rpc("Putting response")
 
 def put_refresh():
 	we = WorkerEvent(WorkerEvent.EVENT_REFRESH)
 	worker_thread.put_ev(we)
-	logging.debug("Putting refresh")
+	logging.defw_worker("Putting refresh")
 
 def put_connect_complete(status, uuid_str):
 	we = WorkerEvent(WorkerEvent.EVENT_CONN_COMPLETE,
 					 connect_status=status, uuid=uuid.UUID(uuid_str))
 	worker_thread.put_ev(we)
-	logging.debug("Putting connect complete")
+	logging.defw_worker("Putting connect complete")
 
 def send_rsp(wr):
 	rc = defw_send_rsp(wr.remote_uuid,
