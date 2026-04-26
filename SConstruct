@@ -1,5 +1,4 @@
 import os, glob, sysconfig, sys, yaml
-import distutils.sysconfig
 
 DEFW_PATH = Dir('.').abspath
 LIBDEFW_SRC_FILES = glob.glob(os.path.join(DEFW_PATH, "src", "libdefw*.c"))
