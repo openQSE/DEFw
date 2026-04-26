@@ -48,7 +48,11 @@
     if (*$1 == NULL)
        goto fail;
     obj = PyUnicode_FromString(*$1);
-    $result = SWIG_Python_AppendOutput($result,obj);
+#if SWIG_VERSION >= 40100
+    $result = SWIG_Python_AppendOutput($result, obj, $isvoid);
+#else
+    $result = SWIG_Python_AppendOutput($result, obj);
+#endif
 %}
 
 /* The malloc'ed pointer is no longer needed, so make sure it is freed. */
