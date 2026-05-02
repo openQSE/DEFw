@@ -433,6 +433,7 @@ def add_logging_level(log_level, level_name, alias_names=None):
 
 	def custom_level_logger(message, *args, **kwargs):
 		if logging.getLogger().isEnabledFor(log_level):
+			kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
 			logging.getLogger()._log(log_level, message, args, **kwargs)
 
 	CUSTOM_LEVELS[level_name.upper()] = log_level
