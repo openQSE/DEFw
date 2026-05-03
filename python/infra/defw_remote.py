@@ -118,7 +118,18 @@ class BaseRemote(object):
 					type(self).__name__, '__init__',
 					self.__class_id, self.__blocking, *args, **kwargs)
 
+	def __copy__(self):
+		return self
+
+	def __deepcopy__(self, memo):
+		return self
+
+	def __reduce_ex__(self, protocol):
+		raise TypeError("DEFw remote proxies are not pickleable")
+
 	def __getattribute__(self, name):
+		if name.startswith('__') and name.endswith('__'):
+			return object.__getattribute__(self, name)
 		attr = object.__getattribute__(self, name)
 		if hasattr(attr, '__call__'):
 			def newfunc(*args, **kwargs):
