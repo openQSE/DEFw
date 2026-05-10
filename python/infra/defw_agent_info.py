@@ -51,11 +51,12 @@ class Capability:
 class DEFwServiceInfo:
 	def __init__(self, service_name, service_descr,
 				 cname, mname, capabilities, max_capacity,
-				 agent_descriptor=None):
+				 agent_descriptor=None, properties=None):
 		self.__service_name = service_name
 		self.__service_descr = service_descr
 		self.__capabilities = capabilities
 		self.__agent_descriptor = agent_descriptor
+		self.__properties = properties or {}
 		self.__max_capacity = max_capacity
 		self.__cur_capacity = 0
 		self.__module_name = mname
@@ -69,6 +70,12 @@ class DEFwServiceInfo:
 
 	def get_class_name(self):
 		return self.__class_name
+
+	def get_properties(self):
+		return self.__properties
+
+	def get_property(self, key, default=None):
+		return self.__properties.get(key, default)
 
 	def is_match(self, svc_name, svc_type, svc_caps):
 		logging.defw_core(f"is_match {svc_name} <-> {self.__service_name}")
@@ -121,5 +128,5 @@ class DEFwServiceInfo:
 
 	def __repr__(self):
 		return f"Service Info(name={self.__service_name}, " \
-			   f"Residence={self.__my_ep}, caps={self.__capabilities}"
-
+			   f"Residence={self.__my_ep}, caps={self.__capabilities}, " \
+			   f"properties={self.__properties})"
