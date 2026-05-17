@@ -1,0 +1,105 @@
+#!/bin/bash
+
+set -e
+
+DEFW_BUILD_PYTHON_LIB_DIR=@DEFW_BUILD_PYTHON_LIB_DIR@
+DEFW_BUILD_PYTHON_VERSION=@DEFW_BUILD_PYTHON_VERSION@
+DEFW_BUILD_PYTHON_EXECUTABLE=@DEFW_BUILD_PYTHON_EXECUTABLE@
+
+resolve_script_path() {
+	local source="$1"
+	local dir
+
+	while [[ -L "${source}" ]]; do
+		dir="$(cd -P "$(dirname "${source}")" && pwd)"
+		source="$(readlink "${source}")"
+		[[ "${source}" == /* ]] || source="${dir}/${source}"
+	done
+
+	cd -P "$(dirname "${source}")" && pwd
+}
+
+make_uuid() {
+	if command -v uuidgen >/dev/null 2>&1; then
+		uuidgen
+	elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+		cat /proc/sys/kernel/random/uuid
+	else
+		printf '%s-%s\n' "$$" "$(date +%s%N)"
+	fi
+}
+
+script_dir="$(resolve_script_path "${BASH_SOURCE[0]}")"
+: "${DEFW_PATH:=$(cd "${script_dir}/.." && pwd)}"
+
+uuid="$(make_uuid)"
+default_log_dir="/tmp/defw_${uuid}"
+cleanup_log_dir=0
+
+: "${DEFW_CONFIG_PATH:=${DEFW_PATH}/python/config/defw_generic.yaml}"
+: "${DEFW_SHELL_TYPE:=cmdline}"
+: "${DEFW_AGENT_TYPE:=agent}"
+: "${DEFW_AGENT_NAME:=defw_python_${uuid}}"
+: "${DEFW_LISTEN_PORT:=0}"
+: "${DEFW_TELNET_PORT:=0}"
+: "${DEFW_PARENT_ADDR:=0.0.0.0}"
+: "${DEFW_PARENT_HOSTNAME:=None}"
+: "${DEFW_PARENT_PORT:=0}"
+: "${DEFW_PARENT_NAME:=None}"
+: "${DEFW_DISABLE_RESMGR:=yes}"
+: "${DEFW_LOG_LEVEL:=error}"
+: "${DEFW_PY_LOGLEVEL:=critical}"
+if [[ -z "${DEFW_LOG_DIR:-}" ]]; then
+	DEFW_LOG_DIR="${default_log_dir}"
+	cleanup_log_dir=1
+fi
+: "${DEFW_ONLY_LOAD_MODULE:=}"
+: "${DEFW_LOAD_NO_INIT:=}"
+: "${DEFW_EXTERNAL_SERVICES_PATH:=}"
+: "${DEFW_EXTERNAL_SERVICE_APIS_PATH:=}"
+: "${DEFW_EXTERNAL_EXPERIMENTS_PATH:=}"
+: "${DEFW_EXPECTED_AGENT_COUNT:=0}"
+
+mkdir -p "${DEFW_LOG_DIR}"
+
+if [[ -n "${DEFW_BUILD_PYTHON_LIB_DIR}" && -d "${DEFW_BUILD_PYTHON_LIB_DIR}" ]]; then
+	export LD_LIBRARY_PATH="${DEFW_PATH}/src:${DEFW_BUILD_PYTHON_LIB_DIR}${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+else
+	export LD_LIBRARY_PATH="${DEFW_PATH}/src${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+fi
+
+export DEFW_PATH
+export DEFW_CONFIG_PATH
+export DEFW_SHELL_TYPE
+export DEFW_AGENT_TYPE
+export DEFW_AGENT_NAME
+export DEFW_LISTEN_PORT
+export DEFW_TELNET_PORT
+export DEFW_PARENT_ADDR
+export DEFW_PARENT_HOSTNAME
+export DEFW_PARENT_PORT
+export DEFW_PARENT_NAME
+export DEFW_DISABLE_RESMGR
+export DEFW_LOG_LEVEL
+export DEFW_PY_LOGLEVEL
+export DEFW_LOG_DIR
+export DEFW_ONLY_LOAD_MODULE
+export DEFW_LOAD_NO_INIT
+export DEFW_EXTERNAL_SERVICES_PATH
+export DEFW_EXTERNAL_SERVICE_APIS_PATH
+export DEFW_EXTERNAL_EXPERIMENTS_PATH
+export DEFW_EXPECTED_AGENT_COUNT
+
+argv0="$0"
+[[ "$(basename "${argv0}")" == python* ]] || argv0="python3"
+
+set +e
+bash -c 'exec -a "$1" "$2" "${@:3}"' defwp-wrapper "${argv0}" "${DEFW_PATH}/src/defwp" "$@"
+rc=$?
+set -e
+
+if [[ "${cleanup_log_dir}" -eq 1 && -n "${DEFW_LOG_DIR}" && "${DEFW_LOG_DIR}" == /tmp/defw_* ]]; then
+	rm -rf -- "${DEFW_LOG_DIR}"
+fi
+
+exit "${rc}"

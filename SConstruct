@@ -1,4 +1,4 @@
-import os, glob, sysconfig, sys, yaml
+import os, glob, sysconfig, sys, yaml, shlex, stat
 
 DEFW_PATH = Dir('.').abspath
 LIBDEFW_SRC_FILES = glob.glob(os.path.join(DEFW_PATH, "src", "libdefw*.c"))
@@ -175,12 +175,36 @@ def build_bin(env):
     print(cmd)
     os.system(cmd)
 
+def build_defwp_wrapper(env):
+    path = os.path.join(env['DEFW_PATH'], "src", "defwp-wrapper")
+    template_path = os.path.join(env['DEFW_PATH'], "src", "defwp-wrapper.in")
+    python_lib_dir = env['PYTHON_LIB_DIR'] or ""
+    python_version = sys.version.split()[0].strip()
+    python_executable = sys.executable
+
+    with open(template_path, "r") as f:
+        wrapper = f.read()
+    wrapper = wrapper.replace("@DEFW_BUILD_PYTHON_LIB_DIR@",
+                              shlex.quote(python_lib_dir))
+    wrapper = wrapper.replace("@DEFW_BUILD_PYTHON_VERSION@",
+                              shlex.quote(python_version))
+    wrapper = wrapper.replace("@DEFW_BUILD_PYTHON_EXECUTABLE@",
+                              shlex.quote(python_executable))
+
+    with open(path, "w") as f:
+        f.write(wrapper)
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR |
+             stat.S_IRGRP | stat.S_IXGRP |
+             stat.S_IROTH | stat.S_IXOTH)
+    print(f"Generated {path}")
+
 def clean(env):
     pfiles = os.path.join(env['DEFW_PATH'], "src", "*.py")
     wfiles = os.path.join(env['DEFW_PATH'], "src", "*_wrap.c")
     ofiles = os.path.join(env['DEFW_PATH'], "src", "*.o")
     ifiles = os.path.join(env['DEFW_PATH'], "src", "*.i")
-    cmd = "rm -Rf " + " ".join([pfiles, wfiles, ofiles, ifiles])
+    wrapper = os.path.join(env['DEFW_PATH'], "src", "defwp-wrapper")
+    cmd = "rm -Rf " + " ".join([pfiles, wfiles, ofiles, ifiles, wrapper])
     print(cmd)
     os.system(cmd)
     cleanup_external_files(env)
@@ -213,6 +237,7 @@ env.AddMethod(build_shared_library)
 env.AddMethod(mbuild_shared_library)
 env.AddMethod(install)
 env.AddMethod(build_bin)
+env.AddMethod(build_defwp_wrapper)
 env.AddMethod(clean)
 
 env.clean_all = env.clean()
@@ -221,6 +246,6 @@ env.swigify_files = env.swigify_all_files()
 env.swigify_externals = env.swigify_externals()
 env.fwsl = env.mbuild_shared_library(env['DEFW_FWSL_FILES'], os.path.join(env['DEFW_PATH'], "src", "libfwsl.so"))
 env.bin = env.build_bin()
+env.wrapper = env.build_defwp_wrapper()
 env.install_defw = env.install(os.path.join(env['DEFW_PATH'], "src"),
                               os.path.join(env['DEFW_PATH'], "install"))
-
