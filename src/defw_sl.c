@@ -140,6 +140,7 @@ defw_rc_t defw_start(int argc, char *argv[])
 	char *bin_name;
 	bool spawned = false;
 	bool pure_python = false;
+	bool listener_started = false;
 
 	if (!python_check_version())
 		exit(DEFW_PYTHON_VERSION_MISMATCH);
@@ -238,9 +239,12 @@ run_pure_python:
 		return EN_DEFW_RC_LOG_CREATION_FAILURE;
 	}
 
-	if (defw_spawn_listener(&l_thread_id)) {
-		PERROR("Failed to initialize listener thread");
-		return EN_DEFW_RC_ERR_THREAD_STARTUP;
+	if (g_defw_cfg.l_info.listen_address.sin_port != 0) {
+		if (defw_spawn_listener(&l_thread_id)) {
+			PERROR("Failed to initialize listener thread");
+			return EN_DEFW_RC_ERR_THREAD_STARTUP;
+		}
+		listener_started = true;
 	}
 
 	if (pure_python) {
@@ -248,7 +252,8 @@ run_pure_python:
 		rc = python_run_interpreter(argc, argv);
 		if (rc)
 			PERROR("Interprter failed to execute: %d\n", rc);
-		defw_listener_shutdown();
+		if (listener_started)
+			defw_listener_shutdown();
 		goto out;
 	}
 
@@ -299,7 +304,7 @@ run_pure_python:
 out:
 	if (local_argv)
 		free(local_argv);
-	if (g_defw_cfg.safe_shutdown)
+	if (g_defw_cfg.safe_shutdown && listener_started)
 		pthread_join(l_thread_id, NULL);
 
 	PDEBUG("%d: Exiting Framework\n", getpid());
@@ -324,4 +329,3 @@ void defw_shutdown(void)
 	defw_listener_shutdown();
 	python_finalize();
 }
-
