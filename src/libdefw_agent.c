@@ -18,6 +18,7 @@
 #include "defw_list.h"
 #include "defw_python.h"
 #include "defw_listener.h"
+#include "defw_transport.h"
 #include "defw_print.h"
 
 extern fd_set g_tAllSet;
@@ -669,8 +670,9 @@ defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup)
 	msg.node_name[MAX_STR_LEN-1] = '\0';
 	gethostname(msg.node_hostname, MAX_STR_LEN);
 
-	rc = defw_send_msg((rpc_setup) ? agent->iRpcFd : agent->iFileDesc,
-			  (char *)&msg, sizeof(msg), EN_MSG_TYPE_SESSION_INFO);
+	rc = defw_transport_ops()->send(agent,
+			(rpc_setup) ? EN_DEFW_CHANNEL_RPC : EN_DEFW_CHANNEL_CTRL,
+			(char *)&msg, sizeof(msg), EN_MSG_TYPE_SESSION_INFO);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send heart beat %s\n",
 			defw_rc2str(rc));
@@ -696,8 +698,8 @@ defw_rc_t defw_send_hb(defw_agent_blk_t *agent)
 	//       agent->iRpcFd);
 
 	/* send the heart beat */
-	rc = defw_send_msg(agent->iFileDesc, (char *)&msg,
-			   sizeof(msg), EN_MSG_TYPE_HB);
+	rc = defw_transport_ops()->send(agent, EN_DEFW_CHANNEL_CTRL,
+			(char *)&msg, sizeof(msg), EN_MSG_TYPE_HB);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send heart beat %s\n",
 			defw_rc2str(rc));
@@ -969,7 +971,8 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 
 	set_agent_state(agent_blk, DEFW_AGENT_WORK_IN_PROGRESS);
 
-	rc = defw_send_msg(agent_blk->iRpcFd, yaml, msg_size, type);
+	rc = defw_transport_ops()->send(agent_blk, EN_DEFW_CHANNEL_RPC,
+			yaml, msg_size, type);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send rpc message: %s", yaml);
 		goto fail_rpc;
