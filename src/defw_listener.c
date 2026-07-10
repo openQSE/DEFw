@@ -262,7 +262,6 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 	defw_message_hdr_t hdr = {0};
 	char *buffer;
 	defw_msg_process_fn_t proc_fn;
-	int cmp;
 
 	/* get the header first */
 	rc = readTcpMessage(fd, (char *)&hdr, sizeof(hdr),
@@ -278,12 +277,21 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 		return EN_DEFW_RC_BAD_VERSION;
 	}
 
-	/* if the ips don't match ignore the message */
-	hdr.ip.s_addr = ntohl(hdr.ip.s_addr);
-	if ((cmp = memcmp(&agent->addr.sin_addr, &hdr.ip, sizeof(hdr.ip)))) {
-		PERROR("IP addresses don't match");
-		PERROR("agent IP = %s", inet_ntoa(agent->addr.sin_addr));
-		PERROR("hdr IP = %s", inet_ntoa(hdr.ip));
+	/* Validate the sender identity by remote uuid. A brand new
+	 * connection has no uuid yet; it arrives in the session info, so we
+	 * trust the first message and let process_msg_session_info record
+	 * the uuid (trust on first use). Once the uuid is known, a mismatch
+	 * means the message did not come from the agent that owns this
+	 * connection and is dropped.
+	 */
+	if (!uuid_is_null(agent->id.remote_uuid) &&
+	    uuid_compare(agent->id.remote_uuid, hdr.sender_uuid)) {
+		char got[UUID_STR_LEN], expected[UUID_STR_LEN];
+
+		uuid_unparse_lower(hdr.sender_uuid, got);
+		uuid_unparse_lower(agent->id.remote_uuid, expected);
+		PERROR("sender uuid mismatch: expected %s got %s",
+		       expected, got);
 		return EN_DEFW_RC_BAD_ADDR;
 	}
 

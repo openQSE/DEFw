@@ -18,10 +18,15 @@ typedef enum {
 	EN_MSG_TYPE_MAX
 } defw_msg_type_t;
 
+/* The sender identity is the sender's remote uuid rather than its source
+ * IP address. A uuid is meaningful on any transport (TCP sockets, but also
+ * connectionless fabrics where there is no per-peer socket to read an
+ * address from), so this is the identity check shared by all transports.
+ */
 typedef struct defw_message_hdr_s {
 	defw_msg_type_t type;
 	unsigned int len;
-	struct in_addr ip;
+	uuid_t sender_uuid;
 	unsigned int version;
 } defw_message_hdr_t;
 

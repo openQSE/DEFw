@@ -14,8 +14,10 @@
 #include <strings.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <uuid/uuid.h>
 #include "defw_print.h"
 #include "libdefw_connect.h"
+#include "defw.h"
 
 static defw_rc_t doNonBlockingConnect(int iSockFd, struct sockaddr *psSA,
 				      int iSAlen, int iNsec)
@@ -204,9 +206,6 @@ defw_rc_t populateMsgHdr(int rsocket, char *msg_hdr,
 			 int defw_version_number)
 {
 	defw_message_hdr_t *hdr = NULL;
-	struct sockaddr_in sock;
-	int len = sizeof(sock);
-	int rc;
 
 	if (rsocket == INVALID_TCP_SOCKET ||
 	    msg_hdr == NULL) {
@@ -217,19 +216,13 @@ defw_rc_t populateMsgHdr(int rsocket, char *msg_hdr,
 
 	hdr = (defw_message_hdr_t *)msg_hdr;
 
-	/* get the local IP address we are connected on */
-	rc = getsockname(rsocket,
-			(struct sockaddr *)&sock,
-			(socklen_t *)&len);
-	if (rc) {
-		PERROR("getsockname failure %s:%s:%d",
-		       strerror(errno), strerror(rc), rc);
-		return EN_DEFW_RC_FAIL;
-	}
-
 	hdr->type = htonl(msg_type);
 	hdr->len = htonl(msg_size);
-	hdr->ip.s_addr = htonl(sock.sin_addr.s_addr);
+	/* Stamp the sender identity: our own remote uuid. This replaces the
+	 * previous source-IP stamp and is valid regardless of transport.
+	 * uuid_t is a byte array, so no endian conversion is needed.
+	 */
+	uuid_copy(hdr->sender_uuid, g_defw_cfg.uuid);
 	hdr->version = htonl(defw_version_number);
 
 	return EN_DEFW_RC_OK;

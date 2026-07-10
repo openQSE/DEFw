@@ -19,7 +19,10 @@
 #define BOLDCYAN    "\033[1m\033[36m"      /* Bold Cyan */
 #define BOLDWHITE   "\033[1m\033[37m"      /* Bold White */
 
-#define DEFW_VERSION_NUMBER		 1
+/* Bumped to 2: the message header now carries the sender uuid instead of
+ * the sender IP address. Old and new builds are intentionally incompatible.
+ */
+#define DEFW_VERSION_NUMBER		 2
 
 #define MAX_STR_LEN			1024
 #define MAX_SHORT_STR_LEN		128
