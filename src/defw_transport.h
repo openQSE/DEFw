@@ -107,4 +107,18 @@ void defw_transport_startup(void);
  */
 defw_rc_t defw_transport_ofi_init(const char *provider);
 
+/* Copy this process's OFI endpoint address into buf (for the session
+ * handshake). On entry *len is the buffer size; on success it is set to the
+ * address length. Returns EN_DEFW_RC_FAIL when OFI is not active (so the
+ * caller advertises no OFI address and the peer stays on TCP).
+ */
+defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len);
+
+/* Insert a peer's OFI address (as received in the session handshake) into the
+ * local address vector and return the resulting fi_addr_t as a uint64_t.
+ * Returns EN_DEFW_RC_FAIL when OFI is not active or the insert fails.
+ */
+defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
+				       uint64_t *fi_addr_out);
+
 #endif /* DEFW_TRANSPORT_H */

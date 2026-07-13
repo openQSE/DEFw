@@ -1,6 +1,7 @@
 #ifndef DEFW_AGENTS_H
 #define DEFW_AGENTS_H
 
+#include <stdint.h>
 #include "defw_common.h"
 #include "defw_message.h"
 
@@ -13,6 +14,10 @@
 #define DEFW_AGENT_WORK_IN_PROGRESS (1 << 3)
 #define DEFW_AGENT_STATE_DEAD (1 << 4)
 #define DEFW_AGENT_STATE_NEW (1 << 5)
+/* set once the peer's OFI address has been inserted into the address vector
+ * and cached in ofi_addr below
+ */
+#define DEFW_AGENT_OFI_ADDR_VALID (1 << 6)
 
 #ifndef DLIST_ENTRY
 #define DLIST_ENTRY
@@ -44,6 +49,11 @@ typedef struct defw_agent_blk_s {
 	unsigned int ref_count;
 	defw_type_t node_type;
 	char *rpc_response;
+	/* peer's fi_addr_t (stored as uint64_t so this transport-agnostic
+	 * header needs no libfabric include); valid only when the
+	 * DEFW_AGENT_OFI_ADDR_VALID state bit is set
+	 */
+	uint64_t ofi_addr;
 } defw_agent_blk_t;
 
 /* agent_state2str

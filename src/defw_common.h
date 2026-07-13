@@ -20,9 +20,13 @@
 #define BOLDWHITE   "\033[1m\033[37m"      /* Bold White */
 
 /* Bumped to 2: the message header now carries the sender uuid instead of
- * the sender IP address. Old and new builds are intentionally incompatible.
+ * the sender IP address.
+ * Bumped to 3: the session message now carries the sender's OFI endpoint
+ * address, so its size changed. Old and new builds are intentionally
+ * incompatible (the header version check rejects a mismatched peer before
+ * its differently-sized session body can be misread).
  */
-#define DEFW_VERSION_NUMBER		 2
+#define DEFW_VERSION_NUMBER		 3
 
 #define MAX_STR_LEN			1024
 #define MAX_SHORT_STR_LEN		128

@@ -19,6 +19,7 @@
 #include "libdefw_agent.h"
 #include "defw_message.h"
 #include "defw_listener.h"
+#include "defw_transport.h"
 #include "defw_print.h"
 
 #define MAX_AGENT_NOTIFICATION 1024
@@ -135,6 +136,36 @@ int defw_get_highest_fd(void)
 	return iMaxFd;
 }
 
+/* If OFI is active locally and the peer advertised an OFI address we have not
+ * inserted yet, add it to the address vector and cache the resulting fi_addr
+ * on the agent. A peer with ofi_addrlen 0 (TCP-only, or its transport is tcp)
+ * is left untouched, which is how a mixed TCP/OFI cluster keeps working. Safe
+ * to call from any message that carries a defw_msg_session_t (session info or
+ * heartbeat); the DEFW_AGENT_OFI_ADDR_VALID guard makes it idempotent.
+ */
+static void maybe_insert_ofi_addr(defw_agent_blk_t *agent,
+				  defw_msg_session_t *ses)
+{
+	unsigned int ofi_addrlen;
+	uint64_t fi_addr;
+
+	if (agent->state & DEFW_AGENT_OFI_ADDR_VALID)
+		return;
+
+	ofi_addrlen = ntohl(ses->ofi_addrlen);
+	if (ofi_addrlen == 0 || ofi_addrlen > DEFW_OFI_MAX_ADDRLEN)
+		return;
+
+	if (defw_transport_ofi_av_insert(ses->ofi_addr, ofi_addrlen,
+					 &fi_addr) != EN_DEFW_RC_OK)
+		return;
+
+	agent->ofi_addr = fi_addr;
+	set_agent_state(agent, DEFW_AGENT_OFI_ADDR_VALID);
+	PMSG("OFI address inserted for agent %s: fi_addr=%lu",
+	     agent->name, (unsigned long)fi_addr);
+}
+
 static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 {
 	defw_msg_session_t *ses = (defw_msg_session_t *)msg;
@@ -156,6 +187,10 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		       existing->name, existing->iRpcFd);
 		if (ses->rpc_setup)
 			set_agent_state(existing, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
+		/* in case the OFI address was not learned on the first
+		 * (control) connection, try again here while we hold a ref
+		 */
+		maybe_insert_ofi_addr(existing, ses);
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
 		/* agent should never be the same as existing.
@@ -193,6 +228,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
 	unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	gettimeofday(&agent->time_stamp, NULL);
+	maybe_insert_ofi_addr(agent, ses);
 	PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
 		agent->name, agent->iFileDesc);
 
@@ -237,6 +273,10 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	strncpy(agent->name, hb->node_name, MAX_STR_LEN);
 	agent->name[MAX_STR_LEN-1] = '\0';
 	gettimeofday(&agent->time_stamp, NULL);
+	/* a peer we connected to advertises its OFI address in its heartbeats;
+	 * learn it here so we can reach it over the fabric
+	 */
+	maybe_insert_ofi_addr(agent, hb);
 
 	return EN_DEFW_RC_OK;
 }

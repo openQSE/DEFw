@@ -39,7 +39,7 @@
 
 /* Minimum libfabric API version DEFw targets. The container ships 2.3.1. */
 #define DEFW_OFI_VERSION	FI_VERSION(1, 20)
-#define DEFW_OFI_MAX_ADDRLEN	256
+/* DEFW_OFI_MAX_ADDRLEN is shared with the message layer (defw_message.h). */
 
 /*
  * OFI transport state. One RDM endpoint per process. Peers are inserted into
@@ -217,12 +217,65 @@ err:
 	return EN_DEFW_RC_FAIL;
 }
 
+defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len)
+{
+	if (!g_ofi.up || !buf || !len)
+		return EN_DEFW_RC_FAIL;
+
+	if (*len < g_ofi.local_addrlen)
+		return EN_DEFW_RC_FAIL;
+
+	memcpy(buf, g_ofi.local_addr, g_ofi.local_addrlen);
+	*len = g_ofi.local_addrlen;
+
+	return EN_DEFW_RC_OK;
+}
+
+defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
+				       uint64_t *fi_addr_out)
+{
+	fi_addr_t fi_addr = FI_ADDR_UNSPEC;
+	int ret;
+
+	if (!g_ofi.up || !addr || !addrlen || !fi_addr_out)
+		return EN_DEFW_RC_FAIL;
+
+	/* fi_av_insert returns the number of addresses inserted (1), or a
+	 * negative errno on failure.
+	 */
+	ret = fi_av_insert(g_ofi.av, addr, 1, &fi_addr, 0, NULL);
+	if (ret != 1) {
+		PERROR("fi_av_insert returned %d", ret);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	*fi_addr_out = (uint64_t)fi_addr;
+
+	return EN_DEFW_RC_OK;
+}
+
 #else /* !HAVE_LIBFABRIC */
 
 defw_rc_t defw_transport_ofi_init(const char *provider)
 {
 	(void)provider;
 	PERROR("libfabric support was not built into DEFw");
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len)
+{
+	(void)buf;
+	(void)len;
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
+				       uint64_t *fi_addr_out)
+{
+	(void)addr;
+	(void)addrlen;
+	(void)fi_addr_out;
 	return EN_DEFW_RC_FAIL;
 }
 
