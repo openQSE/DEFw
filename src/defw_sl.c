@@ -333,5 +333,9 @@ defw_rc_t defw_exec_py(char *py_code)
 void defw_shutdown(void)
 {
 	defw_listener_shutdown();
+	/* stop the OFI progress thread (if any) before finalizing Python, so
+	 * no fabric receive can dispatch into a shutting-down interpreter
+	 */
+	defw_transport_shutdown();
 	python_finalize();
 }

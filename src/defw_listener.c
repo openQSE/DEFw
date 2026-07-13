@@ -374,6 +374,75 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 	return rc;
 }
 
+/*
+ * defw_ofi_dispatch
+ *   Dispatch a framed message that arrived as a single [header][body] buffer
+ *   (the OFI receive path) rather than a streamed socket read. Mirrors
+ *   process_agent_message: check the version, find the sending agent by the
+ *   header uuid, and run the registered handler on the body.
+ *
+ *   Only RPC message types travel over OFI (the control channel stays on
+ *   TCP), and their Python handlers copy the payload, so KEEP_DATA is not
+ *   expected here; this always frees the buffer it is given.
+ */
+defw_rc_t defw_ofi_dispatch(char *buf, size_t buflen)
+{
+	defw_message_hdr_t *hdr = (defw_message_hdr_t *)buf;
+	defw_msg_process_fn_t proc_fn;
+	defw_agent_blk_t *agent;
+	defw_agent_uuid_t id;
+	unsigned int type, len, version;
+	defw_rc_t rc;
+
+	if (buflen < sizeof(*hdr)) {
+		PERROR("OFI msg smaller than header: %zu", buflen);
+		free(buf);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	version = ntohl(hdr->version);
+	if (version != DEFW_VERSION_NUMBER) {
+		PERROR("OFI msg version %u != %d", version, DEFW_VERSION_NUMBER);
+		free(buf);
+		return EN_DEFW_RC_BAD_VERSION;
+	}
+
+	type = ntohl(hdr->type);
+	len = ntohl(hdr->len);
+
+	if (type >= EN_MSG_TYPE_MAX) {
+		PERROR("OFI msg unknown type %u", type);
+		free(buf);
+		return EN_DEFW_RC_UNKNOWN_MESSAGE;
+	}
+
+	if (sizeof(*hdr) + len > buflen) {
+		PERROR("OFI msg truncated: body %u buf %zu", len, buflen);
+		free(buf);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	memset(&id, 0, sizeof(id));
+	uuid_copy(id.remote_uuid, hdr->sender_uuid);
+	agent = defw_find_agent_by_uuid_global(&id);
+	if (!agent) {
+		PERROR("OFI msg from an unknown agent");
+		free(buf);
+		return EN_DEFW_RC_AGENT_NOT_FOUND;
+	}
+
+	proc_fn = msg_process_tbl[type];
+	if (proc_fn)
+		rc = proc_fn(buf + sizeof(*hdr), agent);
+	else
+		rc = EN_DEFW_RC_UNKNOWN_MESSAGE;
+
+	defw_release_agent_blk(agent, false);
+	free(buf);
+
+	return rc;
+}
+
 int process_new_agents_helper(defw_agent_blk_t *agent, void *user_data)
 {
 	connection_info_t *info = user_data;

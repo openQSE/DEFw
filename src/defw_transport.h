@@ -121,4 +121,18 @@ defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len);
 defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
 				       uint64_t *fi_addr_out);
 
+/* Dispatch a framed DEFw message received as a single [header][body] buffer
+ * (the OFI receive path), as opposed to a streamed socket read. Validates the
+ * header, finds the sending agent by uuid, and runs the registered handler.
+ * Takes ownership of buf and frees it. Defined in defw_listener.c where the
+ * message dispatch table lives.
+ */
+defw_rc_t defw_ofi_dispatch(char *buf, size_t buflen);
+
+/* Tear down the active transport (stops the OFI progress thread and closes
+ * fabric resources). Safe to call for the TCP transport (no-op). Called from
+ * defw_shutdown().
+ */
+void defw_transport_shutdown(void);
+
 #endif /* DEFW_TRANSPORT_H */

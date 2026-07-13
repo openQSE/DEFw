@@ -90,3 +90,11 @@ void defw_transport_startup(void)
 
 	PERROR("DEFw transport: unknown transport '%s'; using tcp", transport);
 }
+
+void defw_transport_shutdown(void)
+{
+	defw_transport_ops_t *ops = g_transport;
+
+	if (ops && ops->fini)
+		ops->fini();
+}
