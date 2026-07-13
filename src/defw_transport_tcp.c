@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <netinet/in.h>
@@ -9,6 +10,7 @@
 #include "defw_agent.h"
 #include "libdefw_connect.h"
 #include "defw_common.h"
+#include "defw_global.h"
 #include "defw_print.h"
 
 /*
@@ -61,4 +63,30 @@ void defw_transport_set_ops(defw_transport_ops_t *ops)
 {
 	if (ops)
 		g_transport = ops;
+}
+
+void defw_transport_startup(void)
+{
+	const char *transport = getenv(DEFW_TRANSPORT_ENV);
+
+	/* Default and explicit "tcp": g_transport already points at tcp_ops. */
+	if (!transport || !strcmp(transport, "tcp")) {
+		PDEBUG("DEFw transport: tcp");
+		return;
+	}
+
+	if (!strcmp(transport, "ofi")) {
+		const char *provider = getenv(DEFW_OFI_PROVIDER_ENV);
+		defw_rc_t rc = defw_transport_ofi_init(provider);
+
+		if (rc == EN_DEFW_RC_OK)
+			PMSG("DEFw transport: ofi (provider=%s)",
+			     (provider && strlen(provider)) ? provider : "auto");
+		else
+			PERROR("DEFw transport: ofi requested but unavailable (%s); using tcp",
+			       defw_rc2str(rc));
+		return;
+	}
+
+	PERROR("DEFw transport: unknown transport '%s'; using tcp", transport);
 }

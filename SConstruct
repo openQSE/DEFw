@@ -52,10 +52,11 @@ def build_shared_library(env):
 
 def mbuild_shared_library(env, files, so):
     print("building shared library from ", " ".join(files))
-    cmd = env['CC'] + " " + env['SWIG_COMP_FLAGS'] + \
+    cmd = env['CC'] + " " + env['SWIG_COMP_FLAGS'] + " " + \
+            env.get('LIBFABRIC_CFLAGS', '') + \
             " -I" + env['PYTHON_INCLUDE_DIR'] + \
             " -fPIC -shared -luuid -o " + so + " " + \
-            " ".join(files)
+            " ".join(files) + " " + env.get('LIBFABRIC_LIBS', '')
     print(cmd)
     os.system(cmd)
 
@@ -162,6 +163,44 @@ def install(env, src, dst):
     #os.system(cmd)
     return
 
+def detect_libfabric(env):
+    """Locate libfabric so the OFI transport can be built.
+
+    Prefer pkg-config (libfabric ships a .pc; the QFw container puts it on
+    PKG_CONFIG_PATH). Fall back to LIBFABRIC_DIR / LIBFABRIC_INSTALL_DIR. When
+    libfabric is not found, DEFw builds TCP-only: defw_transport_ofi.c still
+    compiles, but only its stub (no HAVE_LIBFABRIC), so there is no new hard
+    dependency for existing users.
+    """
+    import subprocess
+    cflags = libs = ''
+    have = False
+    try:
+        subprocess.check_call(['pkg-config', '--exists', 'libfabric'])
+        cflags = subprocess.check_output(
+            ['pkg-config', '--cflags', 'libfabric'], text=True).strip()
+        libs = subprocess.check_output(
+            ['pkg-config', '--libs', 'libfabric'], text=True).strip()
+        have = True
+    except Exception:
+        prefix = os.environ.get('LIBFABRIC_DIR') or \
+                 os.environ.get('LIBFABRIC_INSTALL_DIR')
+        if prefix and os.path.exists(
+                os.path.join(prefix, 'include', 'rdma', 'fabric.h')):
+            cflags = "-I" + os.path.join(prefix, 'include')
+            libs = "-L" + os.path.join(prefix, 'lib') + " -lfabric"
+            have = True
+
+    if have:
+        cflags = (cflags + " -DHAVE_LIBFABRIC").strip()
+        print("libfabric: found -> " + cflags + " " + libs)
+    else:
+        print("libfabric: not found (building TCP-only transport)")
+
+    env['LIBFABRIC_CFLAGS'] = cflags
+    env['LIBFABRIC_LIBS'] = libs
+    env['HAVE_LIBFABRIC'] = have
+
 def build_bin(env):
     binary = env['DEFW_MAIN_C']
     path = os.path.join(env['DEFW_PATH'], "src", "defwp")
@@ -171,6 +210,7 @@ def build_bin(env):
             " -I" + env['PYTHON_INCLUDE_DIR'] + " " + \
             binary + " -L" + env['LINK_PATH'] + " -L" + env['PYTHON_LIB_DIR'] + \
             " -lfwsl -ldefw_global -ldefw_connect -ldefw_agent -luuid -l" + env['PYTHON_LIB'] + \
+            " " + env.get('LIBFABRIC_LIBS', '') + \
             " -o " + path
     print(cmd)
     os.system(cmd)
@@ -228,6 +268,8 @@ env['PYTHON_INCLUDE_DIR'] = sysconfig.get_config_var('INCLUDEPY')
 env['PYTHON_LIB_DIR'] = sysconfig.get_config_var('LIBDIR')
 env['PYTHON_LIB'] = os.path.splitext(sysconfig.get_config_var('LDLIBRARY').strip('lib'))[0]
 env['DEFW_MAIN_C'] = os.path.join(DEFW_PATH, 'src', 'defw.c')
+
+detect_libfabric(env)
 
 env.AddMethod(generate_swig_intf)
 env.AddMethod(swigify)

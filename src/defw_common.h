@@ -46,6 +46,8 @@
 
 /* Framework Environment Variables needed from C */
 #define DEFW_PATH 		"DEFW_PATH" /* base installation path */
+#define DEFW_TRANSPORT_ENV	"DEFW_TRANSPORT" /* "tcp" (default) or "ofi" */
+#define DEFW_OFI_PROVIDER_ENV	"DEFW_OFI_PROVIDER" /* optional fi provider filter */
 
 #ifndef _UUID_UUID_H
 typedef unsigned char uuid_t[16];

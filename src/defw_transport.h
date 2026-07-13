@@ -92,4 +92,19 @@ void defw_transport_set_ops(defw_transport_ops_t *ops);
 /* The built-in TCP transport. */
 defw_transport_ops_t *defw_transport_tcp_ops(void);
 
+/* Read transport configuration (DEFW_TRANSPORT / DEFW_OFI_PROVIDER) and
+ * select the active transport. Called once at startup before the listener
+ * is spawned. Falls back to TCP if OFI is requested but unavailable, so it
+ * never fails the caller.
+ */
+void defw_transport_startup(void);
+
+/* Bring up the libfabric/OFI transport and, on success, make it the active
+ * transport. provider may be NULL to let libfabric choose. Returns
+ * EN_DEFW_RC_FAIL when DEFw was built without libfabric support. Defined in
+ * defw_transport_ofi.c (real implementation under HAVE_LIBFABRIC, otherwise
+ * a stub).
+ */
+defw_rc_t defw_transport_ofi_init(const char *provider);
+
 #endif /* DEFW_TRANSPORT_H */
