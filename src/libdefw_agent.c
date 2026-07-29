@@ -18,6 +18,7 @@
 #include "defw_list.h"
 #include "defw_python.h"
 #include "defw_listener.h"
+#include "defw_transport.h"
 #include "defw_print.h"
 
 extern fd_set g_tAllSet;
@@ -654,10 +655,13 @@ defw_agent_blk_t *find_agent_by_name_global(char *hostname, char *name)
 defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup)
 {
 	defw_msg_session_t msg;
+	size_t ofi_len = sizeof(msg.ofi_addr);
 	int rc;
 
 //	PDEBUG("Sending session info to agent %p on fd %d\n",
 //		agent, (rpc_setup) ? agent->iRpcFd : agent->iFileDesc);
+
+	memset(&msg, 0, sizeof(msg));
 
 	uuid_copy(msg.agent_id.remote_uuid, g_defw_cfg.uuid);
 
@@ -669,8 +673,15 @@ defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup)
 	msg.node_name[MAX_STR_LEN-1] = '\0';
 	gethostname(msg.node_hostname, MAX_STR_LEN);
 
-	rc = defw_send_msg((rpc_setup) ? agent->iRpcFd : agent->iFileDesc,
-			  (char *)&msg, sizeof(msg), EN_MSG_TYPE_SESSION_INFO);
+	/* advertise our OFI endpoint address when OFI is active; otherwise
+	 * ofi_addrlen stays 0 (from the memset) and the peer keeps us on TCP
+	 */
+	if (defw_transport_ofi_local_addr(msg.ofi_addr, &ofi_len) == EN_DEFW_RC_OK)
+		msg.ofi_addrlen = htonl((unsigned int)ofi_len);
+
+	rc = defw_transport_ops()->send(agent,
+			(rpc_setup) ? EN_DEFW_CHANNEL_RPC : EN_DEFW_CHANNEL_CTRL,
+			(char *)&msg, sizeof(msg), EN_MSG_TYPE_SESSION_INFO);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send heart beat %s\n",
 			defw_rc2str(rc));
@@ -682,7 +693,10 @@ defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup)
 defw_rc_t defw_send_hb(defw_agent_blk_t *agent)
 {
 	defw_msg_session_t msg;
+	size_t ofi_len = sizeof(msg.ofi_addr);
 	int rc;
+
+	memset(&msg, 0, sizeof(msg));
 
 	uuid_copy(msg.agent_id.remote_uuid, g_defw_cfg.uuid);
 
@@ -692,12 +706,18 @@ defw_rc_t defw_send_hb(defw_agent_blk_t *agent)
 	msg.node_name[MAX_STR_LEN-1] = '\0';
 	gethostname(msg.node_hostname, MAX_STR_LEN);
 
+	/* carry our OFI address in the heartbeat too, so a peer that connected
+	 * to us (and only receives our heartbeats) can also learn it
+	 */
+	if (defw_transport_ofi_local_addr(msg.ofi_addr, &ofi_len) == EN_DEFW_RC_OK)
+		msg.ofi_addrlen = htonl((unsigned int)ofi_len);
+
 	//PDEBUG("agent %s: fd %d rpc %d\n", agent->name, agent->iFileDesc,
 	//       agent->iRpcFd);
 
 	/* send the heart beat */
-	rc = defw_send_msg(agent->iFileDesc, (char *)&msg,
-			   sizeof(msg), EN_MSG_TYPE_HB);
+	rc = defw_transport_ops()->send(agent, EN_DEFW_CHANNEL_CTRL,
+			(char *)&msg, sizeof(msg), EN_MSG_TYPE_HB);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send heart beat %s\n",
 			defw_rc2str(rc));
@@ -969,7 +989,8 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 
 	set_agent_state(agent_blk, DEFW_AGENT_WORK_IN_PROGRESS);
 
-	rc = defw_send_msg(agent_blk->iRpcFd, yaml, msg_size, type);
+	rc = defw_transport_ops()->send(agent_blk, EN_DEFW_CHANNEL_RPC,
+			yaml, msg_size, type);
 	if (rc != EN_DEFW_RC_OK) {
 		PERROR("Failed to send rpc message: %s", yaml);
 		goto fail_rpc;

@@ -24,6 +24,7 @@
 #include "defw.h"
 #include "defw_sl.h"
 #include "libdefw_agent.h"
+#include "defw_transport.h"
 #include "defw_print.h"
 
 extern defw_config_params_t g_defw_cfg;
@@ -239,6 +240,11 @@ run_pure_python:
 		return EN_DEFW_RC_LOG_CREATION_FAILURE;
 	}
 
+	/* Select the message transport (TCP or, if configured and available,
+	 * libfabric/OFI) before the listener starts.
+	 */
+	defw_transport_startup();
+
 	if (g_defw_cfg.l_info.listen_address.sin_port != 0) {
 		if (defw_spawn_listener(&l_thread_id)) {
 			PERROR("Failed to initialize listener thread");
@@ -327,5 +333,9 @@ defw_rc_t defw_exec_py(char *py_code)
 void defw_shutdown(void)
 {
 	defw_listener_shutdown();
+	/* stop the OFI progress thread (if any) before finalizing Python, so
+	 * no fabric receive can dispatch into a shutting-down interpreter
+	 */
+	defw_transport_shutdown();
 	python_finalize();
 }

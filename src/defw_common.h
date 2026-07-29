@@ -19,7 +19,14 @@
 #define BOLDCYAN    "\033[1m\033[36m"      /* Bold Cyan */
 #define BOLDWHITE   "\033[1m\033[37m"      /* Bold White */
 
-#define DEFW_VERSION_NUMBER		 1
+/* Bumped to 2: the message header now carries the sender uuid instead of
+ * the sender IP address.
+ * Bumped to 3: the session message now carries the sender's OFI endpoint
+ * address, so its size changed. Old and new builds are intentionally
+ * incompatible (the header version check rejects a mismatched peer before
+ * its differently-sized session body can be misread).
+ */
+#define DEFW_VERSION_NUMBER		 3
 
 #define MAX_STR_LEN			1024
 #define MAX_SHORT_STR_LEN		128
@@ -43,6 +50,8 @@
 
 /* Framework Environment Variables needed from C */
 #define DEFW_PATH 		"DEFW_PATH" /* base installation path */
+#define DEFW_TRANSPORT_ENV	"DEFW_TRANSPORT" /* "tcp" (default) or "ofi" */
+#define DEFW_OFI_PROVIDER_ENV	"DEFW_OFI_PROVIDER" /* optional fi provider filter */
 
 #ifndef _UUID_UUID_H
 typedef unsigned char uuid_t[16];

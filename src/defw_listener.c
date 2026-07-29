@@ -19,6 +19,7 @@
 #include "libdefw_agent.h"
 #include "defw_message.h"
 #include "defw_listener.h"
+#include "defw_transport.h"
 #include "defw_print.h"
 
 #define MAX_AGENT_NOTIFICATION 1024
@@ -135,6 +136,36 @@ int defw_get_highest_fd(void)
 	return iMaxFd;
 }
 
+/* If OFI is active locally and the peer advertised an OFI address we have not
+ * inserted yet, add it to the address vector and cache the resulting fi_addr
+ * on the agent. A peer with ofi_addrlen 0 (TCP-only, or its transport is tcp)
+ * is left untouched, which is how a mixed TCP/OFI cluster keeps working. Safe
+ * to call from any message that carries a defw_msg_session_t (session info or
+ * heartbeat); the DEFW_AGENT_OFI_ADDR_VALID guard makes it idempotent.
+ */
+static void maybe_insert_ofi_addr(defw_agent_blk_t *agent,
+				  defw_msg_session_t *ses)
+{
+	unsigned int ofi_addrlen;
+	uint64_t fi_addr;
+
+	if (agent->state & DEFW_AGENT_OFI_ADDR_VALID)
+		return;
+
+	ofi_addrlen = ntohl(ses->ofi_addrlen);
+	if (ofi_addrlen == 0 || ofi_addrlen > DEFW_OFI_MAX_ADDRLEN)
+		return;
+
+	if (defw_transport_ofi_av_insert(ses->ofi_addr, ofi_addrlen,
+					 &fi_addr) != EN_DEFW_RC_OK)
+		return;
+
+	agent->ofi_addr = fi_addr;
+	set_agent_state(agent, DEFW_AGENT_OFI_ADDR_VALID);
+	PMSG("OFI address inserted for agent %s: fi_addr=%lu",
+	     agent->name, (unsigned long)fi_addr);
+}
+
 static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 {
 	defw_msg_session_t *ses = (defw_msg_session_t *)msg;
@@ -156,6 +187,10 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		       existing->name, existing->iRpcFd);
 		if (ses->rpc_setup)
 			set_agent_state(existing, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
+		/* in case the OFI address was not learned on the first
+		 * (control) connection, try again here while we hold a ref
+		 */
+		maybe_insert_ofi_addr(existing, ses);
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
 		/* agent should never be the same as existing.
@@ -193,6 +228,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
 	unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	gettimeofday(&agent->time_stamp, NULL);
+	maybe_insert_ofi_addr(agent, ses);
 	PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
 		agent->name, agent->iFileDesc);
 
@@ -237,6 +273,10 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	strncpy(agent->name, hb->node_name, MAX_STR_LEN);
 	agent->name[MAX_STR_LEN-1] = '\0';
 	gettimeofday(&agent->time_stamp, NULL);
+	/* a peer we connected to advertises its OFI address in its heartbeats;
+	 * learn it here so we can reach it over the fabric
+	 */
+	maybe_insert_ofi_addr(agent, hb);
 
 	return EN_DEFW_RC_OK;
 }
@@ -262,7 +302,6 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 	defw_message_hdr_t hdr = {0};
 	char *buffer;
 	defw_msg_process_fn_t proc_fn;
-	int cmp;
 
 	/* get the header first */
 	rc = readTcpMessage(fd, (char *)&hdr, sizeof(hdr),
@@ -278,12 +317,21 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 		return EN_DEFW_RC_BAD_VERSION;
 	}
 
-	/* if the ips don't match ignore the message */
-	hdr.ip.s_addr = ntohl(hdr.ip.s_addr);
-	if ((cmp = memcmp(&agent->addr.sin_addr, &hdr.ip, sizeof(hdr.ip)))) {
-		PERROR("IP addresses don't match");
-		PERROR("agent IP = %s", inet_ntoa(agent->addr.sin_addr));
-		PERROR("hdr IP = %s", inet_ntoa(hdr.ip));
+	/* Validate the sender identity by remote uuid. A brand new
+	 * connection has no uuid yet; it arrives in the session info, so we
+	 * trust the first message and let process_msg_session_info record
+	 * the uuid (trust on first use). Once the uuid is known, a mismatch
+	 * means the message did not come from the agent that owns this
+	 * connection and is dropped.
+	 */
+	if (!uuid_is_null(agent->id.remote_uuid) &&
+	    uuid_compare(agent->id.remote_uuid, hdr.sender_uuid)) {
+		char got[UUID_STR_LEN], expected[UUID_STR_LEN];
+
+		uuid_unparse_lower(hdr.sender_uuid, got);
+		uuid_unparse_lower(agent->id.remote_uuid, expected);
+		PERROR("sender uuid mismatch: expected %s got %s",
+		       expected, got);
 		return EN_DEFW_RC_BAD_ADDR;
 	}
 
@@ -322,6 +370,75 @@ static defw_rc_t process_agent_message(defw_agent_blk_t *agent, int fd)
 
 	if (rc == EN_DEFW_RC_KEEP_DATA)
 		return EN_DEFW_RC_OK;
+
+	return rc;
+}
+
+/*
+ * defw_ofi_dispatch
+ *   Dispatch a framed message that arrived as a single [header][body] buffer
+ *   (the OFI receive path) rather than a streamed socket read. Mirrors
+ *   process_agent_message: check the version, find the sending agent by the
+ *   header uuid, and run the registered handler on the body.
+ *
+ *   Only RPC message types travel over OFI (the control channel stays on
+ *   TCP), and their Python handlers copy the payload, so KEEP_DATA is not
+ *   expected here; this always frees the buffer it is given.
+ */
+defw_rc_t defw_ofi_dispatch(char *buf, size_t buflen)
+{
+	defw_message_hdr_t *hdr = (defw_message_hdr_t *)buf;
+	defw_msg_process_fn_t proc_fn;
+	defw_agent_blk_t *agent;
+	defw_agent_uuid_t id;
+	unsigned int type, len, version;
+	defw_rc_t rc;
+
+	if (buflen < sizeof(*hdr)) {
+		PERROR("OFI msg smaller than header: %zu", buflen);
+		free(buf);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	version = ntohl(hdr->version);
+	if (version != DEFW_VERSION_NUMBER) {
+		PERROR("OFI msg version %u != %d", version, DEFW_VERSION_NUMBER);
+		free(buf);
+		return EN_DEFW_RC_BAD_VERSION;
+	}
+
+	type = ntohl(hdr->type);
+	len = ntohl(hdr->len);
+
+	if (type >= EN_MSG_TYPE_MAX) {
+		PERROR("OFI msg unknown type %u", type);
+		free(buf);
+		return EN_DEFW_RC_UNKNOWN_MESSAGE;
+	}
+
+	if (sizeof(*hdr) + len > buflen) {
+		PERROR("OFI msg truncated: body %u buf %zu", len, buflen);
+		free(buf);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	memset(&id, 0, sizeof(id));
+	uuid_copy(id.remote_uuid, hdr->sender_uuid);
+	agent = defw_find_agent_by_uuid_global(&id);
+	if (!agent) {
+		PERROR("OFI msg from an unknown agent");
+		free(buf);
+		return EN_DEFW_RC_AGENT_NOT_FOUND;
+	}
+
+	proc_fn = msg_process_tbl[type];
+	if (proc_fn)
+		rc = proc_fn(buf + sizeof(*hdr), agent);
+	else
+		rc = EN_DEFW_RC_UNKNOWN_MESSAGE;
+
+	defw_release_agent_blk(agent, false);
+	free(buf);
 
 	return rc;
 }
