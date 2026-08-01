@@ -264,5 +264,4 @@ void get_defw_uuid(char **uuid)
 
 void update_py_interactive_shell(void)
 {
-	python_update_interactive_shell();
 }

@@ -8,5 +8,8 @@ typedef unsigned int bool;
 #include "defw_global.h"
 %}
 
-#include "defw_global.h"
+%include "compat_charpp.i"
+%include "compat_charppp.i"
+
+%include "defw_global.h"
 

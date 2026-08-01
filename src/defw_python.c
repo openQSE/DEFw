@@ -58,24 +58,29 @@ defw_rc_t python_exec(char *code)
 defw_rc_t python_run_interpreter(int argc, char *argv[])
 {
 	int i, rc;
-	size_t len;
 	wchar_t **wargv;
 
 	RUN_PYTHON_CMD("sys.ps1 = 'defw>>> '\n");
 	RUN_PYTHON_CMD("sys.ps2 = 'defw... '\n");
 
-	wargv = (wchar_t **)malloc(argc * sizeof(wchar_t *));
+	wargv = calloc(argc + 1, sizeof(*wargv));
+	if (!wargv)
+		return EN_DEFW_RC_OOM;
+
 	for (i = 0; i < argc; i++) {
-		len = strlen(argv[i]);
-		wargv[i] = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
-		mbstowcs(wargv[i], argv[i], len + 1);
+		wargv[i] = Py_DecodeLocale(argv[i], NULL);
+		if (!wargv[i]) {
+			rc = EN_DEFW_RC_BAD_PARAM;
+			goto out;
+		}
 	}
 	PySys_SetArgvEx(argc, wargv, 0);
 
 	rc = Py_Main(argc, wargv);
 
+out:
 	for (int i = 0; i < argc; i++)
-		free(wargv[i]);
+		PyMem_RawFree(wargv[i]);
 	free(wargv);
 
 	return (rc) ? EN_DEFW_RC_PY_SCRIPT_FAIL : EN_DEFW_RC_OK;
@@ -325,7 +330,8 @@ static void py_connect_status(defw_rc_t status, uuid_t uuid)
  */
 defw_rc_t python_init(char *pname)
 {
-	wchar_t program[5];
+	static wchar_t program[MAX_STR_LEN];
+	size_t converted;
 
 	/* register with listener */
 	defw_register_msg_callback(EN_MSG_TYPE_PY_REQUEST, process_msg_py_request);
@@ -337,7 +343,11 @@ defw_rc_t python_init(char *pname)
 	pthread_mutex_init(&g_interactive_shell_mutex, NULL);
 	atomic_init(&g_py_gil_refcount, 0);
 
-	swprintf(program, 3, L"%hs", pname);
+	converted = mbstowcs(program, pname,
+		sizeof(program) / sizeof(program[0]) - 1);
+	if (converted == (size_t)-1)
+		return EN_DEFW_RC_BAD_PARAM;
+	program[converted] = L'\0';
 
 	Py_SetProgramName(program);
 
@@ -568,4 +578,3 @@ void python_update_interactive_shell(void)
 //	python_gil_release(gstate);
 //	pthread_mutex_unlock(&g_interactive_shell_mutex);
 }
-

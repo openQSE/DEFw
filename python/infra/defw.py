@@ -634,12 +634,12 @@ class Collection(MethodInterceptor):
 				if f.startswith(self.__prefix) and os.path.splitext(f)[1] == '.py':
 					# add any subidrectories to the sys path
 					if subdir != '.' and not added:
-						subdirectory = os.path.join(self.__abs_path, subdir)
+						subdirectory = subdir
 						if subdirectory not in sys.path:
 							sys.path.append(subdirectory)
 					added = True
 					name = os.path.splitext(f.replace(self.__prefix, ''))[0]
-					db[name] = Script(os.path.join(self.__abs_path, subdir, f), self)
+					db[name] = Script(os.path.join(subdir, f), self)
 
 		self.__max = len(self.__test_db)
 
@@ -1349,15 +1349,46 @@ def resolve_environment_vars(config):
 
 		recurse_dictionary(config, "", config, resolve_env_var)
 
+def set_default_env(name, value):
+	if not os.environ.get(name):
+		os.environ[name] = str(value)
+
+def setup_generic_config_defaults(defw_path):
+	agent_name = os.environ.get('DEFW_AGENT_NAME')
+	if not agent_name:
+		agent_name = f"defw_python_{uuid.uuid4().hex[:8]}"
+
+	parent_vars = [
+		'DEFW_PARENT_ADDR',
+		'DEFW_PARENT_HOSTNAME',
+		'DEFW_PARENT_NAME',
+		'DEFW_PARENT_PORT',
+	]
+	if not any(os.environ.get(var) for var in parent_vars):
+		set_default_env('DEFW_DISABLE_RESMGR', 'yes')
+
+	set_default_env('DEFW_AGENT_NAME', agent_name)
+	set_default_env('DEFW_AGENT_TYPE', 'agent')
+	set_default_env('DEFW_SHELL_TYPE', 'cmdline')
+	set_default_env('DEFW_LISTEN_PORT', 0)
+	set_default_env('DEFW_TELNET_PORT', 0)
+	set_default_env('DEFW_PARENT_ADDR', '0.0.0.0')
+	set_default_env('DEFW_PARENT_HOSTNAME', 'None')
+	set_default_env('DEFW_PARENT_NAME', 'None')
+	set_default_env('DEFW_PARENT_PORT', 0)
+	set_default_env('DEFW_PATH', defw_path)
+	set_default_env('DEFW_LOG_DIR', os.path.join('/tmp', agent_name))
+	set_default_env('DEFW_LOG_LEVEL', 'error')
+	set_default_env('DEFW_EXTERNAL_SERVICES_PATH', '')
+	set_default_env('DEFW_EXTERNAL_SERVICE_APIS_PATH', '')
+	set_default_env('DEFW_EXTERNAL_EXPERIMENTS_PATH', '')
+	set_default_env('DEFW_EXPECTED_AGENT_COUNT', 0)
+
 def configure_defw():
 	global defw_path
 	global only_load
 	global noinit_load
 	global defw_config_yaml
-
-	if 'DEFW_DISABLE_RESMGR' in os.environ and \
-		os.environ['DEFW_DISABLE_RESMGR'].upper() == 'YES':
-			cdefw_global.disable_resmgr()
 
 	if 'DEFW_ONLY_LOAD_MODULE' in os.environ:
 		only_load = os.environ['DEFW_ONLY_LOAD_MODULE'].split(',')
@@ -1378,6 +1409,13 @@ def configure_defw():
 		config = os.path.join(defw_path, "python", "config", "defw_generic.yaml")
 	else:
 		config = os.environ['DEFW_CONFIG_PATH']
+
+	if os.path.basename(config) == "defw_generic.yaml":
+		setup_generic_config_defaults(defw_path)
+
+	if 'DEFW_DISABLE_RESMGR' in os.environ and \
+		os.environ['DEFW_DISABLE_RESMGR'].upper() == 'YES':
+			cdefw_global.disable_resmgr()
 
 	cy = None
 	if os.path.isfile(config):

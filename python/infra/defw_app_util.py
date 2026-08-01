@@ -140,9 +140,22 @@ def _wait_for_daemon_pid(log_dir, timeout=5):
 	raise DEFwError(f"Timed out waiting for daemon pid in {log_dir}")
 
 
+def _resolve_defwp():
+	defw_path = Path(cdefw_global.get_defw_path())
+	for candidate in [
+		defw_path / 'src' / 'defwp',
+		defw_path / 'bin' / 'defwp',
+		defw_path / 'src' / 'defwp-wrapper',
+		defw_path / 'bin' / 'defwp-wrapper',
+	]:
+		if candidate.is_file() and os.access(candidate, os.X_OK):
+			return str(candidate)
+	raise DEFwError(f"Unable to find defwp under {defw_path}")
+
+
 def defw_spawn_services(services):
 	specs = _normalize_service_specs(services)
-	defwp = os.path.join(cdefw_global.get_defw_path(), 'src', 'defwp')
+	defwp = _resolve_defwp()
 	spawned = []
 
 	for spec in specs:

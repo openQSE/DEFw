@@ -40,7 +40,7 @@ DEFW_SCRIPT_PATHS = ['src/',
 		     'python/services',
 		     'python/services/util',
 		     'python/infra',
-		     'python/config'
+		     'python/config',
 		     'python/experiments']
 MIN_IFS_NUM_DEFAULT = 3
 g_system_shutdown = False

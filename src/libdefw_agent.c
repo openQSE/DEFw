@@ -64,11 +64,13 @@ typedef struct defw_connect_req_s {
 
 void defw_lock_agent_lists(void)
 {
+	defw_agent_init();
 	MUTEX_LOCK(&agent_array_mutex);
 }
 
 void defw_release_agent_lists(void)
 {
+	defw_agent_init();
 	MUTEX_UNLOCK(&agent_array_mutex);
 }
 
@@ -100,16 +102,17 @@ static void count_lists(void)
 
 void defw_agent_init(void)
 {
-	if (!initialized) {
-		dlist_init(&agent_new_list);
-		dlist_init(&agent_service_list);
-		dlist_init(&agent_client_list);
-		dlist_init(&agent_active_service_list);
-		dlist_init(&agent_active_client_list);
-		dlist_init(&agent_dead_list);
-		pthread_mutex_init(&agent_array_mutex, NULL);
-		initialized = true;
-	}
+	if (initialized)
+		return;
+
+	dlist_init(&agent_new_list);
+	dlist_init(&agent_service_list);
+	dlist_init(&agent_client_list);
+	dlist_init(&agent_active_service_list);
+	dlist_init(&agent_active_client_list);
+	dlist_init(&agent_dead_list);
+	pthread_mutex_init(&agent_array_mutex, NULL);
+	initialized = true;
 }
 
 char *defw_get_local_ip()
@@ -393,6 +396,11 @@ void defw_new_agent_iter(process_agent cb, void *user_data)
 defw_agent_blk_t *defw_get_next_agent(struct dlist_entry *head, struct dlist_entry *list)
 {
 	defw_agent_blk_t *agent = NULL;
+
+	defw_agent_init();
+
+	if (!head || !list || !head->next)
+		goto out;
 
 	/* reached the end of the list */
 	if (head->next == list)
@@ -1107,4 +1115,3 @@ void defw_move_to_service_list(defw_agent_blk_t *agent)
 	dlist_insert_tail(&agent->entry, &agent_service_list);
 	MUTEX_UNLOCK(&agent_array_mutex);
 }
-

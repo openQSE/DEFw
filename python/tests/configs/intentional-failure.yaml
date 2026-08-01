@@ -1,0 +1,11 @@
+suite: framework
+scripts:
+  - intentional_failure
+master:
+  agent_name: runner-failure-resmgr
+  listen_port: 25200
+  telnet_port: 25201
+  experiment_port_base: 25210
+  report_mode: both
+  log_level: DEBUG
+  log_dir: /tmp/defw-intentional-failure
