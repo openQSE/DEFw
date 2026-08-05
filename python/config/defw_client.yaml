@@ -3,7 +3,7 @@ defw:
         DEFW_PATH: ${HOME}/ORNL/Quantum/QFw/defw
     parent-address: 127.0.0.1
     parent-port: 8090
-    parent-name: resmgr
+    parent-name: dirsvc
     name: ${DEFW_AGENT_NAME}
     listen-port: ${DEFW_LISTEN_PORT}
     shell: interactive
@@ -11,4 +11,3 @@ defw:
     path: ${DEFW_PATH}
     tmp: ${HOME}/tmp/${DEFW_AGENT_NAME}
     loglevel: ${DEFW_LOG_LEVEL}
-

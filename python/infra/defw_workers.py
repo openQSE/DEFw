@@ -16,6 +16,16 @@ import time
 INSTANCE_MODE_SINGLETON = 'singleton'
 INSTANCE_MODE_PER_CONNECTION = 'per_connection'
 
+PEER_EVENT_TYPES = {
+	'PEER_READY',
+	'PEER_DEGRADED',
+	'PEER_LOST',
+	'PEER_REMOVED',
+}
+
+peer_events = deque()
+peer_events_lock = threading.Lock()
+
 
 def get_instance_mode(module):
 	svc_info = getattr(module, 'svc_info', None)
@@ -44,13 +54,17 @@ class WorkerEvent:
 	EVENT_REFRESH = 4
 	EVENT_REFRESH_COMPLETE = 5
 	EVENT_SHUTDOWN = 6
+	EVENT_PEER_LIFECYCLE = 7
 
-	def __init__(self, ev_type, connect_status=EN_DEFW_RC_OK, uuid=None, msg=None):
+	def __init__(self, ev_type, connect_status=EN_DEFW_RC_OK, uuid=None, msg=None,
+				 peer_event=None):
 		self.__check_type(ev_type)
 		self.ev_type = ev_type
 		self.uuid = uuid
 		if ev_type == WorkerEvent.EVENT_CONN_COMPLETE:
 			self.connect_status = connect_status
+		elif ev_type == WorkerEvent.EVENT_PEER_LIFECYCLE:
+			self.peer_event = dict(peer_event)
 		else:
 			self.msg_yaml = None
 			if msg:
@@ -66,7 +80,8 @@ class WorkerEvent:
 		   we_type != WorkerEvent.EVENT_CONN_COMPLETE and \
 		   we_type != WorkerEvent.EVENT_REFRESH and \
 		   we_type != WorkerEvent.EVENT_REFRESH_COMPLETE and \
-		   we_type != WorkerEvent.EVENT_SHUTDOWN:
+		   we_type != WorkerEvent.EVENT_SHUTDOWN and \
+		   we_type != WorkerEvent.EVENT_PEER_LIFECYCLE:
 			   raise DEFwError(f"Bad WorkerEvent type {we_type}")
 
 	def type2str(self, we):
@@ -84,6 +99,8 @@ class WorkerEvent:
 				events.append('EVENT_REFRESH_COMPLETE')
 			elif e == WorkerEvent.EVENT_SHUTDOWN:
 				events.append('EVENT_SHUTDOWN')
+			elif e == WorkerEvent.EVENT_PEER_LIFECYCLE:
+				events.append('EVENT_PEER_LIFECYCLE')
 			else:
 				events.append("UNKNOWN_WORKEREVENT")
 		return ",".join(events)
@@ -212,29 +229,30 @@ class WorkerThread:
 
 	def refresh_agents(self, *args, **kwargs):
 		try:
-			client_agents.reload()
-			service_agents.reload()
-			active_client_agents.reload()
-			active_service_agents.reload()
-
-			# TODO: If the resource manager dies and comes up again, we'll
-			# still use the old resource manager. So we need a better way
-			# to notify python that the resource manager is dead and we
-			# need to recreate the API
-			#if not me.is_resmgr() and not defw.resmgr:
-			if not me.is_resmgr():
-				if 'Resource Manager' in service_apis:
+			if not me.is_dirsvc():
+				if 'Directory Service' in service_apis:
+					dirsvc_key = 'Directory Service'
+					dirsvc_class = 'DEFwDirSvc'
+				else:
+					dirsvc_key = 'Resource Manager'
+					dirsvc_class = 'DEFwResMgr'
+				if dirsvc_key in service_apis:
+					import defw_peers
 					from defw_agent_baseapi import query_service_info
-					si = query_service_info(active_service_agents.get_resmgr(),
-							 'DEFwResMgr')
-					logging.defw_worker(f"Querying Resource Manager returned: {si}")
+					dirsvc_agent = defw_peers.get_dirsvc_agent()
+					if not dirsvc_agent:
+						raise DEFwNotFound("Directory service peer not ready")
+					si = query_service_info(dirsvc_agent.get_ep(),
+							     dirsvc_class)
+					logging.defw_worker(f"Querying Directory Service returned: {si}")
 					if si:
-						defw.resmgr = service_apis['Resource Manager'].service_classes[0](si)
-						logging.defw_worker(f"Created resource manager API: {defw.resmgr}")
+						defw.dirsvc = service_apis[dirsvc_key].service_classes[0](si)
+						defw.resmgr = defw.dirsvc
+						logging.defw_worker(f"Created directory service API: {defw.dirsvc}")
 						from defw import updater_queue
-						updater_queue.put({'type': 'resmgr', 'resmgr': defw.resmgr})
+						updater_queue.put({'type': 'dirsvc', 'dirsvc': defw.dirsvc})
 					else:
-						raise DEFwNotFound("Couldn't Query resource manager")
+						raise DEFwNotFound("Couldn't query directory service")
 		except Exception as e:
 			logging.defw_worker("Calling system up")
 			if common.is_system_up():
@@ -249,6 +267,16 @@ class WorkerThread:
 		tmp_thread = threading.Thread(target=cb, args=args, kwargs=kwargs)
 		tmp_thread.daemon = True
 		tmp_thread.start()
+
+	def handle_peer_event(self, event):
+		import defw_peers
+		import defw_directory
+
+		defw_peers.apply_event(event)
+		defw_directory.apply_peer_event(event)
+		with peer_events_lock:
+			peer_events.append(event)
+		logging.defw_worker(f"Recorded peer lifecycle event: {event}")
 
 	# This thread should never do any blocking calls
 	def handle(self):
@@ -307,6 +335,8 @@ class WorkerThread:
 					wr.queue.put(we)
 				except:
 					logging.defw_rpc(f"Unmatched response. DB = {self.req_db}")
+			elif we.ev_type == WorkerEvent.EVENT_PEER_LIFECYCLE:
+				self.handle_peer_event(we.peer_event)
 			elif we.ev_type == WorkerEvent.EVENT_SHUTDOWN:
 				shutdown = True
 				# shutdown any waiting events
@@ -384,9 +414,9 @@ class WorkerThread:
 					rc = module_func(*args, **kwargs)
 			elif rpc_type == 'instantiate_class':
 				logging.defw_rpc(f'remote call to instantiate class {class_name}')
-				if me.is_resmgr() and class_name == 'DEFwResMgr':
+				if me.is_dirsvc() and class_name in ('DEFwDirSvc', 'DEFwResMgr'):
 					if not common.has_class_entry(class_id):
-						common.add_to_class_db(defw.resmgr, class_id)
+						common.add_to_class_db(defw.dirsvc, class_id)
 				else:
 					if get_instance_mode(module) == INSTANCE_MODE_SINGLETON:
 						my_class = getattr(module, class_name)
@@ -411,7 +441,7 @@ class WorkerThread:
 							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
 				logging.defw_rpc(f'remote call to destroy class {class_name}')
-				if me.is_resmgr() and class_name == 'DEFwResMgr':
+				if me.is_dirsvc() and class_name in ('DEFwDirSvc', 'DEFwResMgr'):
 					common.del_entry_from_class_db(class_id)
 				else:
 					instance = common.get_class_from_db(class_id)
@@ -501,6 +531,19 @@ def put_connect_complete(status, uuid_str):
 	worker_thread.put_ev(we)
 	logging.defw_worker("Putting connect complete")
 
+def put_peer_event(event):
+	if event.get('event_type') not in PEER_EVENT_TYPES:
+		raise DEFwError(f"Bad peer event type {event.get('event_type')}")
+	if 'peer_handle' not in event:
+		raise DEFwError("Peer lifecycle event missing peer_handle")
+	we = WorkerEvent(WorkerEvent.EVENT_PEER_LIFECYCLE, peer_event=event)
+	worker_thread.put_ev(we)
+	logging.defw_worker("Putting peer lifecycle event")
+
+def get_peer_events():
+	with peer_events_lock:
+		return list(peer_events)
+
 def send_rsp(wr):
 	rc = defw_send_rsp(wr.remote_uuid,
 					  wr.blk_uuid,
@@ -528,6 +571,9 @@ def send_req(wr):
 def connect_to_agent(wr):
 	if wr.blocking:
 		worker_thread.add_work_request(wr)
+
+	import defw_peers
+	defw_peers.remember_connect_target(wr.ep)
 
 	if wr.ep.is_service():
 		func = defw_connect_to_service

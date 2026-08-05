@@ -34,6 +34,8 @@ static int agent_notification_idx;
 static defw_agent_update_cb agent_notifications[MAX_AGENT_NOTIFICATION];
 static int connect_complete_idx;
 static defw_connect_status connect_notifications[MAX_AGENT_NOTIFICATION];
+static int peer_event_idx;
+static defw_peer_event_cb peer_event_notifications[MAX_AGENT_NOTIFICATION];
 
 typedef struct connection_info_s {
 	int *iNReady;
@@ -91,6 +93,17 @@ defw_rc_t defw_register_connect_complete(defw_connect_status cb)
 	return EN_DEFW_RC_OK;
 }
 
+defw_rc_t defw_register_peer_event_callback(defw_peer_event_cb cb)
+{
+	if (!cb)
+		return EN_DEFW_RC_BAD_PARAM;
+	if (peer_event_idx >= MAX_AGENT_NOTIFICATION)
+		return EN_DEFW_RC_FAIL;
+	peer_event_notifications[peer_event_idx] = cb;
+	peer_event_idx++;
+	return EN_DEFW_RC_OK;
+}
+
 void defw_agent_updated_notify(void)
 {
 	int i;
@@ -103,6 +116,21 @@ void defw_notify_connect_complete(defw_rc_t status, uuid_t uuid)
 	int i;
 	for (i = 0; i < connect_complete_idx; i++)
 		connect_notifications[i](status, uuid);
+}
+
+void defw_notify_peer_event(const defw_peer_event_t *event)
+{
+	int i;
+	defw_rc_t rc;
+
+	if (!event)
+		return;
+
+	for (i = 0; i < peer_event_idx; i++) {
+		rc = peer_event_notifications[i](event);
+		if (rc)
+			PERROR("Peer event callback failed: %s", defw_rc2str(rc));
+	}
 }
 
 static void set_resmgr_connected(defw_rc_t status, uuid_t uuid)
@@ -156,6 +184,10 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		       existing->name, existing->iRpcFd);
 		if (ses->rpc_setup)
 			set_agent_state(existing, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
+		if (ses->rpc_setup) {
+			gettimeofday(&existing->last_control_activity, NULL);
+			defw_agent_report_peer_ready(existing, "inbound-rpc-ready");
+		}
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
 		/* agent should never be the same as existing.
@@ -193,6 +225,8 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
 	unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	gettimeofday(&agent->time_stamp, NULL);
+	agent->last_control_activity = agent->time_stamp;
+	agent->last_heartbeat_rx = agent->time_stamp;
 	PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
 		agent->name, agent->iFileDesc);
 
@@ -208,6 +242,7 @@ static defw_rc_t process_msg_unknown(char *msg, defw_agent_blk_t *agent)
 static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 {
 	defw_msg_session_t *hb = (defw_msg_session_t *)msg;
+	bool learned_runtime_id = false;
 	/*
 	char uuid[UUID_STR_LEN];
 	char uuid2[UUID_STR_LEN];
@@ -219,6 +254,7 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	 */
 	if (uuid_is_null(agent->id.remote_uuid)) {
 		uuid_copy(agent->id.remote_uuid, hb->agent_id.remote_uuid);
+		learned_runtime_id = true;
 		defw_agent_updated_notify();
 	} else if (uuid_compare(agent->id.remote_uuid,
 				hb->agent_id.remote_uuid)) {
@@ -237,6 +273,11 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	strncpy(agent->name, hb->node_name, MAX_STR_LEN);
 	agent->name[MAX_STR_LEN-1] = '\0';
 	gettimeofday(&agent->time_stamp, NULL);
+	agent->last_heartbeat_rx = agent->time_stamp;
+	agent->last_control_activity = agent->time_stamp;
+	if (learned_runtime_id)
+		defw_agent_report_peer_ready_update(agent,
+						    "remote-identity-ready");
 
 	return EN_DEFW_RC_OK;
 }
@@ -519,23 +560,34 @@ static defw_rc_t init_comm(struct sockaddr_in *listen_addr)
 	return EN_DEFW_RC_OK;
 }
 
+static int agent_liveness_check_helper(defw_agent_blk_t *agent,
+				       void *user_data)
+{
+	struct timeval *t = user_data;
+	bool dead = false;
+
+	if (agent->state & DEFW_AGENT_STATE_NEW) {
+		if (t->tv_sec >= agent->handshake_deadline.tv_sec) {
+			strncpy(agent->failure_reason, "handshake-timeout",
+				sizeof(agent->failure_reason) - 1);
+			PERROR("agent %s handshake timed out", agent->name);
+			dead = true;
+		}
+	} else if (agent->heartbeat_mode == DEFW_HEARTBEAT_REMOTE &&
+		   t->tv_sec - agent->last_heartbeat_rx.tv_sec >= HB_TO * 100) {
+		strncpy(agent->failure_reason, "heartbeat-timeout",
+			sizeof(agent->failure_reason) - 1);
+		PERROR("agent %s presumed dead", agent->name);
+		dead = true;
+	}
+
+	defw_release_agent_blk(agent, dead);
+	return 0;
+}
+
 void agent_hb_check(struct timeval *t, defw_type_t me)
 {
-	defw_agent_blk_t *agent = NULL;
-
-	while (1) {
-		agent = defw_get_next_client_agent(agent);
-		if (!agent)
-			break;
-		if (t->tv_sec - agent->time_stamp.tv_sec >= HB_TO*100) {
-			/* agent didn't send a HB move to dead list
-			 */
-			PERROR("agent %s presumed dead", agent->name);
-			defw_release_agent_blk(agent, true);
-			continue;
-		}
-		defw_release_agent_blk(agent, false);
-	}
+	defw_connection_agent_iter(agent_liveness_check_helper, t);
 }
 
 static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
@@ -543,9 +595,19 @@ static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
 	bool dead = false;
 	defw_rc_t rc;
 
+	if (agent->heartbeat_mode != DEFW_HEARTBEAT_REMOTE) {
+		defw_release_agent_blk(agent, false);
+		return 0;
+	}
+
 	rc = defw_send_hb(agent);
-	if (rc != EN_DEFW_RC_OK)
+	if (rc != EN_DEFW_RC_OK) {
+		strncpy(agent->failure_reason, "heartbeat-send-failure",
+			sizeof(agent->failure_reason) - 1);
 		dead = true;
+	} else {
+		gettimeofday(&agent->last_heartbeat_tx, NULL);
+	}
 	defw_release_agent_blk(agent, dead);
 
 	return 0;
@@ -768,10 +830,7 @@ static void *defw_listener_main(void *usr_data)
 		}
 
 		if (time_2.tv_sec - time_1.tv_sec >= HB_TO || send_hb_now) {
-			defw_active_service_agent_iter(send_hb_to_agents, NULL);
-			defw_service_agent_iter(send_hb_to_agents, NULL);
-			defw_active_client_agent_iter(send_hb_to_agents, NULL);
-			defw_client_agent_iter(send_hb_to_agents, NULL);
+			defw_connection_agent_iter(send_hb_to_agents, NULL);
 			send_hb_now = false;
 		}
 

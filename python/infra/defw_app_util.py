@@ -224,11 +224,11 @@ atexit.register(_shutdown_spawned_services)
 
 
 def defw_get_resource_mgr(timeout=SYSTEM_UP_TIMEOUT):
-	if not defw.wait_resmgr(timeout):
-		logging.defw_app("Couldn't find a resmgr")
-		raise DEFwReserveError("Couldn't find a resmgr")
+	if not defw.wait_dirsvc(timeout):
+		logging.defw_app("Couldn't find a directory service")
+		raise DEFwReserveError("Couldn't find a directory service")
 
-	return defw.resmgr
+	return defw.dirsvc
 
 
 def defw_reserve_service_by_name(resmgr, svc_name, svc_type=-1,

@@ -1,11 +1,47 @@
 #!/usr/bin/env python3
 
 import importlib
+import subprocess
+import sys
+
+
+LEGACY_CHARPPP_WARNING = (
+	"swig/python detected a memory leak of type 'char **', "
+	"no destructor found"
+)
 
 
 def expect(condition, message):
 	if not condition:
 		raise AssertionError(message)
+
+
+def expect_legacy_charppp_warning():
+	script = "\n".join((
+		"import gc",
+		"import importlib",
+		"module = importlib.import_module('defw_typemap_fixture')",
+		"value = module.defw_typemap_make_compat_pointer()",
+		"assert isinstance(value, tuple), repr(value)",
+		"assert len(value) == 2 and value[0] == 0, repr(value)",
+		"assert value[1] is not None, repr(value)",
+		"del value",
+		"gc.collect()",
+	))
+	result = subprocess.run(
+		[sys.executable, "-c", script],
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		check=False,
+	)
+	expect(result.returncode == 0,
+	       "compat char*** child check failed: "
+	       f"stdout={result.stdout!r} stderr={result.stderr!r}")
+	output = result.stdout + result.stderr
+	expect(LEGACY_CHARPPP_WARNING in output,
+	       "compat char*** legacy warning was not emitted: "
+	       f"stdout={result.stdout!r} stderr={result.stderr!r}")
 
 
 def main():
@@ -15,12 +51,7 @@ def main():
 	expect(compat == [0, "compat-string"] or compat == (0, "compat-string"),
 	       f"unexpected compat char** result: {compat!r}")
 
-	compat_pointer = module.defw_typemap_make_compat_pointer()
-	expect(isinstance(compat_pointer, tuple),
-	       f"unexpected compat char*** result: {compat_pointer!r}")
-	expect(len(compat_pointer) == 2 and compat_pointer[0] == 0,
-	       f"unexpected compat char*** tuple: {compat_pointer!r}")
-	expect(compat_pointer[1] is not None, "compat char*** pointer is None")
+	expect_legacy_charppp_warning()
 
 	owned = module.defw_typemap_make_owned_string()
 	expect(owned == [0, "owned-string"] or owned == (0, "owned-string"),

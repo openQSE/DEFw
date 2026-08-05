@@ -19,6 +19,7 @@ static atomic_long g_py_gil_refcount;
 defw_rc_t python_handle_request(char *rpc, char *uuid);
 defw_rc_t python_handle_response(char *rpc, char *uuid);
 defw_rc_t python_handle_event(char *rpc, char *uuid);
+defw_rc_t python_handle_peer_event(const defw_peer_event_t *event);
 /*
  * python_refresh_agent
  *   After an agent connects trigger python to refresh its state
@@ -125,7 +126,7 @@ static defw_rc_t python_setup(void)
 	RUN_PYTHON_CMD("from defw import me,experiments,"
 		"services,service_apis,client_agents,service_agents,"
 		"active_client_agents,active_service_agents,"
-		"resmgr,dumpGlobalTestResults,R,C,S,AC,AS,I,X\n"
+		"dirsvc,resmgr,dumpGlobalTestResults,R,C,S,AC,AS,I,X\n"
 		"from defw_workers import worker_thread\n");
 
 	return EN_DEFW_RC_OK;
@@ -339,6 +340,7 @@ defw_rc_t python_init(char *pname)
 	defw_register_msg_callback(EN_MSG_TYPE_PY_EVENT, process_msg_py_event);
 	defw_register_agent_update_notification_cb(python_refresh_agent);
 	defw_register_connect_complete(py_connect_status);
+	defw_register_peer_event_callback(python_handle_peer_event);
 
 	pthread_mutex_init(&g_interactive_shell_mutex, NULL);
 	atomic_init(&g_py_gil_refcount, 0);
@@ -446,6 +448,152 @@ void python_gil_release(PyGILState_STATE gstate)
 {
 	PyGILState_Release(gstate);
 	(void) atomic_fetch_sub(&g_py_gil_refcount, 1);
+}
+
+static int py_dict_set_string(PyObject *dict, const char *key,
+			      const char *value)
+{
+	int rc;
+	PyObject *obj = PyUnicode_FromString(value ? value : "");
+
+	if (!obj)
+		return -1;
+	rc = PyDict_SetItemString(dict, key, obj);
+	Py_DECREF(obj);
+	return rc;
+}
+
+static int py_dict_set_long(PyObject *dict, const char *key, long value)
+{
+	int rc;
+	PyObject *obj = PyLong_FromLong(value);
+
+	if (!obj)
+		return -1;
+	rc = PyDict_SetItemString(dict, key, obj);
+	Py_DECREF(obj);
+	return rc;
+}
+
+static int py_dict_set_bool(PyObject *dict, const char *key, int value)
+{
+	int rc;
+	PyObject *obj = value ? Py_True : Py_False;
+
+	Py_INCREF(obj);
+	rc = PyDict_SetItemString(dict, key, obj);
+	Py_DECREF(obj);
+	return rc;
+}
+
+static int py_dict_set_double(PyObject *dict, const char *key, double value)
+{
+	int rc;
+	PyObject *obj = PyFloat_FromDouble(value);
+
+	if (!obj)
+		return -1;
+	rc = PyDict_SetItemString(dict, key, obj);
+	Py_DECREF(obj);
+	return rc;
+}
+
+static PyObject *python_peer_event_to_dict(const defw_peer_event_t *event)
+{
+	PyObject *py_event;
+	PyObject *endpoint;
+	double timestamp;
+
+	py_event = PyDict_New();
+	endpoint = PyDict_New();
+	if (!py_event || !endpoint)
+		goto fail;
+
+	timestamp = (double)event->timestamp_sec +
+		    ((double)event->timestamp_usec / 1000000.0);
+
+	if (py_dict_set_string(py_event, "event_type",
+			       defw_peer_event_type2str(event->event_type)) ||
+	    py_dict_set_string(py_event, "peer_handle", event->peer_handle) ||
+	    py_dict_set_string(py_event, "remote_runtime_id",
+			       event->remote_runtime_id) ||
+	    py_dict_set_bool(py_event, "is_self", event->is_self) ||
+	    py_dict_set_string(py_event, "transport_context",
+			       event->transport_context) ||
+	    py_dict_set_string(py_event, "reason", event->reason) ||
+	    py_dict_set_double(py_event, "timestamp", timestamp) ||
+	    py_dict_set_string(endpoint, "address", event->address) ||
+	    py_dict_set_long(endpoint, "listen_port", event->listen_port) ||
+	    py_dict_set_string(endpoint, "node_name", event->node_name) ||
+	    py_dict_set_string(endpoint, "hostname", event->hostname) ||
+	    py_dict_set_long(endpoint, "pid", event->pid) ||
+	    PyDict_SetItemString(py_event, "endpoint", endpoint))
+		goto fail;
+
+	Py_DECREF(endpoint);
+	return py_event;
+
+fail:
+	Py_XDECREF(endpoint);
+	Py_XDECREF(py_event);
+	return NULL;
+}
+
+defw_rc_t python_handle_peer_event(const defw_peer_event_t *event)
+{
+	defw_rc_t rc = EN_DEFW_RC_OK;
+	PyGILState_STATE gstate;
+	PyObject *module_name = NULL;
+	PyObject *defw = NULL;
+	PyObject *py_handler = NULL;
+	PyObject *py_event = NULL;
+	PyObject *args = NULL;
+	PyObject *result = NULL;
+
+	if (!event)
+		return EN_DEFW_RC_BAD_PARAM;
+	if (!g_defw_cfg.initialized)
+		return EN_DEFW_RC_PY_SCRIPT_FAIL;
+
+	gstate = python_gil_ensure();
+
+	module_name = PyUnicode_FromString("defw_workers");
+	if (!module_name)
+		goto fail;
+	defw = PyImport_Import(module_name);
+	if (!defw)
+		goto fail;
+	py_handler = PyObject_GetAttrString(defw, "put_peer_event");
+	if (!py_handler)
+		goto fail;
+	py_event = python_peer_event_to_dict(event);
+	if (!py_event)
+		goto fail;
+	args = PyTuple_Pack(1, py_event);
+	if (!args)
+		goto fail;
+
+	result = PyObject_CallObject(py_handler, args);
+	if (!result)
+		goto fail;
+
+	goto out;
+
+fail:
+	rc = EN_DEFW_RC_PY_SCRIPT_FAIL;
+	if (PyErr_Occurred())
+		PyErr_Print();
+
+out:
+	Py_XDECREF(result);
+	Py_XDECREF(args);
+	Py_XDECREF(py_event);
+	Py_XDECREF(py_handler);
+	Py_XDECREF(defw);
+	Py_XDECREF(module_name);
+	python_gil_release(gstate);
+
+	return rc;
 }
 
 static defw_rc_t

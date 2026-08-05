@@ -28,8 +28,8 @@ DEFW_ROOT = PYTHON_DIR.parent
 DEFAULT_CONFIG_DIR = TESTS_DIR / "configs"
 DEFAULT_CONFIG_PATH = PYTHON_DIR / "config" / "defw_generic.yaml"
 DEFAULT_MODULES = [
-	"svc_resmgr",
-	"api_resmgr",
+	"svc_dirsvc",
+	"api_dirsvc",
 ]
 DEFAULT_PY_LOG_LEVEL = "critical"
 DEFAULT_PREF = {
@@ -198,7 +198,7 @@ def build_environment(config):
 	defw_path = str(DEFW_ROOT)
 	src_path = str(DEFW_ROOT / "src")
 	lib_path = str(DEFW_ROOT / "lib")
-	agent_name = master.get("agent_name", "master-resmgr")
+	agent_name = master.get("agent_name", "master-dirsvc")
 	listen_port = str(master.get("listen_port", 25100))
 	telnet_port = str(master.get("telnet_port", 25101))
 	log_dir = str(master.get(
@@ -224,7 +224,7 @@ def build_environment(config):
 		Path(master.get("config_path", DEFAULT_CONFIG_PATH)).resolve()
 	)
 	env["DEFW_AGENT_NAME"] = agent_name
-	env["DEFW_AGENT_TYPE"] = "resmgr"
+	env["DEFW_AGENT_TYPE"] = "dirsvc"
 	env["DEFW_SHELL_TYPE"] = "cmdline"
 	env["DEFW_LISTEN_PORT"] = listen_port
 	env["DEFW_TELNET_PORT"] = telnet_port

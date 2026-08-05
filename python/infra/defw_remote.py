@@ -69,8 +69,11 @@ class BaseRemote(object):
 	# to pass all their arguments to the super() class. Then the superclass can then pass
 	# that to the remote, so the remote class can be instantiated appropriately
 	def __init__(self, class_id=None, service_info=None,
-				 blocking=True, target=None, *args, **kwargs):
+				 blocking=True, target=None, remote_module=None,
+				 remote_class=None, *args, **kwargs):
 		self.__own = True
+		self.__remote_module_override = remote_module
+		self.__remote_class_override = remote_class
 		# if a target is specified other than me then we're going
 		# to execute on that target
 		self.__blocking = blocking
@@ -98,8 +101,17 @@ class BaseRemote(object):
 
 		if service_info:
 			self.__service_module = service_info.get_module_name()
+			try:
+				self.__service_class = service_info.get_class_name()
+			except AttributeError:
+				self.__service_class = type(self).__name__
 		elif target:
 			self.__service_module = type(self).__module__
+			self.__service_class = type(self).__name__
+		if self.__remote_module_override:
+			self.__service_module = self.__remote_module_override
+		if self.__remote_class_override:
+			self.__service_class = self.__remote_class_override
 
 		# class_id is the caller-visible handle used on future RPCs.
 		# For per-connection services it identifies the remote object.
@@ -115,7 +127,7 @@ class BaseRemote(object):
 			self.__class_id = str(uuid.uuid1())
 			self.__agent.send_req('instantiate_class', me.my_endpoint(),
 					self.__service_module,
-					type(self).__name__, '__init__',
+					self.__service_class, '__init__',
 					self.__class_id, self.__blocking, *args, **kwargs)
 
 	def __copy__(self):
@@ -142,7 +154,7 @@ class BaseRemote(object):
 					result = self.__agent.send_req('method_call',
 								me.my_endpoint(),
 								self.__service_module,
-								type(self).__name__,
+								self.__service_class,
 								attr.__name__,
 								self.__class_id,
 								self.__blocking,
@@ -162,7 +174,7 @@ class BaseRemote(object):
 			# signal to the remote that the class is being destroyed
 			if self.__remote:
 				self.__agent.send_req('destroy_class', me.my_endpoint(),
-					self.__class__.__module__, type(self).__name__, '__del__',
+					self.__service_module, self.__service_class, '__del__',
 					self.__class_id)
 		except:
 			pass

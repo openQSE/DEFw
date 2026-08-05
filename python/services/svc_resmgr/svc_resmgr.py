@@ -10,6 +10,8 @@ from defw_exception import DEFwError,DEFwCommError,DEFwAgentNotFound,\
 						  DEFwInternalError,DEFwRemoteError,DEFwReserveError, \
 						  DEFwInProgress
 from defw_util import prformat, fg, bg
+from cdefw_agent import EN_DEFW_SERVICE
+import defw_directory
 import logging, uuid, time, yaml, threading
 
 # Agent states
@@ -109,6 +111,110 @@ class DEFwResMgr:
 		self.__grab_agent_info(service_agents, self.__services_db, skip_self=True, query=query)
 		self.__grab_agent_info(active_service_agents, self.__active_services_db,
 						 skip_self=True, query=query)
+
+	def __endpoint_record(self, ep):
+		return {
+			'address': ep.addr,
+			'listen_port': ep.listen_port,
+			'node_name': ep.name,
+			'hostname': ep.hostname,
+			'pid': ep.pid,
+		}
+
+	def __binding_for_service_info(self, service_info):
+		import defw
+
+		service_name = service_info.get_service_name()
+		client_module = None
+		client_class = service_name
+		if service_name in defw.service_apis:
+			api_class = defw.service_apis[service_name].service_classes[0]
+			client_module = api_class.__module__
+			client_class = api_class.__name__
+		return {
+			'binding_name': service_info.get_property('binding_name', 'default'),
+			'client_module': service_info.get_property('client_module',
+								      client_module),
+			'client_class': service_info.get_property('client_class',
+								     client_class),
+			'service_module': service_info.get_property('service_module',
+								       service_info.get_module_name()),
+			'service_class': service_info.get_property('service_class',
+								      service_info.get_class_name()),
+			'version': service_info.get_property('binding_version', 1),
+		}
+
+	def __service_info_properties(self, service_info):
+		get_properties = getattr(service_info, 'get_properties', None)
+		if not callable(get_properties):
+			return {}
+		properties = get_properties() or {}
+		return dict(properties)
+
+	def __service_info_capability(self, service_info):
+		get_capabilities = getattr(service_info, 'get_capabilities', None)
+		if not callable(get_capabilities):
+			return {}, -1, -1
+		capabilities = get_capabilities()
+		if not capabilities:
+			return {}, -1, -1
+		capability = {}
+		get_capability_dict = getattr(
+			capabilities, 'get_capability_dict', None
+		)
+		if callable(get_capability_dict):
+			capability = dict(get_capability_dict() or {})
+		cap_type = capabilities.get_cap_type()
+		caps = capabilities.get_caps()
+		return capability, cap_type, caps
+
+	def __directory_record(self, entry, service_info, context=None):
+		ep = entry['agent'].get_ep()
+		context = context if isinstance(context, dict) else {}
+		service_name = service_info.get_service_name()
+		properties = self.__service_info_properties(service_info)
+		capability, cap_type, caps = \
+			self.__service_info_capability(service_info)
+		service_id = context.get('service_id') or \
+			service_info.get_property('service_id',
+						  f"{service_name}:{ep.hostname}:{ep.name}")
+		selector = context.get('selector') or \
+			service_info.get_property('selector', {'resources': [service_name]})
+		service_type = context.get('service_type')
+		if service_type is None:
+			service_type = service_info.get_property(
+				'service_type', 'defw.service'
+			)
+		api_bindings = context.get('api_bindings') or \
+			service_info.get_property('api_bindings', None)
+		return {
+			'service_id': service_id,
+			'service_name': service_name,
+			'service_type': service_type,
+			'runtime_id': ep.remote_uuid,
+			'peer_handle': ep.blk_uuid,
+			'endpoint': self.__endpoint_record(ep),
+			'api_bindings': api_bindings or [
+				self.__binding_for_service_info(service_info)
+			],
+			'selector': selector,
+			'properties': properties,
+			'capability': capability,
+			'legacy_type': cap_type,
+			'legacy_capabilities': caps,
+		}
+
+	def __register_directory_entries(self, db, agent_id, context=None):
+		entry = db.get(agent_id)
+		if not entry:
+			return []
+		if not entry.get('info'):
+			entry['info'] = entry['api'].query()
+		records = []
+		for service_info in entry.get('info') or []:
+			record = self.__directory_record(entry, service_info, context)
+			records.append(defw_directory.register_service(record))
+		return records
 
 	def unset_state(self, db, aid, state):
 		with self.__db_lock:
@@ -265,7 +371,21 @@ class DEFwResMgr:
 		DEFwCommError: If Resource Manager is not reachable
 	"""
 	def register_service(self, service_ep, context=None):
-		self.__register(service_agents, self.__services_db, service_ep, context)
+		agent_id = service_ep.get_id()
+		try:
+			self.__register(service_agents, self.__services_db, service_ep,
+					context)
+		except DEFwAgentNotFound:
+			self.__register(active_service_agents, self.__active_services_db,
+					service_ep, context)
+		records = self.__register_directory_entries(
+			self.__services_db, agent_id, context
+		)
+		if not records:
+			records = self.__register_directory_entries(
+				self.__active_services_db, agent_id, context
+			)
+		return records
 
 	"""
 	De-register an agent
@@ -304,6 +424,13 @@ class DEFwResMgr:
 				f"from services db"
 			)
 			self.__services_db[agent_id]['api'].unregister()
+			for record in defw_directory.query(include_inactive=True):
+				if record['runtime_id'] == agent_id:
+					defw_directory.deregister_service(
+						record['service_id'],
+						record['runtime_id'],
+						record['generation']
+					)
 			del self.__services_db[agent_id]
 		if agent_id in self.__active_services_db:
 			logging.defw_service(
@@ -311,6 +438,13 @@ class DEFwResMgr:
 				f"from active services db"
 			)
 			self.__active_services_db[agent_id]['api'].unregister()
+			for record in defw_directory.query(include_inactive=True):
+				if record['runtime_id'] == agent_id:
+					defw_directory.deregister_service(
+						record['service_id'],
+						record['runtime_id'],
+						record['generation']
+					)
 			del self.__active_services_db[agent_id]
 		if agent_id in self.__clients_db:
 			logging.defw_service(
@@ -375,13 +509,28 @@ class DEFwResMgr:
 	"""
 	def get_services(self, svc_name, svc_type=-1, svc_caps=-1):
 		logging.defw_service(f"get_services({svc_name}, {svc_type}, {svc_caps})")
-		all_info = []
-		self.__reload_resources(query=True)
-		all_info += self.get_info(self.__active_services_db, svc_name, svc_type, svc_caps)
-		all_info += self.get_info(self.__services_db, svc_name, svc_type, svc_caps)
-		all_info = self.__dedup_service_infos(all_info)
-		logging.defw_service(f"all_info({all_info})")
-		return all_info
+		return defw_directory.resolve_services(
+			service_name=svc_name,
+			svc_type=svc_type,
+			svc_caps=svc_caps
+		)
+
+	def resolve_services(self, **filters):
+		return defw_directory.resolve_services(**filters)
+
+	def query_directory(self, include_inactive=False):
+		return defw_directory.query(include_inactive=include_inactive)
+
+	def deregister_service(self, service_id, runtime_id, generation):
+		return defw_directory.deregister_service(
+			service_id, runtime_id, generation
+		)
+
+	def get_service_generation(self, service_id):
+		return defw_directory.get_service_generation(service_id)
+
+	def get_generation(self, service_id):
+		return defw_directory.get_generation(service_id)
 
 	"""
 	Reserve an Agent which exists on the DEFw Network
@@ -399,13 +548,24 @@ class DEFwResMgr:
 	def reserve(self, client_ep, service_infos, *args, **kwargs):
 		svc_eps = []
 		for service_info in service_infos:
+			if isinstance(service_info, dict):
+				record = service_info['service_record']
+				ep = Endpoint(record['endpoint']['address'], 0,
+					      record['endpoint']['listen_port'],
+					      record['endpoint']['pid'],
+					      record['endpoint']['node_name'],
+					      record['endpoint']['hostname'],
+					      EN_DEFW_SERVICE,
+					      record['runtime_id'],
+					      blk_uuid=record['peer_handle'])
+				svc_eps.append(ep)
+				continue
 			db = self.__dbs[service_info.get_loc_db()]
 			with self.__db_lock:
 				db_key = service_info.get_key()
 				entry = db[db_key]
 			if not entry['state'] & AGENT_STATE_REGISTERED:
 				DEFwReserveError(f"Agent {db_key} is not registered")
-			service_info.consume_capacity()
 			api = entry['api']
 			try:
 				api.reserve(service_info,  client_ep, *args, **kwargs)
@@ -440,9 +600,6 @@ class DEFwResMgr:
 				entry = db[db_key]
 			if not entry['state'] & AGENT_STATE_REGISTERED:
 				DEFwReserveError("Agent is not registered")
-			services = service_info.get_services()
-			for svc in services:
-				svc.release_capacity()
 			api = entry['api']
 			try:
 				api.release()

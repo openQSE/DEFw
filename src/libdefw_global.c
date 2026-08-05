@@ -208,6 +208,8 @@ void set_defw_type(char *type)
 		g_defw_cfg.l_info.type = EN_DEFW_AGENT;
 	else if (!strcasecmp(type, "service"))
 		g_defw_cfg.l_info.type = EN_DEFW_SERVICE;
+	else if (!strcasecmp(type, "dirsvc"))
+		g_defw_cfg.l_info.type = EN_DEFW_DIRSVC;
 	else
 		g_defw_cfg.l_info.type = EN_DEFW_RESMGR;
 }

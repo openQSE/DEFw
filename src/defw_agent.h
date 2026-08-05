@@ -13,6 +13,53 @@
 #define DEFW_AGENT_WORK_IN_PROGRESS (1 << 3)
 #define DEFW_AGENT_STATE_DEAD (1 << 4)
 #define DEFW_AGENT_STATE_NEW (1 << 5)
+#define DEFW_AGENT_PEER_READY_REPORTED (1 << 6)
+#define DEFW_AGENT_PEER_LOST_REPORTED (1 << 7)
+#define DEFW_AGENT_PEER_REMOVED_REPORTED (1 << 8)
+
+#define DEFW_PEER_UUID_STR_LEN 37
+
+typedef enum defw_peer_event_type {
+	DEFW_PEER_READY = 1,
+	DEFW_PEER_DEGRADED,
+	DEFW_PEER_LOST,
+	DEFW_PEER_REMOVED,
+} defw_peer_event_type_t;
+
+typedef enum defw_connection_direction {
+	DEFW_CONN_DIRECTION_UNKNOWN = 0,
+	DEFW_CONN_DIRECTION_INBOUND,
+	DEFW_CONN_DIRECTION_OUTBOUND,
+} defw_connection_direction_t;
+
+typedef enum defw_connection_lifecycle {
+	DEFW_CONN_LIFECYCLE_NEW = 0,
+	DEFW_CONN_LIFECYCLE_HANDSHAKE,
+	DEFW_CONN_LIFECYCLE_READY,
+	DEFW_CONN_LIFECYCLE_LOST,
+	DEFW_CONN_LIFECYCLE_REMOVED,
+} defw_connection_lifecycle_t;
+
+typedef enum defw_heartbeat_mode {
+	DEFW_HEARTBEAT_NONE = 0,
+	DEFW_HEARTBEAT_REMOTE,
+} defw_heartbeat_mode_t;
+
+typedef struct defw_peer_event_s {
+	defw_peer_event_type_t event_type;
+	char peer_handle[DEFW_PEER_UUID_STR_LEN];
+	char remote_runtime_id[DEFW_PEER_UUID_STR_LEN];
+	int is_self;
+	char transport_context[MAX_SHORT_STR_LEN];
+	char address[MAX_SHORT_STR_LEN];
+	unsigned int listen_port;
+	char node_name[MAX_STR_LEN];
+	char hostname[MAX_STR_LEN];
+	unsigned int pid;
+	char reason[MAX_STR_LEN];
+	long timestamp_sec;
+	long timestamp_usec;
+} defw_peer_event_t;
 
 #ifndef DLIST_ENTRY
 #define DLIST_ENTRY
@@ -24,6 +71,7 @@ struct dlist_entry {
 
 typedef defw_rc_t (*defw_agent_update_cb)(void);
 typedef void (*defw_connect_status)(defw_rc_t status, uuid_t uuid);
+typedef defw_rc_t (*defw_peer_event_cb)(const defw_peer_event_t *event);
 
 typedef struct defw_agent_blk_s {
 	struct dlist_entry entry;
@@ -43,6 +91,15 @@ typedef struct defw_agent_blk_s {
 	unsigned int state;
 	unsigned int ref_count;
 	defw_type_t node_type;
+	defw_connection_direction_t direction;
+	defw_connection_lifecycle_t lifecycle;
+	defw_heartbeat_mode_t heartbeat_mode;
+	int is_loopback;
+	struct timeval last_heartbeat_tx;
+	struct timeval last_heartbeat_rx;
+	struct timeval last_control_activity;
+	struct timeval handshake_deadline;
+	char failure_reason[MAX_STR_LEN];
 	char *rpc_response;
 } defw_agent_blk_t;
 
@@ -160,6 +217,8 @@ void defw_get_agent_uuid(defw_agent_blk_t *agent, char **remote_uuid,
  *	return true if equal, false otherwise
  */
 int defw_agent_uuid_compare(char *agent_id1, char *agent_id2);
+
+const char *defw_peer_event_type2str(defw_peer_event_type_t event_type);
 
 /*
  * defw_send_req/rsp

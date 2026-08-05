@@ -36,6 +36,9 @@ class Endpoint:
 	def is_resmgr(self):
 		return self.node_type == EN_DEFW_RESMGR
 
+	def is_dirsvc(self):
+		return self.node_type == EN_DEFW_DIRSVC
+
 	def get_id(self):
 		return self.remote_uuid
 
@@ -52,8 +55,8 @@ class Endpoint:
 		return info
 
 	def node_type2str(self):
-		if self.node_type == EN_DEFW_RESMGR:
-			nt = 'RESMGR'
+		if self.node_type == EN_DEFW_DIRSVC:
+			nt = 'DIRSVC'
 		elif self.node_type == EN_DEFW_AGENT:
 			nt = 'AGENT'
 		elif self.node_type == EN_DEFW_SERVICE:
@@ -85,6 +88,9 @@ class Agent:
 
 	def is_resmgr(self):
 		return self.__endpoint.is_resmgr()
+
+	def is_dirsvc(self):
+		return self.__endpoint.is_dirsvc()
 
 	def dump(self):
 		self.__endpoint.dump()
@@ -289,8 +295,11 @@ class DEFwAgents:
 		self.reload()
 		with self.__dict_lock:
 			for name, agent in self.agent_dict.items():
-				if agent.is_resmgr():
+				if agent.is_dirsvc():
 					return agent.get_ep()
+
+	def get_dirsvc(self):
+		return self.get_resmgr()
 
 	# always update the dictionary for the following two operations
 	def dump(self):

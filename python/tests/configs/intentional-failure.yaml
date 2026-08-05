@@ -2,7 +2,7 @@ suite: framework
 scripts:
   - intentional_failure
 master:
-  agent_name: runner-failure-resmgr
+  agent_name: runner-failure-dirsvc
   listen_port: 25200
   telnet_port: 25201
   experiment_port_base: 25210

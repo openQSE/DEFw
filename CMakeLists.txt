@@ -345,6 +345,28 @@ file(CHMOD "${DEFW_BUILD_SRC_DIR}/defwp-wrapper"
 
 enable_testing()
 
+add_executable(defw_phase1_transport_contracts
+	tests/transport/test_phase1_transport_contracts.c)
+target_include_directories(defw_phase1_transport_contracts
+	PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(defw_phase1_transport_contracts
+	PRIVATE
+		-Wall
+		-fPIC)
+target_link_libraries(defw_phase1_transport_contracts
+	PRIVATE
+		defw
+		defw_agent
+		defw_connect
+		defw_global
+		Threads::Threads
+		"${UUID_LIBRARY}"
+		Python3::Python)
+set_target_properties(defw_phase1_transport_contracts
+	PROPERTIES
+		BUILD_RPATH "${DEFW_BUILD_RPATH}")
+
 add_test(NAME defw_swig_imports
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
@@ -389,6 +411,32 @@ add_test(NAME defw_peer_event_contract
 set_tests_properties(defw_peer_event_contract
 	PROPERTIES
 		DEPENDS "_cdefw_global;_cdefw_agent;defw_python_runtime")
+
+add_test(NAME defw_directory_contract
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"PYTHONPATH=${DEFW_BUILD_SRC_DIR}:${DEFW_BUILD_PYTHON_DIR}/infra"
+		"LD_LIBRARY_PATH=${DEFW_BUILD_SRC_DIR}"
+		"${Python3_EXECUTABLE}"
+		"${CMAKE_CURRENT_SOURCE_DIR}/tests/directory/test_directory_contract.py")
+set_tests_properties(defw_directory_contract
+	PROPERTIES
+		DEPENDS "_cdefw_global;defw_python_runtime")
+
+add_test(NAME defw_binding_connect_contract
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"DEFW_PATH=${DEFW_BUILD_RUNTIME_DIR}"
+		"PYTHONPATH=${DEFW_BUILD_SRC_DIR}:${DEFW_BUILD_PYTHON_DIR}/infra"
+		"LD_LIBRARY_PATH=${DEFW_BUILD_SRC_DIR}"
+		"${Python3_EXECUTABLE}"
+		"${CMAKE_CURRENT_SOURCE_DIR}/tests/directory/test_binding_connect_contract.py")
+set_tests_properties(defw_binding_connect_contract
+	PROPERTIES
+		DEPENDS "_cdefw_global;_cdefw_agent;defw_python_runtime")
+
+add_test(NAME defw_phase1_transport_contracts
+	COMMAND defw_phase1_transport_contracts)
 
 add_test(NAME defw_external_swig_fixture
 	COMMAND

@@ -77,6 +77,9 @@ class DEFwServiceInfo:
 	def get_property(self, key, default=None):
 		return self.__properties.get(key, default)
 
+	def get_capabilities(self):
+		return self.__capabilities
+
 	def is_match(self, svc_name, svc_type, svc_caps):
 		logging.defw_core(f"is_match {svc_name} <-> {self.__service_name}")
 		if svc_name != self.__service_name:

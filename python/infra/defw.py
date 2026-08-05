@@ -27,6 +27,7 @@ active_client_agents = None
 active_service_agents = None
 defw_config_yaml = None
 me = None
+dirsvc = None
 resmgr = None
 updater_thread = None
 
@@ -975,11 +976,12 @@ class ServiceSuitesBase(Suites):
 					if noinit_load and d in noinit_load:
 						sys.path.append(mod_path)
 						continue
-					if only_load and d not in only_load and name != 'resmgr':
+					if only_load and d not in only_load and \
+					   name not in ('dirsvc', 'resmgr'):
 						continue
-					# TODO for now disable loading the resmgr if you're not
-					# the resmgr. is there a better way of handling this?
-					if not me.is_resmgr() and name == 'resmgr' and self.noload_resmgr:
+					if not me.is_dirsvc() and \
+					   name in ('dirsvc', 'resmgr') and \
+					   self.noload_resmgr:
 						continue
 					mod = import_module_from_path(mod_path, path)
 					mname = mod.svc_info['name']
@@ -1089,6 +1091,9 @@ class Myself:
 
 	def is_resmgr(self):
 		return self.__my_endpoint.is_resmgr()
+
+	def is_dirsvc(self):
+		return self.__my_endpoint.is_dirsvc()
 
 	def import_env_vars(self, fpath):
 		with open(fpath, 'r') as f:
@@ -1497,34 +1502,17 @@ def configure_defw():
 	return cy
 
 def dump_all_agents():
-	agents = [active_service_agents, service_agents, active_client_agents,
-			  client_agents]
-	for agent_dict in agents:
-		agent_dict.dump()
+	import defw_peers
+
+	defw_peers.dump()
 
 def get_agent(target):
-	agents = [active_service_agents, service_agents, active_client_agents,
-			  client_agents]
-	for agent_dict in agents:
-		agent_dict.reload()
-		agidx = target.get_id()
-		#print(f"Attempting to find "\
-		#	  f"{agidx}:{agidx in agent_dict} ")
-		#if agidx in agent_dict:
-			#print(f"target id: {target.remote_uuid} " \
-			#	  f"agent id: {agent_dict[agidx].get_remote_uuid()} " \
-			#	  f"target blkuuid: {target.blk_uuid} " \
-			#	  f"agent blkuuid: {agent_dict[agidx].get_blk_uuid()}")
-		if agidx in agent_dict and \
-		   target.remote_uuid == agent_dict[agidx].get_remote_uuid() and \
-		   (target.blk_uuid ==  agent_dict[agidx].get_blk_uuid() or \
-			target.blk_uuid == str(uuid.UUID(int=0))):
-			#print(f"Returning {agidx}:{agent_dict[agidx]}")
-			return agent_dict[agidx]
-	#print(f"get_agent didn't find {target}")
-	return None
+	import defw_peers
+
+	return defw_peers.get_agent(target)
 
 def updater_thread():
+	global dirsvc
 	global resmgr
 
 	shutdown = False
@@ -1534,18 +1522,91 @@ def updater_thread():
 			if event['type'] == 'shutdown':
 				shutdown = True
 				continue
-			if event['type'] == 'resmgr':
+			if event['type'] in ('dirsvc', 'resmgr'):
 				cdefw_global.update_py_interactive_shell()
 		except queue.Empty:
 			continue
 
 def connect_to_services(endpoints):
+	import defw_workers
+
 	for ep in endpoints:
-		active_service_agents.connect(ep)
+		wr = defw_workers.WorkerRequest(
+			defw_workers.WorkerRequest.WR_CONNECT,
+			remote_uuid=ep.remote_uuid,
+			ep=ep
+		)
+		defw_workers.connect_to_agent(wr)
 		logging.defw_core(f"Connection request finished: {ep}")
 
+class _BindingServiceInfo:
+	def __init__(self, endpoint, binding):
+		self.__endpoint = endpoint
+		self.__binding = binding
+
+	def get_endpoint(self):
+		return self.__endpoint
+
+	def get_module_name(self):
+		return self.__binding.get('service_module') or \
+			self.__binding.get('client_module')
+
+	def get_class_name(self):
+		return self.__binding.get('service_class') or \
+			self.__binding.get('client_class')
+
+
+def _accepts_binding_kwargs(class_obj):
+	import inspect
+
+	try:
+		signature = inspect.signature(class_obj)
+	except (TypeError, ValueError):
+		return True
+
+	parameters = signature.parameters.values()
+	if any(param.kind == inspect.Parameter.VAR_KEYWORD
+	       for param in parameters):
+		return True
+
+	names = set(signature.parameters)
+	return {'target', 'remote_module', 'remote_class'}.issubset(names)
+
+
+def _instantiate_binding_client(class_obj, endpoint, binding):
+	if _accepts_binding_kwargs(class_obj):
+		return class_obj(target=endpoint,
+				 remote_module=binding.get('service_module'),
+				 remote_class=binding.get('service_class'))
+
+	service_info = _BindingServiceInfo(endpoint, binding)
+	return class_obj(service_info)
+
+
+def connect_to_binding(resolved_binding):
+	import importlib
+
+	record = resolved_binding['service_record']
+	binding = resolved_binding['selected_binding']
+	ep = Endpoint(record['endpoint']['address'], 0,
+		      record['endpoint']['listen_port'],
+		      record['endpoint']['pid'],
+		      record['endpoint']['node_name'],
+		      record['endpoint']['hostname'],
+		      EN_DEFW_SERVICE,
+		      record['runtime_id'])
+	connect_to_services([ep])
+	module = importlib.import_module(binding['client_module'])
+	class_obj = getattr(module, binding['client_class'])
+	api = _instantiate_binding_client(class_obj, ep, binding)
+	logging.defw_core(f"API created from binding: {binding}: {api}")
+	return api
+
 def connect_to_resource(service_infos, res_name):
-	ep = resmgr.reserve(me.my_endpoint(), service_infos)
+	if service_infos and isinstance(service_infos[0], dict):
+		return [connect_to_binding(binding) for binding in service_infos]
+
+	ep = dirsvc.reserve(me.my_endpoint(), service_infos)
 	connect_to_services(ep)
 	apis = []
 	for service_info in service_infos:
@@ -1557,23 +1618,29 @@ def connect_to_resource(service_infos, res_name):
 	logging.defw_core(f"Returning API array: {apis}")
 	return apis
 
-def wait_resmgr(timeout):
-	global resmgr
+def wait_dirsvc(timeout):
+	global dirsvc
 
 	wait = 0
-	if not resmgr:
+	if not dirsvc:
 		while wait < timeout:
-			if resmgr:
+			if dirsvc:
 				return True
 			wait += 1
-			logging.defw_core("waiting to connect to resource manager")
+			logging.defw_core("waiting to connect to directory service")
 			time.sleep(1)
 	else:
 		return True
 
 	return False
 
+def wait_resmgr(timeout):
+	return wait_dirsvc(timeout)
+
 # TODO: We need a way to disconnect endpoint
+
+def get_dirsvc():
+	return dirsvc
 
 def get_resmgr():
 	return resmgr
@@ -1600,7 +1667,7 @@ if not cdefw_global.get_defw_initialized():
 	active_client_agents = DEFwActiveClientAgents()
 	active_service_agents = DEFwActiveServiceAgents()
 
-	# Create an instance of the resource manager because we have
+	# Create an instance of the directory service because we have
 	# a connection to it.
 
 	logging.defw_core("INSTANTIATING myself")
@@ -1614,13 +1681,19 @@ if not cdefw_global.get_defw_initialized():
 	services = ServiceSuites()
 	service_apis = ServiceSuiteAPIs()
 
-	if me.is_resmgr():
-		if 'Resource Manager' in services:
+	if me.is_dirsvc():
+		service = None
+		if 'Directory Service' in services:
+			service = services['Directory Service']
+		elif 'Resource Manager' in services:
+			service = services['Resource Manager']
+		if service:
 			if 'DEFW_SQL_PATH' in os.environ:
 				sql_path = os.enviorn['DEFW_SQL_PATH']
 			else:
 				sql_path = '/tmp'
-			resmgr = services['Resource Manager'].service_classes[0](sql_path)
+			dirsvc = service.service_classes[0](sql_path)
+			resmgr = dirsvc
 
 	# Convenience Variables
 	R = dumpGlobalTestResults

@@ -210,8 +210,9 @@ def shutdown_service_instance(instance):
 	# live instance back to its singleton identity.
 	try:
 		import defw
-		if getattr(defw, 'resmgr', None):
-			defw.resmgr.deregister(defw.me.my_endpoint())
+		dirsvc = getattr(defw, 'dirsvc', None) or getattr(defw, 'resmgr', None)
+		if dirsvc:
+			dirsvc.deregister(defw.me.my_endpoint())
 	except Exception as exc:
 		logging.defw_core(
 			f"Failed to deregister service {instance.__class__.__name__} "
