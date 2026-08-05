@@ -378,6 +378,18 @@ set_tests_properties(defw_swig_typemap_contracts
 	PROPERTIES
 		DEPENDS "_defw_typemap_fixture")
 
+add_test(NAME defw_peer_event_contract
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"DEFW_PATH=${DEFW_BUILD_RUNTIME_DIR}"
+		"PYTHONPATH=${DEFW_BUILD_SRC_DIR}:${DEFW_BUILD_PYTHON_DIR}/infra"
+		"LD_LIBRARY_PATH=${DEFW_BUILD_SRC_DIR}"
+		"${Python3_EXECUTABLE}"
+		"${CMAKE_CURRENT_SOURCE_DIR}/tests/peer_events/test_peer_event_contract.py")
+set_tests_properties(defw_peer_event_contract
+	PROPERTIES
+		DEPENDS "_cdefw_global;_cdefw_agent;defw_python_runtime")
+
 add_test(NAME defw_external_swig_fixture
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
