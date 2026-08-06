@@ -25,36 +25,6 @@ static char *copy_string(const char *text)
 	return copy;
 }
 
-int defw_typemap_make_compat_string(char **compat_string)
-{
-	if (!compat_string)
-		return -1;
-
-	*compat_string = copy_string("compat-string");
-	return *compat_string ? 0 : -1;
-}
-
-int defw_typemap_make_compat_pointer(char ***compat_pointer)
-{
-	char **items;
-
-	if (!compat_pointer)
-		return -1;
-
-	items = calloc(2, sizeof(*items));
-	if (!items)
-		return -1;
-
-	items[0] = copy_string("compat-pointer");
-	if (!items[0]) {
-		free(items);
-		return -1;
-	}
-
-	*compat_pointer = items;
-	return 0;
-}
-
 int defw_typemap_make_owned_string(char **owned_string)
 {
 	if (!owned_string)

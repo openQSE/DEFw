@@ -61,6 +61,19 @@ def make_record(runtime_id='runtime-1', peer_handle='peer-1'):
 
 def main():
 	directory = defw_directory.Directory(retention_seconds=0.01)
+	lifecycle_events = []
+
+	def record_lifecycle(event_type, service_record=None, peer_event=None,
+			     reason=None, details=None):
+		lifecycle_events.append({
+			'event_type': event_type,
+			'service_record': dict(service_record or {}),
+			'peer_event': dict(peer_event or {}),
+			'reason': reason,
+			'details': dict(details or {}),
+		})
+
+	directory.add_lifecycle_listener(record_lifecycle)
 	record = directory.register_service(make_record())
 	expect(record['generation'] == 1, "new service generation should start at 1")
 	expect(record['state'] == defw_directory.STATE_UP, "record should be UP")
@@ -120,6 +133,25 @@ def main():
 	directory.purge_expired()
 	expect(directory.query(include_inactive=True) == [],
 	       "expired inactive record should be purged")
+	event_types = [event['event_type'] for event in lifecycle_events]
+	for event_type in (
+			'registration',
+			'peer-lost',
+			'deregistration',
+			'retention-purge'):
+		expect(event_type in event_types,
+		       f"missing lifecycle event {event_type}")
+	peer_lost = next(
+		event for event in lifecycle_events
+		if event['event_type'] == 'peer-lost')
+	restart = next(
+		event for event in lifecycle_events
+		if event['event_type'] == 'registration' and
+		event['service_record']['generation'] == 2)
+	expect(peer_lost['reason'] == 'heartbeat-timeout',
+	       "peer loss reason was not reported")
+	expect(restart['details']['previous_generation'] == 1,
+	       "restart previous generation was not reported")
 
 
 if __name__ == "__main__":

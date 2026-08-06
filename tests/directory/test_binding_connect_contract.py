@@ -53,20 +53,6 @@ class StubAgent:
 		return self.__endpoint
 
 
-class StubAgentDict(dict):
-	def reload(self):
-		pass
-
-	def get_agent(self, endpoint):
-		return self.get(endpoint.get_id())
-
-	def get_num_connected_agents(self):
-		return len(self)
-
-	def dump(self):
-		pass
-
-
 class StubMe:
 	def __init__(self, endpoint):
 		self.__endpoint = endpoint
@@ -183,32 +169,22 @@ def exercise_active_service_registration():
 						     'backend': 'sim',
 						     'service_type': 'qfw.qpm',
 					     })
-	active_services = StubAgentDict({
-		service_ep.get_id(): StubAgent(service_ep),
-		other_service_ep.get_id(): StubAgent(other_service_ep),
-	})
-	empty_clients = StubAgentDict()
-	empty_services = StubAgentDict()
 	service_infos = {
 		runtime_id: service_info,
 		other_runtime_id: other_service_info,
 	}
 	originals = {
 		'me': svc_resmgr.me,
-		'client_agents': svc_resmgr.client_agents,
-		'active_client_agents': svc_resmgr.active_client_agents,
-		'service_agents': svc_resmgr.service_agents,
-		'active_service_agents': svc_resmgr.active_service_agents,
+		'get_agent': svc_resmgr.get_agent,
 		'BaseAgentAPI': svc_resmgr.BaseAgentAPI,
 		'directory': defw_directory.directory,
 	}
 	try:
 		defw_directory.directory = defw_directory.Directory()
 		svc_resmgr.me = StubMe(self_ep)
-		svc_resmgr.client_agents = empty_clients
-		svc_resmgr.active_client_agents = empty_clients
-		svc_resmgr.service_agents = empty_services
-		svc_resmgr.active_service_agents = active_services
+		svc_resmgr.get_agent = lambda ep: (
+			StubAgent(ep) if ep.get_id() in service_infos else None
+		)
 		svc_resmgr.BaseAgentAPI = \
 			lambda target: StubServiceAPI([
 				service_infos[target.remote_uuid]
@@ -276,10 +252,7 @@ def exercise_active_service_registration():
 	finally:
 		defw_directory.directory = originals['directory']
 		svc_resmgr.me = originals['me']
-		svc_resmgr.client_agents = originals['client_agents']
-		svc_resmgr.active_client_agents = originals['active_client_agents']
-		svc_resmgr.service_agents = originals['service_agents']
-		svc_resmgr.active_service_agents = originals['active_service_agents']
+		svc_resmgr.get_agent = originals['get_agent']
 		svc_resmgr.BaseAgentAPI = originals['BaseAgentAPI']
 
 

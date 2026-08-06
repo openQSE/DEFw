@@ -85,13 +85,10 @@ static int collect_agent(defw_agent_blk_t *agent, void *user_data)
 	return 0;
 }
 
-static int test_service_or_dirsvc_order(void)
+static int test_connection_table_iteration_order(void)
 {
 	defw_agent_blk_t *dirsvc;
 	defw_agent_blk_t *service;
-	defw_agent_blk_t *first;
-	defw_agent_blk_t *second;
-	defw_agent_blk_t *third;
 	struct collected_agents collected = { 0 };
 	int rc = 0;
 
@@ -104,31 +101,15 @@ static int test_service_or_dirsvc_order(void)
 	if (!dirsvc || !service)
 		return 1;
 
-	first = defw_get_next_active_service_agent(NULL);
-	second = defw_get_next_active_service_agent(first);
-	third = defw_get_next_active_service_agent(second);
-
-	rc |= expect(first == dirsvc,
-		     "active service iterator skipped first dirsvc record");
-	rc |= expect(second == service,
-		     "active service iterator did not return later service");
-	rc |= expect(third == NULL,
-		     "active service iterator returned unexpected extra record");
-
-	if (first)
-		defw_release_agent_blk(first, false);
-	if (second)
-		defw_release_agent_blk(second, false);
-	if (third)
-		defw_release_agent_blk(third, false);
-
-	defw_active_service_agent_iter(collect_agent, &collected);
+	defw_connection_agent_iter(collect_agent, &collected);
 	rc |= expect(collected.count == 2,
-		     "callback iterator returned wrong service count");
+		     "connection iterator returned wrong count");
 	rc |= expect(collected.agents[0] == dirsvc,
-		     "callback iterator did not preserve dirsvc order");
+		     "connection iterator did not preserve dirsvc order");
 	rc |= expect(collected.agents[1] == service,
-		     "callback iterator did not preserve service order");
+		     "connection iterator did not preserve service order");
+	rc |= expect(defw_get_num_connection_agents() == 2,
+		     "connection count did not include known records");
 
 	release_agent(dirsvc);
 	release_agent(service);
@@ -187,7 +168,7 @@ int main(void)
 	defw_init_logging();
 	defw_agent_init();
 
-	if (test_service_or_dirsvc_order())
+	if (test_connection_table_iteration_order())
 		return 1;
 	if (test_peer_ready_identity_update())
 		return 1;

@@ -30,14 +30,6 @@ def wait_for_peer_callability(defw_peers, peer_handle, callable_state):
 	raise AssertionError("peer callability did not reach expected state")
 
 
-class LegacyAgentReloadGuard:
-	def reload(self):
-		raise AssertionError("legacy C iterator reload should not be used")
-
-	def dump(self):
-		raise AssertionError("legacy C iterator dump should not be used")
-
-
 def main():
 	cdefw_agent = importlib.import_module("cdefw_agent")
 	expect(cdefw_agent.DEFW_PEER_READY == 1,
@@ -104,36 +96,23 @@ def main():
 	target = defw_agent.Endpoint('127.0.0.1', 0, 8282, 123, 'peer-test',
 				    'localhost', cdefw_agent.EN_DEFW_SERVICE,
 				    runtime_id)
-	originals = {
-		'active_service_agents': defw.active_service_agents,
-		'service_agents': defw.service_agents,
-		'active_client_agents': defw.active_client_agents,
-		'client_agents': defw.client_agents,
-	}
-	try:
-		guard = LegacyAgentReloadGuard()
-		defw.active_service_agents = guard
-		defw.service_agents = guard
-		defw.active_client_agents = guard
-		defw.client_agents = guard
-		agent = defw.get_agent(target)
-		expect(agent is not None,
-		       "get_agent did not resolve a callable peer table record")
-		expect(agent.get_blk_uuid() == ready_peer['peer_handle'],
-		       "get_agent did not use the peer table handle")
-		lost = dict(event)
-		lost['event_type'] = 'PEER_LOST'
-		lost['reason'] = 'socket-close'
-		lost['timestamp'] = time.time() + 1
-		defw_workers.put_peer_event(lost)
-		wait_for_peer_callability(defw_peers, peer_handle, False)
-		expect(defw.get_agent(target) is None,
-		       "get_agent returned a peer after PEER_LOST")
-	finally:
-		defw.active_service_agents = originals['active_service_agents']
-		defw.service_agents = originals['service_agents']
-		defw.active_client_agents = originals['active_client_agents']
-		defw.client_agents = originals['client_agents']
+	for name in ('active_service_agents', 'service_agents',
+		     'active_client_agents', 'client_agents'):
+		expect(not hasattr(defw, name),
+		       f"legacy agent view {name} is still exported")
+	agent = defw.get_agent(target)
+	expect(agent is not None,
+	       "get_agent did not resolve a callable peer table record")
+	expect(agent.get_blk_uuid() == ready_peer['peer_handle'],
+	       "get_agent did not use the peer table handle")
+	lost = dict(event)
+	lost['event_type'] = 'PEER_LOST'
+	lost['reason'] = 'socket-close'
+	lost['timestamp'] = time.time() + 1
+	defw_workers.put_peer_event(lost)
+	wait_for_peer_callability(defw_peers, peer_handle, False)
+	expect(defw.get_agent(target) is None,
+	       "get_agent returned a peer after PEER_LOST")
 
 
 if __name__ == "__main__":
