@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 
@@ -51,6 +52,20 @@ class Directory:
 		self.__records = {}
 		self.__lock = threading.Lock()
 		self.__retention_seconds = retention_seconds
+		self.__lifecycle_listeners = []
+
+	def add_lifecycle_listener(self, listener):
+		if not callable(listener):
+			raise DEFwError("Directory lifecycle listener is not callable")
+		with self.__lock:
+			if listener not in self.__lifecycle_listeners:
+				self.__lifecycle_listeners.append(listener)
+		return listener
+
+	def remove_lifecycle_listener(self, listener):
+		with self.__lock:
+			if listener in self.__lifecycle_listeners:
+				self.__lifecycle_listeners.remove(listener)
 
 	def register_service(self, record, peer=None):
 		now = time.time()
@@ -64,6 +79,7 @@ class Directory:
 		if not runtime_id or not peer_handle:
 			raise DEFwError("Directory registration missing peer binding")
 
+		previous_generation = None
 		with self.__lock:
 			current = self.__records.get(service_id)
 			if current and current['state'] == STATE_UP:
@@ -73,6 +89,7 @@ class Directory:
 					)
 				generation = current['generation']
 			elif current:
+				previous_generation = current['generation']
 				generation = current['generation'] + 1
 			else:
 				generation = 1
@@ -100,7 +117,15 @@ class Directory:
 				'retention_deadline': None,
 			}
 			self.__records[service_id] = registered
-			return _copy_record(registered)
+			registered = _copy_record(registered)
+
+		details = {}
+		if previous_generation is not None:
+			details['previous_generation'] = previous_generation
+		self.__notify_lifecycle(
+			'registration', service_record=registered,
+			details=details)
+		return registered
 
 	def deregister_service(self, service_id, runtime_id, generation):
 		now = time.time()
@@ -115,13 +140,16 @@ class Directory:
 			record['endpoint'] = {}
 			record['state_changed_at'] = now
 			record['retention_deadline'] = now + self.__retention_seconds
-			return _copy_record(record)
+			record = _copy_record(record)
+		self.__notify_lifecycle('deregistration', service_record=record)
+		return record
 
 	def apply_peer_event(self, event):
 		event_type = event.get('event_type')
 		peer_handle = event.get('peer_handle')
 		runtime_id = event.get('remote_runtime_id') or event.get('runtime_id')
 		now = event.get('timestamp', time.time())
+		notifications = []
 		with self.__lock:
 			for record in self.__records.values():
 				if record['peer_handle'] != peer_handle:
@@ -139,12 +167,21 @@ class Directory:
 					record['state_changed_at'] = now
 					record['retention_deadline'] = \
 						now + self.__retention_seconds
+					notifications.append((
+						'peer-lost', _copy_record(record), reason))
 				elif event_type == 'PEER_READY' and \
 				     record['state'] in (STATE_DOWN, STATE_TIMED_OUT):
 					record['state'] = STATE_UP
 					record['down_reason'] = ''
 					record['state_changed_at'] = now
 					record['retention_deadline'] = None
+					notifications.append((
+						'peer-ready', _copy_record(record),
+						event.get('reason', '')))
+		for lifecycle_event, record, reason in notifications:
+			self.__notify_lifecycle(
+				lifecycle_event, service_record=record,
+				peer_event=event, reason=reason)
 
 	def resolve_services(self, **filters):
 		self.purge_expired()
@@ -175,6 +212,7 @@ class Directory:
 
 	def purge_expired(self, now=None):
 		now = now or time.time()
+		purged = []
 		with self.__lock:
 			expired = [
 				service_id for service_id, record in self.__records.items()
@@ -182,7 +220,12 @@ class Directory:
 				record['retention_deadline'] <= now
 			]
 			for service_id in expired:
+				purged.append(_copy_record(self.__records[service_id]))
 				del self.__records[service_id]
+		for record in purged:
+			self.__notify_lifecycle(
+				'retention-purge', service_record=record,
+				details={'purged_at': now})
 
 	def get_service_generation(self, service_id):
 		self.purge_expired()
@@ -251,12 +294,36 @@ class Directory:
 			return False
 		return (requested_bits & record_bits) == requested_bits
 
+	def __notify_lifecycle(self, event_type, service_record=None,
+			       peer_event=None, reason=None, details=None):
+		with self.__lock:
+			listeners = list(self.__lifecycle_listeners)
+		for listener in listeners:
+			try:
+				listener(
+					event_type,
+					service_record=dict(service_record or {}),
+					peer_event=dict(peer_event or {}),
+					reason=reason,
+					details=dict(details or {}))
+			except Exception:
+				logging.exception(
+					"Directory lifecycle listener failed")
+
 
 directory = Directory()
 
 
 def register_service(record, peer=None):
 	return directory.register_service(record, peer)
+
+
+def add_lifecycle_listener(listener):
+	return directory.add_lifecycle_listener(listener)
+
+
+def remove_lifecycle_listener(listener):
+	return directory.remove_lifecycle_listener(listener)
 
 
 def deregister_service(service_id, runtime_id, generation):
