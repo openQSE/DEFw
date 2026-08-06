@@ -2,7 +2,8 @@ from pathlib import Path
 from cdefw_agent import *
 from defw_common_def import *
 import defw_common_def as common
-from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound
+from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound, \
+	DEFwReserveError
 from defw_cmd import defw_exec_local_cmd
 import importlib, socket
 import cdefw_global
@@ -971,11 +972,10 @@ class ServiceSuitesBase(Suites):
 					if noinit_load and d in noinit_load:
 						sys.path.append(mod_path)
 						continue
-					if only_load and d not in only_load and \
-					   name not in ('dirsvc', 'resmgr'):
+					if only_load and d not in only_load and name != 'dirsvc':
 						continue
 					if not me.is_dirsvc() and \
-					   name in ('dirsvc', 'resmgr') and \
+					   name == 'dirsvc' and \
 					   self.noload_resmgr:
 						continue
 					mod = import_module_from_path(mod_path, path)
@@ -1517,7 +1517,7 @@ def updater_thread():
 			if event['type'] == 'shutdown':
 				shutdown = True
 				continue
-			if event['type'] in ('dirsvc', 'resmgr'):
+			if event['type'] == 'dirsvc':
 				cdefw_global.update_py_interactive_shell()
 		except queue.Empty:
 			continue
@@ -1601,17 +1601,9 @@ def connect_to_resource(service_infos, res_name):
 	if service_infos and isinstance(service_infos[0], dict):
 		return [connect_to_binding(binding) for binding in service_infos]
 
-	ep = dirsvc.reserve(me.my_endpoint(), service_infos)
-	connect_to_services(ep)
-	apis = []
-	for service_info in service_infos:
-		class_obj = getattr(service_apis[res_name], res_name)
-		api = class_obj(service_info)
-		logging.defw_core(f"API created: {res_name}: {api}")
-		apis.append(api)
-
-	logging.defw_core(f"Returning API array: {apis}")
-	return apis
+	raise DEFwReserveError(
+		"legacy DEFwServiceInfo resource reservation is removed; "
+		"use directory binding records with connect_to_binding()")
 
 def wait_dirsvc(timeout):
 	global dirsvc
@@ -1675,15 +1667,12 @@ if not cdefw_global.get_defw_initialized():
 		service = None
 		if 'Directory Service' in services:
 			service = services['Directory Service']
-		elif 'Resource Manager' in services:
-			service = services['Resource Manager']
 		if service:
 			if 'DEFW_SQL_PATH' in os.environ:
 				sql_path = os.enviorn['DEFW_SQL_PATH']
 			else:
 				sql_path = '/tmp'
 			dirsvc = service.service_classes[0](sql_path)
-			resmgr = dirsvc
 
 	# Convenience Variables
 	R = dumpGlobalTestResults

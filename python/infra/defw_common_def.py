@@ -210,7 +210,7 @@ def shutdown_service_instance(instance):
 	# live instance back to its singleton identity.
 	try:
 		import defw
-		dirsvc = getattr(defw, 'dirsvc', None) or getattr(defw, 'resmgr', None)
+		dirsvc = getattr(defw, 'dirsvc', None)
 		if dirsvc:
 			dirsvc.deregister(defw.me.my_endpoint())
 	except Exception as exc:

@@ -228,29 +228,24 @@ class WorkerThread:
 	def refresh_agents(self, *args, **kwargs):
 		try:
 			if not me.is_dirsvc():
-				if 'Directory Service' in service_apis:
-					dirsvc_key = 'Directory Service'
-					dirsvc_class = 'DEFwDirSvc'
+				if 'Directory Service' not in service_apis:
+					raise DEFwNotFound("Directory service API not loaded")
+				import defw_peers
+				from defw_agent_baseapi import query_service_info
+				dirsvc_agent = defw_peers.get_dirsvc_agent()
+				if not dirsvc_agent:
+					raise DEFwNotFound("Directory service peer not ready")
+				si = query_service_info(dirsvc_agent.get_ep(), 'DEFwDirSvc')
+				logging.defw_worker(f"Querying Directory Service returned: {si}")
+				if si:
+					defw.dirsvc = service_apis[
+						'Directory Service'].service_classes[0](si)
+					logging.defw_worker(
+						f"Created directory service API: {defw.dirsvc}")
+					from defw import updater_queue
+					updater_queue.put({'type': 'dirsvc', 'dirsvc': defw.dirsvc})
 				else:
-					dirsvc_key = 'Resource Manager'
-					dirsvc_class = 'DEFwResMgr'
-				if dirsvc_key in service_apis:
-					import defw_peers
-					from defw_agent_baseapi import query_service_info
-					dirsvc_agent = defw_peers.get_dirsvc_agent()
-					if not dirsvc_agent:
-						raise DEFwNotFound("Directory service peer not ready")
-					si = query_service_info(dirsvc_agent.get_ep(),
-							     dirsvc_class)
-					logging.defw_worker(f"Querying Directory Service returned: {si}")
-					if si:
-						defw.dirsvc = service_apis[dirsvc_key].service_classes[0](si)
-						defw.resmgr = defw.dirsvc
-						logging.defw_worker(f"Created directory service API: {defw.dirsvc}")
-						from defw import updater_queue
-						updater_queue.put({'type': 'dirsvc', 'dirsvc': defw.dirsvc})
-					else:
-						raise DEFwNotFound("Couldn't query directory service")
+					raise DEFwNotFound("Couldn't query directory service")
 		except Exception as e:
 			logging.defw_worker("Calling system up")
 			if common.is_system_up():
@@ -412,7 +407,7 @@ class WorkerThread:
 					rc = module_func(*args, **kwargs)
 			elif rpc_type == 'instantiate_class':
 				logging.defw_rpc(f'remote call to instantiate class {class_name}')
-				if me.is_dirsvc() and class_name in ('DEFwDirSvc', 'DEFwResMgr'):
+				if me.is_dirsvc() and class_name == 'DEFwDirSvc':
 					if not common.has_class_entry(class_id):
 						common.add_to_class_db(defw.dirsvc, class_id)
 				else:
@@ -439,7 +434,7 @@ class WorkerThread:
 							common.add_to_class_db(instance, class_id)
 			elif rpc_type == 'destroy_class':
 				logging.defw_rpc(f'remote call to destroy class {class_name}')
-				if me.is_dirsvc() and class_name in ('DEFwDirSvc', 'DEFwResMgr'):
+				if me.is_dirsvc() and class_name == 'DEFwDirSvc':
 					common.del_entry_from_class_db(class_id)
 				else:
 					instance = common.get_class_from_db(class_id)

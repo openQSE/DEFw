@@ -8,6 +8,7 @@ import defw
 import defw_remote
 import defw_workers
 from api_dirsvc import DEFwDirSvc
+from defw_exception import DEFwReserveError
 
 
 def expect(condition, message):
@@ -285,6 +286,16 @@ def main():
 		       "binding proxy did not receive remote module override")
 		expect(api.remote_class == 'QPM',
 		       "binding proxy did not receive remote class override")
+
+		try:
+			defw.connect_to_resource([object()], 'QPM')
+		except DEFwReserveError as exc:
+			expect("legacy DEFwServiceInfo resource reservation is removed"
+			       in str(exc),
+			       "legacy connect_to_resource rejection was not explicit")
+		else:
+			raise AssertionError(
+				"legacy connect_to_resource reservation was accepted")
 
 		remote_agent = StubRemoteAgent()
 		original_defw_get_agent = defw.get_agent
