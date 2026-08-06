@@ -4,9 +4,7 @@ from cdefw_global import *
 from defw_exception import DEFwCommError, DEFwError, DEFwInternalError, DEFwNotFound
 from cdefw_agent import defw_send_req, defw_send_rsp, defw_connect_to_service, \
 			defw_connect_to_client
-from defw import client_agents, service_agents, \
-				active_client_agents, active_service_agents, \
-				me, preferences, service_apis
+from defw import me, preferences, service_apis
 from defw_util import print_thread_stack_trace_to_logger
 import defw
 

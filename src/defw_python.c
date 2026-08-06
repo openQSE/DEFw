@@ -124,9 +124,8 @@ static defw_rc_t python_setup(void)
 
 	RUN_PYTHON_CMD("import defw\n");
 	RUN_PYTHON_CMD("from defw import me,experiments,"
-		"services,service_apis,client_agents,service_agents,"
-		"active_client_agents,active_service_agents,"
-		"dirsvc,resmgr,dumpGlobalTestResults,R,C,S,AC,AS,I,X\n"
+		"services,service_apis,dirsvc,resmgr,"
+		"dump_all_agents,dumpGlobalTestResults,R,I,X\n"
 		"from defw_workers import worker_thread\n");
 
 	return EN_DEFW_RC_OK;
@@ -159,10 +158,7 @@ defw_rc_t python_run_interactive_shell(void)
 	intro = "shell.interact('Welcome to the Distributed Execution Framework (DEFw)\\n"
 		"Convenience Functions: \\n"
 		"\tR() = dumpGlobalTestResults()\\n"
-		"\tS() = services.dump()\\n"
-		"\tC() = clients.dump()\\n"
-		"\tAS() = active_services.dump()\\n"
-		"\tAC() = active_clients.dump()\\n"
+		"\tdump_all_agents() = peer table dump\\n"
 		"\tI() = me.dump_intfs()\\n"
 		"\tX() = me.exit()\\n"
 		"Convenience Objects: \\n"

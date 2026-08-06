@@ -113,9 +113,6 @@ static inline void defw_free_state_str(char *str)
 	free(str);
 }
 
-void defw_lock_agent_lists(void);
-void defw_release_agent_lists(void);
-
 /* get_local_ip
  *   gets the local IP address being used to send messages to the master
  */
@@ -163,24 +160,6 @@ void defw_agent_enable_hb(void);
  */
 void defw_release_agent_blk(defw_agent_blk_t *agent, int dead);
 void defw_release_agent_blk_unlocked(defw_agent_blk_t *agent, int dead);
-
-/*
- * defw_get_next_service_agent
- *	Iterate over the agent blocks on the service list
- * defw_get_next_active_service_agent
- *	Iterate over the agent blocks on the service list I connected to
- */
-defw_agent_blk_t *defw_get_next_service_agent(defw_agent_blk_t *agent);
-defw_agent_blk_t *defw_get_next_active_service_agent(defw_agent_blk_t *agent);
-
-/*
- * defw_get_next_client_agent
- *	Iterate over the agent blocks on the client list
- * defw_get_next_active_client_agent
- *	Iterate over the agent blocks on the client list I connected to
- */
-defw_agent_blk_t *defw_get_next_client_agent(defw_agent_blk_t *agent);
-defw_agent_blk_t *defw_get_next_active_client_agent(defw_agent_blk_t *agent);
 
 /*
  * defw_connect_to_[service|client]

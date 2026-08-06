@@ -45,8 +45,6 @@ set(DEFW_PUBLIC_HEADERS
 	src/libdefw_connect.h)
 
 set(DEFW_SWIG_TYPEMAPS
-	swig/typemaps/compat_charpp.i
-	swig/typemaps/compat_charppp.i
 	swig/typemaps/opaque_handle.i
 	swig/typemaps/owned_string.i
 	swig/typemaps/owned_string_list_counted.i)

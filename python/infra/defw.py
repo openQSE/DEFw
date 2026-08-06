@@ -6,8 +6,7 @@ from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound
 from defw_cmd import defw_exec_local_cmd
 import importlib, socket
 import cdefw_global
-from defw_agent import DEFwClientAgents, DEFwServiceAgents, \
-	 DEFwActiveClientAgents, DEFwActiveServiceAgents, Endpoint
+from defw_agent import Endpoint
 import netifaces, random
 import atexit
 import os, subprocess, sys, yaml, fnmatch, logging, csv, uuid, io, signal
@@ -21,10 +20,6 @@ defw_path = ''
 only_load = []
 noinit_load = []
 g_yaml_blocks = []
-client_agents = None
-service_agents = None
-active_client_agents = None
-active_service_agents = None
 defw_config_yaml = None
 me = None
 dirsvc = None
@@ -1662,11 +1657,6 @@ if not cdefw_global.get_defw_initialized():
 	# Access functions can be used to dump it.
 	global_test_results = YamlGlobalTestResults()
 
-	client_agents = DEFwClientAgents()
-	service_agents = DEFwServiceAgents()
-	active_client_agents = DEFwActiveClientAgents()
-	active_service_agents = DEFwActiveServiceAgents()
-
 	# Create an instance of the directory service because we have
 	# a connection to it.
 
@@ -1697,10 +1687,6 @@ if not cdefw_global.get_defw_initialized():
 
 	# Convenience Variables
 	R = dumpGlobalTestResults
-	C = client_agents.dump
-	S = service_agents.dump
-	AC = active_client_agents.dump
-	AS = active_service_agents.dump
 	I = me.dump_intfs
 	X = me.exit
 

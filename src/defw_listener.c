@@ -287,7 +287,7 @@ static defw_rc_t process_msg_get_num_agents(char *msg, defw_agent_blk_t *agent)
 	defw_rc_t rc;
 	defw_msg_num_agents_query_t query;
 
-	query.num_agents = get_num_service_agents() + get_num_client_agents();
+	query.num_agents = defw_get_num_connection_agents();
 	rc = sendTcpMessage(agent->iFileDesc, (char *)&query, sizeof(query));
 	if (rc) {
 		PERROR("failed to send tcp message to get num agents query");
@@ -419,13 +419,17 @@ static defw_rc_t process_new_agents(fd_set *tReadSet, int *iNReady)
 	return EN_DEFW_RC_OK;
 }
 
-static int process_active_agents_helper(defw_agent_blk_t *agent, void *user_data)
+static int process_connection_agents_helper(defw_agent_blk_t *agent,
+					    void *user_data)
 {
 	connection_info_t *info = user_data;
 	int *iNReady = info->iNReady;
 	fd_set *tReadSet = info->tReadSet;
 	int hb_fd = INVALID_TCP_SOCKET, rpc_fd = INVALID_TCP_SOCKET, rc;
 	bool dead = false;
+
+	if (agent->state & DEFW_AGENT_STATE_NEW)
+		goto out;
 
 	if (*iNReady) {
 		if (FD_ISSET(agent->iFileDesc, tReadSet))
@@ -482,19 +486,13 @@ out:
 	return 1;
 }
 
-static defw_rc_t process_active_agents(fd_set *tReadSet, bool service, int *iNReady)
+static defw_rc_t process_connection_agents(fd_set *tReadSet, int *iNReady)
 {
 	connection_info_t info;
 	info.iNReady = iNReady;
 	info.tReadSet = tReadSet;
 
-	if (service) {
-		defw_active_service_agent_iter(process_active_agents_helper, &info);
-		defw_service_agent_iter(process_active_agents_helper, &info);
-	} else {
-		defw_active_client_agent_iter(process_active_agents_helper, &info);
-		defw_client_agent_iter(process_active_agents_helper, &info);
-	}
+	defw_connection_agent_iter(process_connection_agents_helper, &info);
 
 	return EN_DEFW_RC_OK;
 }
@@ -788,23 +786,15 @@ static void *defw_listener_main(void *usr_data)
 			iNReady--;
 		}
 
-		/* Let's go over the agents we know about and see if any
-		 * of them received a message. We first go over the new
-		 * list to see if we can consolidate them to existing
-		 * agents or move it to one of the other lists.
-		 *
-		 * Then we go over the service list and process messages
-		 * sent from them.
-		 *
-		 * Finally we go over the client list and process messages
-		 * sent from them
+		/* Let's go over the agent connection table and see if any
+		 * known connection received a message. New connections are
+		 * processed first so they can complete identity setup before
+		 * normal message handling.
 		 */
 		if (iNReady)
 			process_new_agents(&tReadSet, &iNReady);
 		if (iNReady)
-			process_active_agents(&tReadSet, true, &iNReady);
-		if (iNReady)
-			process_active_agents(&tReadSet, false, &iNReady);
+			process_connection_agents(&tReadSet, &iNReady);
 
 		/*
 		 * Each node can have a list of clients connected to it

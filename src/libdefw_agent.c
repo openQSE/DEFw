@@ -70,18 +70,6 @@ static void defw_agent_report_peer_lost(defw_agent_blk_t *agent,
 static void defw_agent_report_peer_removed(defw_agent_blk_t *agent,
 					   const char *reason);
 
-void defw_lock_agent_lists(void)
-{
-	defw_agent_init();
-	MUTEX_LOCK(&agent_array_mutex);
-}
-
-void defw_release_agent_lists(void)
-{
-	defw_agent_init();
-	MUTEX_UNLOCK(&agent_array_mutex);
-}
-
 static void count_lists(void)
 {
 	struct dlist_entry *tmp;
@@ -490,20 +478,6 @@ static bool defw_agent_matches_filter(defw_agent_blk_t *agent,
 	return true;
 }
 
-static bool defw_agent_matches_service_or_dirsvc(
-	defw_agent_blk_t *agent, defw_connection_direction_t direction)
-{
-	if (!agent)
-		return false;
-	if (agent->state & DEFW_AGENT_STATE_NEW)
-		return false;
-	if (direction != DEFW_CONN_DIRECTION_UNKNOWN &&
-	    agent->direction != direction)
-		return false;
-	return agent->node_type == EN_DEFW_SERVICE ||
-	       agent->node_type == EN_DEFW_RESMGR;
-}
-
 static defw_agent_blk_t *find_agent_blk_by_addr(struct sockaddr_in *addr)
 {
 	defw_agent_blk_t *agent;
@@ -545,48 +519,6 @@ static void defw_agent_iter_filtered(process_agent cb, void *user_data,
 		if (rc)
 			break;
 	}
-}
-
-static void defw_agent_iter_service_or_dirsvc(
-	process_agent cb, void *user_data, defw_connection_direction_t direction)
-{
-	struct dlist_entry *tmp;
-	defw_agent_blk_t *agent;
-	int rc;
-
-	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
-				     entry, tmp) {
-		if (!defw_agent_matches_service_or_dirsvc(agent, direction))
-			continue;
-		acquire_agent_blk(agent);
-		rc = cb(agent, user_data);
-		if (rc)
-			break;
-	}
-}
-
-void defw_service_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter_service_or_dirsvc(cb, user_data,
-					  DEFW_CONN_DIRECTION_INBOUND);
-}
-
-void defw_client_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter_filtered(cb, user_data, DEFW_CONN_DIRECTION_INBOUND,
-				 EN_DEFW_AGENT, false);
-}
-
-void defw_active_service_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter_service_or_dirsvc(cb, user_data,
-					  DEFW_CONN_DIRECTION_OUTBOUND);
-}
-
-void defw_active_client_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter_filtered(cb, user_data, DEFW_CONN_DIRECTION_OUTBOUND,
-				 EN_DEFW_AGENT, false);
 }
 
 void defw_new_agent_iter(process_agent cb, void *user_data)
@@ -639,60 +571,6 @@ defw_get_next_agent_filtered(defw_agent_blk_t *previous,
 	agent = NULL;
 out:
 	return agent;
-}
-
-static defw_agent_blk_t *
-defw_get_next_service_or_dirsvc(defw_agent_blk_t *previous,
-				defw_connection_direction_t direction)
-{
-	struct dlist_entry *entry;
-	defw_agent_blk_t *agent = NULL;
-
-	defw_agent_init();
-
-	if (previous)
-		entry = previous->entry.next;
-	else
-		entry = agent_connection_table.next;
-	if (!entry)
-		goto out;
-
-	while (entry != &agent_connection_table) {
-		agent = container_of(entry, defw_agent_blk_t, entry);
-		if (defw_agent_matches_service_or_dirsvc(agent, direction)) {
-			acquire_agent_blk(agent);
-			goto out;
-		}
-		entry = entry->next;
-	}
-
-	agent = NULL;
-out:
-	return agent;
-}
-
-defw_agent_blk_t *defw_get_next_active_service_agent(defw_agent_blk_t *agent)
-{
-	return defw_get_next_service_or_dirsvc(agent,
-					       DEFW_CONN_DIRECTION_OUTBOUND);
-}
-
-defw_agent_blk_t *defw_get_next_active_client_agent(defw_agent_blk_t *agent)
-{
-	return defw_get_next_agent_filtered(agent, DEFW_CONN_DIRECTION_OUTBOUND,
-					    EN_DEFW_AGENT, false);
-}
-
-defw_agent_blk_t *defw_get_next_service_agent(defw_agent_blk_t *agent)
-{
-	return defw_get_next_service_or_dirsvc(agent,
-					       DEFW_CONN_DIRECTION_INBOUND);
-}
-
-defw_agent_blk_t *defw_get_next_client_agent(defw_agent_blk_t *agent)
-{
-	return defw_get_next_agent_filtered(agent, DEFW_CONN_DIRECTION_INBOUND,
-					    EN_DEFW_AGENT, false);
 }
 
 defw_agent_blk_t *defw_get_next_new_agent_conn(defw_agent_blk_t *agent)
@@ -831,7 +709,7 @@ char *defw_agent_ip2str(defw_agent_blk_t *agent)
 	return inet_ntoa(agent->addr.sin_addr);
 }
 
-int get_num_agents(defw_connection_direction_t direction, defw_type_t role)
+static int get_num_agents(defw_connection_direction_t direction, defw_type_t role)
 {
 	int num = 0;
 	struct dlist_entry *tmp;
@@ -846,15 +724,14 @@ int get_num_agents(defw_connection_direction_t direction, defw_type_t role)
 	return num;
 }
 
-int get_num_service_agents(void)
+int defw_get_num_connection_agents(void)
 {
 	return get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_SERVICE) +
-	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_RESMGR);
-}
-
-int get_num_client_agents(void)
-{
-	return get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_AGENT);
+	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_RESMGR) +
+	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_AGENT) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_SERVICE) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_RESMGR) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_AGENT);
 }
 
 defw_agent_blk_t *find_agent_blk_by_pid(pid_t pid)
