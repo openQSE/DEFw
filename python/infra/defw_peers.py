@@ -3,7 +3,7 @@ import time
 import uuid
 
 import cdefw_global
-from cdefw_agent import EN_DEFW_RESMGR, EN_DEFW_SERVICE
+from cdefw_agent import EN_DEFW_DIRSVC, EN_DEFW_SERVICE
 from defw_agent import Agent, Endpoint
 
 
@@ -119,7 +119,7 @@ class PeerTable:
 			for record in self.__peers.values():
 				if not record.get('callable', False):
 					continue
-				if record.get('node_type') == EN_DEFW_RESMGR:
+				if record.get('node_type') == EN_DEFW_DIRSVC:
 					return self.__record_to_agent(record)
 			return None
 
@@ -171,10 +171,10 @@ class PeerTable:
 		parent_hostname = cdefw_global.get_parent_hostname()
 		parent_port = cdefw_global.get_parent_port()
 		if parent_name and parent_name != 'None' and node_name == parent_name:
-			return EN_DEFW_RESMGR
+			return EN_DEFW_DIRSVC
 		if parent_hostname and parent_hostname != 'None' and \
 		   hostname == parent_hostname and listen_port == parent_port:
-			return EN_DEFW_RESMGR
+			return EN_DEFW_DIRSVC
 		return None
 
 	def __find_record(self, target):

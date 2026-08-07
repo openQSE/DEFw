@@ -370,11 +370,11 @@ class WorkerThread:
 			class_name = y['rpc']['class']
 			method_name = y['rpc']['method']
 			class_id = y['rpc']['class_id']
-			#TODO: If you're the resource manager don't instantiate
+			#TODO: If you're the directory service don't instantiate
 			# a new class return the object which is already instantiated
 			# on startup. This way all the state is maintained there.
-			# We can add the resmgr instance with with key class_id.
-			# Don't ever delete the resmgr.
+			# We can add the dirsvc instance with with key class_id.
+			# Don't ever delete the dirsvc.
 			#
 			# is this true of all services? Or are services stateless. So
 			# if multiple clients connect to it, then do you want

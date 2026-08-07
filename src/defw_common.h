@@ -78,8 +78,7 @@ typedef enum {
 } defw_rc_t;
 
 typedef enum defw_type {
-	EN_DEFW_RESMGR = 1,
-	EN_DEFW_DIRSVC = EN_DEFW_RESMGR,
+	EN_DEFW_DIRSVC = 1,
 	EN_DEFW_AGENT = 2,
 	EN_DEFW_SERVICE = 3,
 	EN_DEFW_INVALID,

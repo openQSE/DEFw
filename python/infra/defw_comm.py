@@ -12,8 +12,8 @@ class Service:
 		self.agent_descriptor = agent_descriptor
 		self.service_descriptor = service_descriptor
 
-# Resource Manager reservation API takes a ServiceDescriptor object and
-# returns back a Service API object which the client can immediately call.
+# Directory Service binding API takes a ServiceDescriptor object and
+# returns endpoint metadata the client can use to construct a service API.
 # The infrastructure takes care of all the object instantiation and
 # handling of Agents, effectively abstracting away all communication
 # information from the user.

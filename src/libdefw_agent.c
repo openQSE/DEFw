@@ -727,10 +727,10 @@ static int get_num_agents(defw_connection_direction_t direction, defw_type_t rol
 int defw_get_num_connection_agents(void)
 {
 	return get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_SERVICE) +
-	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_RESMGR) +
+	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_DIRSVC) +
 	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_AGENT) +
 	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_SERVICE) +
-	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_RESMGR) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_DIRSVC) +
 	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_AGENT);
 }
 

@@ -7,7 +7,7 @@ import ipaddress, traceback, time, threading
 class Endpoint:
 	def __init__(self, addr, port, listen_port, pid, name, hostname,
 				 node_type, remote_uuid, blk_uuid=str(uuid.UUID(int=0))):
-		if not (node_type == EN_DEFW_RESMGR or \
+		if not (node_type == EN_DEFW_DIRSVC or \
 				node_type == EN_DEFW_SERVICE or \
 				node_type == EN_DEFW_AGENT):
 			raise DEFwError("Unknown node type provided: ", node_type)
@@ -31,9 +31,6 @@ class Endpoint:
 
 	def is_service(self):
 		return self.node_type == EN_DEFW_SERVICE
-
-	def is_resmgr(self):
-		return self.node_type == EN_DEFW_RESMGR
 
 	def is_dirsvc(self):
 		return self.node_type == EN_DEFW_DIRSVC
@@ -84,9 +81,6 @@ class Agent:
 
 	def get_blk_uuid(self):
 		return self.__endpoint.blk_uuid
-
-	def is_resmgr(self):
-		return self.__endpoint.is_resmgr()
 
 	def is_dirsvc(self):
 		return self.__endpoint.is_dirsvc()

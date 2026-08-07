@@ -93,7 +93,7 @@ static int test_connection_table_iteration_order(void)
 	int rc = 0;
 
 	dirsvc = make_agent("127.0.0.1", 41001,
-			    DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_RESMGR,
+			    DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_DIRSVC,
 			    "dirsvc");
 	service = make_agent("127.0.0.1", 41002,
 			     DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_SERVICE,

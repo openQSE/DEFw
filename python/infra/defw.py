@@ -24,7 +24,6 @@ g_yaml_blocks = []
 defw_config_yaml = None
 me = None
 dirsvc = None
-resmgr = None
 updater_thread = None
 
 def get_nearest_yaml_block():
@@ -951,8 +950,8 @@ class Suites(MethodInterceptor):
 				pass
 
 class ServiceSuitesBase(Suites):
-	def __init__(self, path, prefix="", disabled_methods=[], noload_resmgr=True, suite_prefix='suite_'):
-		self.noload_resmgr = noload_resmgr
+	def __init__(self, path, prefix="", disabled_methods=[], noload_dirsvc=True, suite_prefix='suite_'):
+		self.noload_dirsvc = noload_dirsvc
 		self.suite_prefix = suite_prefix
 		super().__init__(path, prefix=prefix, suite_prefix=suite_prefix, disabled_methods=disabled_methods)
 
@@ -976,7 +975,7 @@ class ServiceSuitesBase(Suites):
 						continue
 					if not me.is_dirsvc() and \
 					   name == 'dirsvc' and \
-					   self.noload_resmgr:
+					   self.noload_dirsvc:
 						continue
 					mod = import_module_from_path(mod_path, path)
 					mname = mod.svc_info['name']
@@ -1018,7 +1017,7 @@ class ServiceSuiteAPIs(ServiceSuitesBase):
 			pass
 		super().__init__(paths,
 						 prefix="api_", disabled_methods=['run', 'edit'],
-						 noload_resmgr=False, suite_prefix="api_")
+						 noload_dirsvc=False, suite_prefix="api_")
 
 class ExpSuites(Suites):
 	def __init__(self):
@@ -1083,9 +1082,6 @@ class Myself:
 			   target.addr == self.my_listenaddress() and \
 			   target.port == self.my_listenport()
 		return rc
-
-	def is_resmgr(self):
-		return self.__my_endpoint.is_resmgr()
 
 	def is_dirsvc(self):
 		return self.__my_endpoint.is_dirsvc()
@@ -1365,7 +1361,7 @@ def setup_generic_config_defaults(defw_path):
 		'DEFW_PARENT_PORT',
 	]
 	if not any(os.environ.get(var) for var in parent_vars):
-		set_default_env('DEFW_DISABLE_RESMGR', 'yes')
+		set_default_env('DEFW_DISABLE_DIRSVC', 'yes')
 
 	set_default_env('DEFW_AGENT_NAME', agent_name)
 	set_default_env('DEFW_AGENT_TYPE', 'agent')
@@ -1413,9 +1409,9 @@ def configure_defw():
 	if os.path.basename(config) == "defw_generic.yaml":
 		setup_generic_config_defaults(defw_path)
 
-	if 'DEFW_DISABLE_RESMGR' in os.environ and \
-		os.environ['DEFW_DISABLE_RESMGR'].upper() == 'YES':
-			cdefw_global.disable_resmgr()
+	if 'DEFW_DISABLE_DIRSVC' in os.environ and \
+		os.environ['DEFW_DISABLE_DIRSVC'].upper() == 'YES':
+			cdefw_global.disable_dirsvc()
 
 	cy = None
 	if os.path.isfile(config):
@@ -1424,7 +1420,7 @@ def configure_defw():
 			resolve_environment_vars(cy)
 			defw_config_yaml = cy
 			cdefw_global.set_defw_path(cy['defw']['path'])
-			if not cdefw_global.resmgr_disabled():
+			if not cdefw_global.dirsvc_disabled():
 				cdefw_global.set_parent_name(cy['defw']['parent-name'])
 				cdefw_global.set_parent_port(int(cy['defw']['parent-port']))
 				if 'parent-address' not in cy['defw'] and 'parent-hostname' not in cy['defw']:
@@ -1508,7 +1504,6 @@ def get_agent(target):
 
 def updater_thread():
 	global dirsvc
-	global resmgr
 
 	shutdown = False
 	while not shutdown:
@@ -1597,14 +1592,6 @@ def connect_to_binding(resolved_binding):
 	logging.defw_core(f"API created from binding: {binding}: {api}")
 	return api
 
-def connect_to_resource(service_infos, res_name):
-	if service_infos and isinstance(service_infos[0], dict):
-		return [connect_to_binding(binding) for binding in service_infos]
-
-	raise DEFwReserveError(
-		"legacy DEFwServiceInfo resource reservation is removed; "
-		"use directory binding records with connect_to_binding()")
-
 def wait_dirsvc(timeout):
 	global dirsvc
 
@@ -1621,16 +1608,10 @@ def wait_dirsvc(timeout):
 
 	return False
 
-def wait_resmgr(timeout):
-	return wait_dirsvc(timeout)
-
 # TODO: We need a way to disconnect endpoint
 
 def get_dirsvc():
 	return dirsvc
-
-def get_resmgr():
-	return resmgr
 
 def get_self():
 	return me
@@ -1669,7 +1650,7 @@ if not cdefw_global.get_defw_initialized():
 			service = services['Directory Service']
 		if service:
 			if 'DEFW_SQL_PATH' in os.environ:
-				sql_path = os.enviorn['DEFW_SQL_PATH']
+				sql_path = os.environ['DEFW_SQL_PATH']
 			else:
 				sql_path = '/tmp'
 			dirsvc = service.service_classes[0](sql_path)

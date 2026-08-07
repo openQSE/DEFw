@@ -27,8 +27,8 @@ fd_set g_tAllSet;
 int g_iMaxSelectFd = INVALID_TCP_SOCKET;
 static int g_iListenFd = INVALID_TCP_SOCKET;
 static bool g_bShutdown;
-bool resmgr_connected;
-bool resmgr_connect_in_progress;
+bool dirsvc_connected;
+bool dirsvc_connect_in_progress;
 pthread_mutex_t global_var_mutex;
 static int agent_notification_idx;
 static defw_agent_update_cb agent_notifications[MAX_AGENT_NOTIFICATION];
@@ -133,14 +133,14 @@ void defw_notify_peer_event(const defw_peer_event_t *event)
 	}
 }
 
-static void set_resmgr_connected(defw_rc_t status, uuid_t uuid)
+static void set_dirsvc_connected(defw_rc_t status, uuid_t uuid)
 {
 	pthread_mutex_lock(&global_var_mutex);
 	if (!status)
-		resmgr_connected = true;
+		dirsvc_connected = true;
 	else
-		resmgr_connected = false;
-	resmgr_connect_in_progress = false;
+		dirsvc_connected = false;
+	dirsvc_connect_in_progress = false;
 	pthread_mutex_unlock(&global_var_mutex);
 }
 
@@ -171,7 +171,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 
 	if (agent_type != EN_DEFW_AGENT &&
 	    agent_type != EN_DEFW_SERVICE &&
-	    agent_type != EN_DEFW_RESMGR)
+	    agent_type != EN_DEFW_DIRSVC)
 		return EN_DEFW_RC_PROTO_ERROR;
 
 	/* This is an agent on the new list. Let's see if there exists an
@@ -448,8 +448,8 @@ static int process_connection_agents_helper(defw_agent_blk_t *agent,
 			FD_CLR(hb_fd, tReadSet);
 			(*iNReady)--;
 			if (rc && rc != EN_DEFW_RC_NO_DATA_ON_SOCKET) {
-				if (agent->node_type == EN_DEFW_RESMGR)
-					set_resmgr_connected(rc, NULL);
+				if (agent->node_type == EN_DEFW_DIRSVC)
+					set_dirsvc_connected(rc, NULL);
 				PERROR("CTRL msg failure: %s: %d", defw_rc2str(rc),
 				       agent->node_type);
 				dead = true;
@@ -468,8 +468,8 @@ static int process_connection_agents_helper(defw_agent_blk_t *agent,
 			FD_CLR(rpc_fd, tReadSet);
 			(*iNReady)--;
 			if (rc && rc != EN_DEFW_RC_NO_DATA_ON_SOCKET) {
-				if (agent->node_type == EN_DEFW_RESMGR)
-					set_resmgr_connected(rc, NULL);
+				if (agent->node_type == EN_DEFW_DIRSVC)
+					set_dirsvc_connected(rc, NULL);
 				dead = true;
 				PERROR("RPC msg failure: %s: %d", defw_rc2str(rc),
 				       agent->node_type);
@@ -617,12 +617,12 @@ static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
  *   messages.  Every period of time it triggers a walk through the agent
  *   list to see if any of the HBs stopped
  *
- *   If I am an Agent, then attempt to connect to the resmgr and add an
+ *   If I am an Agent, then attempt to connect to the dirsvc and add an
  *   agent block on the list of agents. After successful connection send
  *   a regular heart beat.
  *
- *   Since the resmgr's agent block is on the list of agents and its FD is
- *   on the select FD set, then if the resmgr sends the agent a message
+ *   Since the dirsvc's agent block is on the list of agents and its FD is
+ *   on the select FD set, then if the dirsvc sends the agent a message
  *   the agent should be able to process it.
  */
 static void *defw_listener_main(void *usr_data)
@@ -638,8 +638,8 @@ static void *defw_listener_main(void *usr_data)
 	defw_listener_info_t *info;
 	bool send_hb_now = false;
 
-	resmgr_connect_in_progress = false;
-	resmgr_connected = false;
+	dirsvc_connect_in_progress = false;
+	dirsvc_connected = false;
 
 	info = (defw_listener_info_t *)usr_data;
 	if ((!info) ||
@@ -679,23 +679,23 @@ static void *defw_listener_main(void *usr_data)
 
 		defw_release_dead_list_agents();
 
-		/* Everyone registers with the resmgr, even the resmgr
+		/* Everyone registers with the dirsvc, even the dirsvc
 		 * registers with itself
 		 */
-		if (!resmgr_connected && strlen(get_parent_name()) != 0 &&
-		    !resmgr_connect_in_progress && !resmgr_disabled()) {
-			char *resmgr_name = get_parent_name();
+		if (!dirsvc_connected && strlen(get_parent_name()) != 0 &&
+		    !dirsvc_connect_in_progress && !dirsvc_disabled()) {
+			char *dirsvc_name = get_parent_name();
 			char *ip_addr = get_parent_address();
 			int port = get_parent_port();
 
-			PDEBUG("Attempting a connection on resmgr %s:%s:%d",
-			       resmgr_name, ip_addr, port);
+			PDEBUG("Attempting a connection on dirsvc %s:%s:%d",
+			       dirsvc_name, ip_addr, port);
 			rc = defw_connect_to_service(ip_addr, get_parent_port(),
 						    get_parent_name(), get_parent_hostname(),
-						    EN_DEFW_RESMGR, NULL, set_resmgr_connected);
+						    EN_DEFW_DIRSVC, NULL, set_dirsvc_connected);
 			if (rc == EN_DEFW_RC_IN_PROGRESS) {
 				pthread_mutex_lock(&global_var_mutex);
-				resmgr_connect_in_progress = true;
+				dirsvc_connect_in_progress = true;
 				pthread_mutex_unlock(&global_var_mutex);
 			}
 		}
@@ -849,7 +849,7 @@ defw_rc_t defw_spawn_listener(pthread_t *id)
 	pthread_mutex_init(&global_var_mutex, NULL);
 
 	/*
-	 * Spawn the listener thread if we are in resmgr Mode.
+	 * Spawn the listener thread if we are in dirsvc Mode.
 	 * The listener thread listens for Heart beats and deals
 	 * with maintaining the health of the agents. If an agent
 	 * dies and comes back again, then we know how to deal

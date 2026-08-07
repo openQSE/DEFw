@@ -411,7 +411,7 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_AGENT_NAME` | Unique name for the current DEFw instance. |
 | `DEFW_AGENT_TYPE` | Runtime role: `agent`, `service`, or `dirsvc`. |
 | `DEFW_CONFIG_PATH` | Path to the YAML configuration file consumed at startup. |
-| `DEFW_DISABLE_RESMGR` | Legacy compatibility switch. Prefer directory-service startup and binding paths for new deployments. |
+| `DEFW_DISABLE_DIRSVC` | Disable automatic directory-service connection for helper or standalone processes. |
 | `DEFW_EXPECTED_AGENT_COUNT` | Expected number of agents for deployments that wait on a full set of workers. |
 | `DEFW_EXPERIMENT_PORT_BASE` | Base port range used when experiments spawn additional service processes. |
 | `DEFW_EXTERNAL_EXPERIMENTS_PATH` | Extra search path for out-of-tree experiment modules. |

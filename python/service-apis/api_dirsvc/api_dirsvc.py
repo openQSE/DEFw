@@ -1,7 +1,34 @@
-from api_resmgr.api_resmgr import DEFwResMgr
+from defw_remote import BaseRemote
 
 
-class DEFwDirSvc(DEFwResMgr):
+class DEFwDirSvc(BaseRemote):
+	def __init__(self, si):
+		super().__init__(service_info=si)
+
+	def register_agent(self, client_ep, context=None):
+		pass
+
+	def deregister_agent(self, ep):
+		pass
+
+	def ready_agents(self):
+		pass
+
+	def wait_agents(self, timeout=10):
+		pass
+
+	def get_agents_context(self):
+		pass
+
+	def wait_agents_deregistration(self, timeout=10):
+		pass
+
+	def register_service(self, service_ep, context=None):
+		pass
+
+	def deregister(self, agent_ep):
+		pass
+
 	def resolve_services(self, **filters):
 		pass
 

@@ -46,7 +46,7 @@ cleanup_log_dir=0
 : "${DEFW_PARENT_HOSTNAME:=None}"
 : "${DEFW_PARENT_PORT:=0}"
 : "${DEFW_PARENT_NAME:=None}"
-: "${DEFW_DISABLE_RESMGR:=yes}"
+: "${DEFW_DISABLE_DIRSVC:=yes}"
 : "${DEFW_LOG_LEVEL:=error}"
 : "${DEFW_PY_LOGLEVEL:=critical}"
 if [[ -z "${DEFW_LOG_DIR:-}" ]]; then
@@ -79,7 +79,7 @@ export DEFW_PARENT_ADDR
 export DEFW_PARENT_HOSTNAME
 export DEFW_PARENT_PORT
 export DEFW_PARENT_NAME
-export DEFW_DISABLE_RESMGR
+export DEFW_DISABLE_DIRSVC
 export DEFW_LOG_LEVEL
 export DEFW_PY_LOGLEVEL
 export DEFW_LOG_DIR

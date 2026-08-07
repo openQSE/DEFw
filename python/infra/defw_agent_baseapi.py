@@ -16,7 +16,7 @@ class BaseAgentAPI(BaseRemote):
 		from defw import services
 		svcs = []
 		for svc, module in services:
-			if module.svc_info['name'] in ('Directory Service', 'Resource Manager'):
+			if module.svc_info['name'] == 'Directory Service':
 				if defw.me.is_dirsvc():
 					svcs.append(defw.dirsvc.query())
 				continue

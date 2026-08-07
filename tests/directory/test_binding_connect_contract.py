@@ -151,7 +151,7 @@ def make_resolved_binding(client_module, client_class, service_module,
 
 def exercise_active_service_registration():
 	import defw_directory
-	import svc_resmgr.svc_resmgr as svc_resmgr
+	import svc_dirsvc.svc_dirsvc as svc_dirsvc
 
 	runtime_id = str(uuid.uuid4())
 	peer_handle = str(uuid.uuid4())
@@ -175,24 +175,24 @@ def exercise_active_service_registration():
 		other_runtime_id: other_service_info,
 	}
 	originals = {
-		'me': svc_resmgr.me,
-		'get_agent': svc_resmgr.get_agent,
-		'BaseAgentAPI': svc_resmgr.BaseAgentAPI,
+		'me': svc_dirsvc.me,
+		'get_agent': svc_dirsvc.get_agent,
+		'BaseAgentAPI': svc_dirsvc.BaseAgentAPI,
 		'directory': defw_directory.directory,
 	}
 	try:
 		defw_directory.directory = defw_directory.Directory()
-		svc_resmgr.me = StubMe(self_ep)
-		svc_resmgr.get_agent = lambda ep: (
+		svc_dirsvc.me = StubMe(self_ep)
+		svc_dirsvc.get_agent = lambda ep: (
 			StubAgent(ep) if ep.get_id() in service_infos else None
 		)
-		svc_resmgr.BaseAgentAPI = \
+		svc_dirsvc.BaseAgentAPI = \
 			lambda target: StubServiceAPI([
 				service_infos[target.remote_uuid]
 			])
 
-		manager = svc_resmgr.DEFwResMgr('/tmp')
-		records = manager.register_service(service_ep, context={
+		directory = svc_dirsvc.DEFwDirSvc('/tmp')
+		records = directory.register_service(service_ep, context={
 			'service_id': 'qpm-iqm-ornl',
 			'service_type': 'qfw.qpm',
 			'api_bindings': [
@@ -220,7 +220,7 @@ def exercise_active_service_registration():
 		       "registered service did not preserve legacy type")
 		expect(record['legacy_capabilities'] == 0b0100,
 		       "registered service did not preserve legacy capabilities")
-		manager.register_service(other_service_ep, context={
+		directory.register_service(other_service_ep, context={
 			'service_id': 'qpm-sim-ornl',
 			'service_type': 'qfw.qpm',
 			'api_bindings': [
@@ -242,19 +242,19 @@ def exercise_active_service_registration():
 		)
 		expect(len(matches) == 1,
 		       "normal discovery did not return active startup record")
-		legacy_matches = manager.get_services(
-			'QPM', svc_type=0b0001, svc_caps=0b0100
+		filtered_matches = directory.resolve_services(
+			service_name='QPM', svc_type=0b0001, svc_caps=0b0100
 		)
-		expect(len(legacy_matches) == 1,
-		       f"legacy type/capability filter returned {legacy_matches!r}")
-		expect(legacy_matches[0]['service_record']['properties']['backend']
+		expect(len(filtered_matches) == 1,
+		       f"type/capability filter returned {filtered_matches!r}")
+		expect(filtered_matches[0]['service_record']['properties']['backend']
 		       == 'iqm',
-		       "legacy type/capability filter selected wrong QPM")
+		       "type/capability filter selected wrong QPM")
 	finally:
 		defw_directory.directory = originals['directory']
-		svc_resmgr.me = originals['me']
-		svc_resmgr.get_agent = originals['get_agent']
-		svc_resmgr.BaseAgentAPI = originals['BaseAgentAPI']
+		svc_dirsvc.me = originals['me']
+		svc_dirsvc.get_agent = originals['get_agent']
+		svc_dirsvc.BaseAgentAPI = originals['BaseAgentAPI']
 
 
 def main():
@@ -286,16 +286,6 @@ def main():
 		       "binding proxy did not receive remote module override")
 		expect(api.remote_class == 'QPM',
 		       "binding proxy did not receive remote class override")
-
-		try:
-			defw.connect_to_resource([object()], 'QPM')
-		except DEFwReserveError as exc:
-			expect("legacy DEFwServiceInfo resource reservation is removed"
-			       in str(exc),
-			       "legacy connect_to_resource rejection was not explicit")
-		else:
-			raise AssertionError(
-				"legacy connect_to_resource reservation was accepted")
 
 		remote_agent = StubRemoteAgent()
 		original_defw_get_agent = defw.get_agent

@@ -124,7 +124,7 @@ static defw_rc_t python_setup(void)
 
 	RUN_PYTHON_CMD("import defw\n");
 	RUN_PYTHON_CMD("from defw import me,experiments,"
-		"services,service_apis,dirsvc,resmgr,"
+		"services,service_apis,dirsvc,"
 		"dump_all_agents,dumpGlobalTestResults,R,I,X\n"
 		"from defw_workers import worker_thread\n");
 
