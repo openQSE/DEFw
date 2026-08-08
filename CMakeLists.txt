@@ -539,6 +539,8 @@ install(FILES ${DEFW_PUBLIC_HEADERS}
 	DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/defw")
 install(DIRECTORY python/
 	DESTINATION python)
+install(FILES python/config/defw_generic.yaml
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/defw/config")
 install(DIRECTORY python/infra/
 	DESTINATION "${DEFW_PYTHON_INSTALL_DIR}"
 	FILES_MATCHING PATTERN "*.py")
