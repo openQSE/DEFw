@@ -12,6 +12,9 @@ from time import sleep
 
 import cdefw_global
 import defw
+import defw_peers
+from cdefw_agent import EN_DEFW_SERVICE
+from defw_agent import Endpoint
 from defw_exception import DEFwError, DEFwReserveError
 
 SYSTEM_UP_TIMEOUT = 40
@@ -33,8 +36,11 @@ class DEFwServiceProcess:
 	stderr_path: str
 	stdout_handle: object
 	stderr_handle: object
+	service_endpoint: object = None
+	directory_records: object = None
 
 	def shutdown(self, timeout=5):
+		self.deregister()
 		if self.pid > 0:
 			try:
 				os.kill(self.pid, signal.SIGTERM)
@@ -58,6 +64,25 @@ class DEFwServiceProcess:
 			self.process.wait(timeout=timeout)
 		self.stdout_handle.close()
 		self.stderr_handle.close()
+
+	def deregister(self):
+		if not self.directory_records:
+			return
+		try:
+			dirsvc = defw_get_directory_service(timeout=1)
+			for record in list(self.directory_records):
+				dirsvc.deregister_service(
+					record['service_id'],
+					record['runtime_id'],
+					record['generation'],
+				)
+		except Exception:
+			logging.defw_stacktrace(
+				f"Failed to deregister spawned service {self.agent_name}",
+				exc_info=True,
+			)
+		finally:
+			self.directory_records = []
 
 
 def _normalize_service_specs(services):
@@ -141,6 +166,13 @@ def _wait_for_daemon_pid(log_dir, timeout=5):
 
 
 def _resolve_defwp():
+	override = os.environ.get('DEFW_EXECUTABLE')
+	if override:
+		path = Path(override).resolve()
+		if path.is_file() and os.access(path, os.X_OK):
+			return str(path)
+		raise DEFwError(f"DEFW_EXECUTABLE is not executable: {path}")
+
 	defw_path = Path(cdefw_global.get_defw_path())
 	for candidate in [
 		defw_path / 'src' / 'defwp',
@@ -151,6 +183,55 @@ def _resolve_defwp():
 		if candidate.is_file() and os.access(candidate, os.X_OK):
 			return str(candidate)
 	raise DEFwError(f"Unable to find defwp under {defw_path}")
+
+
+def _endpoint_from_peer_record(record, agent_name, listen_port):
+	if not record.get('callable'):
+		return None
+	endpoint = record.get('endpoint') or {}
+	if endpoint.get('node_name') != agent_name:
+		return None
+	try:
+		if int(endpoint.get('listen_port', 0)) != int(listen_port):
+			return None
+	except (TypeError, ValueError):
+		return None
+	runtime_id = record.get('runtime_id') or endpoint.get('runtime_id')
+	peer_handle = record.get('peer_handle')
+	if not runtime_id or not peer_handle:
+		return None
+	return Endpoint(
+		endpoint.get('address', ''),
+		endpoint.get('port', 0),
+		endpoint.get('listen_port', 0),
+		endpoint.get('pid', 0),
+		endpoint.get('node_name', agent_name),
+		endpoint.get('hostname', ''),
+		endpoint.get('node_type') or record.get('node_type') or
+		EN_DEFW_SERVICE,
+		runtime_id,
+		blk_uuid=peer_handle,
+	)
+
+
+def _wait_for_service_endpoint(agent_name, listen_port,
+			       timeout=SYSTEM_UP_TIMEOUT):
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		for record in defw_peers.snapshot().values():
+			endpoint = _endpoint_from_peer_record(
+				record, agent_name, listen_port)
+			if endpoint:
+				return endpoint
+		time.sleep(0.1)
+	raise DEFwReserveError(
+		f"Timed out waiting for service {agent_name} to connect")
+
+
+def _register_spawned_service(agent_name, listen_port):
+	service_endpoint = _wait_for_service_endpoint(agent_name, listen_port)
+	dirsvc = defw_get_directory_service()
+	return service_endpoint, dirsvc.register_service(service_endpoint)
 
 
 def defw_spawn_services(services):
@@ -194,6 +275,13 @@ def defw_spawn_services(services):
 			stdout_handle=stdout_handle,
 			stderr_handle=stderr_handle,
 		)
+		try:
+			handle.service_endpoint, handle.directory_records = (
+				_register_spawned_service(agent_name, listen_port)
+			)
+		except Exception:
+			handle.shutdown()
+			raise
 		_SPAWNED_SERVICES.append(handle)
 		spawned.append(handle)
 

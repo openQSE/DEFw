@@ -254,7 +254,7 @@ run_pure_python:
 			PERROR("Interprter failed to execute: %d\n", rc);
 		if (listener_started)
 			defw_listener_shutdown();
-		goto out;
+		return rc;
 	}
 
 	if (g_defw_cfg.shell == EN_DEFW_RUN_INTERACTIVE)
@@ -301,7 +301,6 @@ run_pure_python:
 		return EN_DEFW_RC_ERR_THREAD_STARTUP;
 	}
 
-out:
 	if (local_argv)
 		free(local_argv);
 	if (g_defw_cfg.safe_shutdown && listener_started)
