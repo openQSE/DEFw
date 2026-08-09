@@ -129,12 +129,10 @@ class DEFwDirSvc:
 			self.__service_info_capability(service_info))
 		qpm_type = context.get(
 			'qpm_type',
-			properties.get('qpm_type', context.get('legacy_type', cap_type)))
+			properties.get('qpm_type', cap_type))
 		qpm_capabilities = context.get(
 			'qpm_capabilities',
-			properties.get(
-				'qpm_capabilities',
-				context.get('legacy_capabilities', caps)))
+			properties.get('qpm_capabilities', caps))
 		properties.setdefault('qpm_type', qpm_type)
 		properties.setdefault('qpm_capabilities', qpm_capabilities)
 		service_id = (
@@ -168,8 +166,6 @@ class DEFwDirSvc:
 			'capability': capability,
 			'qpm_type': qpm_type,
 			'qpm_capabilities': qpm_capabilities,
-			'legacy_type': cap_type,
-			'legacy_capabilities': caps,
 		}
 
 	def __register_directory_entries(self, db, agent_id, context=None):

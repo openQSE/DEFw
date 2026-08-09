@@ -125,11 +125,10 @@ class Directory:
 				generation = 1
 
 			properties = dict(record.get('properties') or {})
-			qpm_type = _record_bits(
-				record, 'qpm_type', 'legacy_type', 'type')
+			qpm_type = _record_bits(record, 'qpm_type', 'type')
 			qpm_capabilities = _record_bits(
 				record, 'qpm_capabilities', 'qpm_capability',
-				'legacy_capabilities', 'caps')
+				'caps')
 			if qpm_type != -1:
 				properties.setdefault('qpm_type', qpm_type)
 			if qpm_capabilities != -1:
@@ -149,9 +148,6 @@ class Directory:
 					'capability': dict(record.get('capability') or {}),
 					'qpm_type': qpm_type,
 					'qpm_capabilities': qpm_capabilities,
-					'legacy_type': record.get('legacy_type', qpm_type),
-					'legacy_capabilities': record.get(
-						'legacy_capabilities', qpm_capabilities),
 					'state': STATE_UP,
 					'last_seen': now,
 					'state_changed_at': now,
@@ -285,20 +281,19 @@ class Directory:
 			value = filters.get(field)
 			if value and record.get(field) != value:
 				return False
-		svc_type = _filter_bits(
-			filters, 'qpm_type', 'svc_type', 'legacy_type')
+		svc_type = _filter_bits(filters, 'qpm_type', 'svc_type')
 		svc_caps = _filter_bits(
 			filters, 'qpm_capabilities', 'qpm_capability',
-			'qpm_cap', 'svc_caps', 'legacy_capabilities')
+			'qpm_cap', 'svc_caps')
 		if not self.__legacy_bits_match(
-			_record_bits(record, 'qpm_type', 'legacy_type', 'type'),
+			_record_bits(record, 'qpm_type', 'type'),
 			svc_type
 		):
 			return False
 		if not self.__legacy_bits_match(
 			_record_bits(
 				record, 'qpm_capabilities', 'qpm_capability',
-				'legacy_capabilities', 'caps'),
+				'caps'),
 			svc_caps
 		):
 			return False
