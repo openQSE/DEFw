@@ -260,7 +260,6 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	if (uuid_is_null(agent->id.remote_uuid)) {
 		uuid_copy(agent->id.remote_uuid, hb->agent_id.remote_uuid);
 		learned_runtime_id = true;
-		defw_agent_updated_notify();
 	} else if (uuid_compare(agent->id.remote_uuid,
 				hb->agent_id.remote_uuid)) {
 		PERROR("Agent %s has changed it's uuid. Has it restarted?",

@@ -3,7 +3,7 @@ import defw_common_def as common
 from cdefw_global import *
 from defw_exception import DEFwCommError, DEFwError, DEFwInternalError, DEFwNotFound
 from cdefw_agent import defw_send_req, defw_send_rsp, defw_connect_to_service, \
-			defw_connect_to_client
+			defw_connect_to_client, EN_DEFW_DIRSVC
 from defw import me, preferences, service_apis
 from defw_util import print_thread_stack_trace_to_logger
 import defw
@@ -20,9 +20,23 @@ PEER_EVENT_TYPES = {
 	'PEER_LOST',
 	'PEER_REMOVED',
 }
+ZERO_UUID = str(uuid.UUID(int=0))
 
 peer_events = deque()
 peer_events_lock = threading.Lock()
+
+
+def is_ready_dirsvc_peer(event, peer_record):
+	if event.get('event_type') != 'PEER_READY':
+		return False
+	if me.is_dirsvc() or getattr(defw, 'dirsvc', None):
+		return False
+	if not peer_record or not peer_record.get('callable', False):
+		return False
+	if peer_record.get('node_type') != EN_DEFW_DIRSVC:
+		return False
+	runtime_id = peer_record.get('runtime_id')
+	return bool(runtime_id and runtime_id != ZERO_UUID)
 
 
 def get_instance_mode(module):
@@ -265,11 +279,15 @@ class WorkerThread:
 		import defw_peers
 		import defw_directory
 
-		defw_peers.apply_event(event)
+		peer_record = defw_peers.apply_event(event)
 		defw_directory.apply_peer_event(event)
 		with peer_events_lock:
 			peer_events.append(event)
 		logging.defw_worker(f"Recorded peer lifecycle event: {event}")
+		if is_ready_dirsvc_peer(event, peer_record):
+			logging.defw_worker(
+				"Directory service peer is ready; refreshing agents")
+			self.spawn_temporary_worker(self.refresh_agents)
 
 	# This thread should never do any blocking calls
 	def handle(self):
