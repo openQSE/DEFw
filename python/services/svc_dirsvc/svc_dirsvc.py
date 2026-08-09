@@ -121,8 +121,22 @@ class DEFwDirSvc:
 		context = context if isinstance(context, dict) else {}
 		service_name = service_info.get_service_name()
 		properties = self.__service_info_properties(service_info)
+		if isinstance(context.get('properties'), dict):
+			context_properties = dict(context.get('properties') or {})
+			context_properties.update(properties)
+			properties = context_properties
 		capability, cap_type, caps = (
 			self.__service_info_capability(service_info))
+		qpm_type = context.get(
+			'qpm_type',
+			properties.get('qpm_type', context.get('legacy_type', cap_type)))
+		qpm_capabilities = context.get(
+			'qpm_capabilities',
+			properties.get(
+				'qpm_capabilities',
+				context.get('legacy_capabilities', caps)))
+		properties.setdefault('qpm_type', qpm_type)
+		properties.setdefault('qpm_capabilities', qpm_capabilities)
 		service_id = (
 			context.get('service_id') or
 			service_info.get_property(
@@ -152,6 +166,8 @@ class DEFwDirSvc:
 			'selector': selector,
 			'properties': properties,
 			'capability': capability,
+			'qpm_type': qpm_type,
+			'qpm_capabilities': qpm_capabilities,
 			'legacy_type': cap_type,
 			'legacy_capabilities': caps,
 		}

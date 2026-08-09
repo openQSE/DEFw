@@ -47,6 +47,36 @@ def _normalize_bindings(record):
 	return [dict(binding) for binding in bindings]
 
 
+def _record_bits(record, *names):
+	for name in names:
+		value = record.get(name)
+		if value not in (-1, None):
+			return value
+	properties = record.get('properties') or {}
+	for name in names:
+		value = properties.get(name)
+		if value not in (-1, None):
+			return value
+	capability = record.get('capability') or {}
+	if 'type' in names:
+		value = capability.get('type')
+		if value not in (-1, None):
+			return value
+	if 'caps' in names:
+		value = capability.get('caps')
+		if value not in (-1, None):
+			return value
+	return -1
+
+
+def _filter_bits(filters, *names):
+	for name in names:
+		value = filters.get(name)
+		if value not in (-1, None):
+			return value
+	return -1
+
+
 class Directory:
 	def __init__(self, retention_seconds=DEFAULT_RETENTION_SECONDS):
 		self.__records = {}
@@ -94,6 +124,17 @@ class Directory:
 			else:
 				generation = 1
 
+			properties = dict(record.get('properties') or {})
+			qpm_type = _record_bits(
+				record, 'qpm_type', 'legacy_type', 'type')
+			qpm_capabilities = _record_bits(
+				record, 'qpm_capabilities', 'qpm_capability',
+				'legacy_capabilities', 'caps')
+			if qpm_type != -1:
+				properties.setdefault('qpm_type', qpm_type)
+			if qpm_capabilities != -1:
+				properties.setdefault(
+					'qpm_capabilities', qpm_capabilities)
 			registered = {
 				'service_id': service_id,
 				'service_name': record.get('service_name') or service_id,
@@ -104,12 +145,13 @@ class Directory:
 					'endpoint': dict(record.get('endpoint') or peer.get('endpoint') or {}),
 					'api_bindings': _normalize_bindings(record),
 					'selector': dict(record.get('selector') or {}),
-					'properties': dict(record.get('properties') or {}),
+					'properties': properties,
 					'capability': dict(record.get('capability') or {}),
-					'legacy_type': record.get('legacy_type', -1),
+					'qpm_type': qpm_type,
+					'qpm_capabilities': qpm_capabilities,
+					'legacy_type': record.get('legacy_type', qpm_type),
 					'legacy_capabilities': record.get(
-						'legacy_capabilities', -1
-					),
+						'legacy_capabilities', qpm_capabilities),
 					'state': STATE_UP,
 					'last_seen': now,
 					'state_changed_at': now,
@@ -243,20 +285,21 @@ class Directory:
 			value = filters.get(field)
 			if value and record.get(field) != value:
 				return False
-		svc_type = filters.get('svc_type',
-				       filters.get('legacy_type',
-						   filters.get('qpm_type', -1)))
-		svc_caps = filters.get('svc_caps',
-				       filters.get('legacy_capabilities',
-						   filters.get('qpm_capability',
-							       filters.get('qpm_cap',
-									   -1))))
+		svc_type = _filter_bits(
+			filters, 'qpm_type', 'svc_type', 'legacy_type')
+		svc_caps = _filter_bits(
+			filters, 'qpm_capabilities', 'qpm_capability',
+			'qpm_cap', 'svc_caps', 'legacy_capabilities')
 		if not self.__legacy_bits_match(
-			record.get('legacy_type', -1), svc_type
+			_record_bits(record, 'qpm_type', 'legacy_type', 'type'),
+			svc_type
 		):
 			return False
 		if not self.__legacy_bits_match(
-			record.get('legacy_capabilities', -1), svc_caps
+			_record_bits(
+				record, 'qpm_capabilities', 'qpm_capability',
+				'legacy_capabilities', 'caps'),
+			svc_caps
 		):
 			return False
 		properties = filters.get('properties') or {}
