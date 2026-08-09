@@ -56,6 +56,29 @@ def is_ready_dirsvc_peer(event, peer_record):
 	return bool(runtime_id and runtime_id != ZERO_UUID)
 
 
+def is_disconnected_dirsvc_peer(event):
+	if event.get('event_type') not in ('PEER_LOST', 'PEER_REMOVED'):
+		return False
+	if me.is_dirsvc():
+		return False
+	return event.get('node_type') == EN_DEFW_DIRSVC
+
+
+def dirsvc_peer_still_ready(peer_record):
+	import defw_peers
+
+	if not peer_record:
+		return False
+	current = defw_peers.get_peer(peer_record.get('peer_handle'))
+	if not current or not current.get('callable', False):
+		return False
+	if current.get('node_type') != EN_DEFW_DIRSVC:
+		return False
+	if current.get('runtime_id') != peer_record.get('runtime_id'):
+		return False
+	return True
+
+
 def _peer_endpoint(peer_record):
 	endpoint = peer_record.get('endpoint') or {}
 	return Endpoint(
@@ -235,6 +258,11 @@ class WorkerRequest:
 								f"{event.type2str([event.ev_type])}")
 				elif event.ev_type == WorkerEvent.EVENT_SHUTDOWN:
 					return None
+				elif event.ev_type == WorkerEvent.EVENT_PEER_LIFECYCLE:
+					raise DEFwCommError(
+						"Peer disconnected during request: "
+						f"{event.peer_event.get('event_type')} "
+						f"{event.peer_event.get('reason', '')}")
 				else:
 					return event.msg_yaml
 		raise DEFwCommError('Response timed out')
@@ -265,15 +293,67 @@ class WorkerThread:
 		with self.req_db_lock:
 			self.req_db[work_request.get_uuid()] = work_request
 
+	def _work_request_targets_peer(self, work_request, event):
+		if work_request.wr_type != WorkerRequest.WR_SEND_MSG:
+			return False
+		remote_uuid = event.get('remote_runtime_id') or ''
+		if remote_uuid and str(work_request.remote_uuid) != remote_uuid:
+			return False
+		peer_handle = event.get('peer_handle') or ''
+		blk_uuid = str(work_request.blk_uuid or '')
+		return not peer_handle or blk_uuid in ('', ZERO_UUID, peer_handle)
+
+	def fail_pending_peer_requests(self, event):
+		if event.get('event_type') not in ('PEER_LOST', 'PEER_REMOVED'):
+			return
+		failed = []
+		with self.req_db_lock:
+			for req_uuid, work_request in list(self.req_db.items()):
+				if not self._work_request_targets_peer(work_request, event):
+					continue
+				failed.append(work_request)
+				del self.req_db[req_uuid]
+		for work_request in failed:
+			if not work_request.queue:
+				continue
+			work_request.queue.put(
+				WorkerEvent(
+					WorkerEvent.EVENT_PEER_LIFECYCLE,
+					peer_event=event))
+
+	def clear_dirsvc_peer(self, event):
+		if not is_disconnected_dirsvc_peer(event):
+			return
+		import defw_peers
+
+		if defw_peers.get_dirsvc_agent():
+			return
+		if not getattr(defw, 'dirsvc', None):
+			return
+		defw.dirsvc = None
+		logging.defw_worker(
+			f"Cleared directory service API after {event.get('event_type')}")
+		from defw import updater_queue
+		updater_queue.put({'type': 'dirsvc', 'dirsvc': None})
+
 	def bind_dirsvc_peer(self, peer_record):
 		try:
 			if me.is_dirsvc() or getattr(defw, 'dirsvc', None):
 				return
 			if 'Directory Service' not in service_apis:
 				raise DEFwNotFound("Directory service API not loaded")
+			if not dirsvc_peer_still_ready(peer_record):
+				logging.defw_worker(
+					"Skipping stale directory service peer binding")
+				return
 			service_info = _dirsvc_service_info(peer_record)
-			defw.dirsvc = service_apis[
+			dirsvc = service_apis[
 				'Directory Service'].service_classes[0](service_info)
+			if not dirsvc_peer_still_ready(peer_record):
+				logging.defw_worker(
+					"Discarding directory service API for stale peer")
+				return
+			defw.dirsvc = dirsvc
 			logging.defw_worker(
 				f"Created directory service API: {defw.dirsvc}")
 			from defw import updater_queue
@@ -297,6 +377,8 @@ class WorkerThread:
 		with peer_events_lock:
 			peer_events.append(event)
 		logging.defw_worker(f"Recorded peer lifecycle event: {event}")
+		self.fail_pending_peer_requests(event)
+		self.clear_dirsvc_peer(event)
 		if is_ready_dirsvc_peer(event, peer_record):
 			logging.defw_worker(
 				"Directory service peer is ready; binding dirsvc API")

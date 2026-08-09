@@ -126,6 +126,60 @@ static void set_dirsvc_connected(defw_rc_t status, uuid_t uuid)
 	pthread_mutex_unlock(&global_var_mutex);
 }
 
+static void listener_suspend_fd(int fd)
+{
+	if (fd == INVALID_TCP_SOCKET)
+		return;
+
+	pthread_mutex_lock(&global_var_mutex);
+	FD_CLR(fd, &g_tAllSet);
+	pthread_mutex_unlock(&global_var_mutex);
+}
+
+static void listener_resume_fd(int fd)
+{
+	if (fd == INVALID_TCP_SOCKET)
+		return;
+
+	pthread_mutex_lock(&global_var_mutex);
+	FD_SET(fd, &g_tAllSet);
+	if (fd > g_iMaxSelectFd)
+		g_iMaxSelectFd = fd;
+	pthread_mutex_unlock(&global_var_mutex);
+}
+
+static bool listener_peer_ready_pending(defw_agent_blk_t *agent)
+{
+	bool ready;
+
+	if (!agent)
+		return false;
+
+	pthread_mutex_lock(&agent->state_mutex);
+	ready = !uuid_is_null(agent->id.remote_uuid) &&
+		(agent->state & DEFW_AGENT_CNTRL_CHANNEL_CONNECTED) &&
+		(agent->state & DEFW_AGENT_RPC_CHANNEL_CONNECTED) &&
+		!(agent->state & DEFW_AGENT_PEER_READY_REPORTED);
+	pthread_mutex_unlock(&agent->state_mutex);
+
+	return ready;
+}
+
+static void listener_report_peer_ready(defw_agent_blk_t *agent,
+				       const char *reason)
+{
+	defw_rc_t rc;
+
+	if (!listener_peer_ready_pending(agent))
+		return;
+
+	gettimeofday(&agent->last_control_activity, NULL);
+	defw_agent_report_peer_ready(agent, reason);
+	rc = defw_send_hb(agent);
+	if (rc != EN_DEFW_RC_OK)
+		PERROR("Failed to send peer identity: %s", defw_rc2str(rc));
+}
+
 void defw_listener_shutdown(void)
 {
 	g_bShutdown = true;
@@ -150,7 +204,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	defw_msg_session_t *ses = (defw_msg_session_t *)msg;
 	defw_agent_blk_t *existing;
 	defw_type_t agent_type = ntohl(ses->node_type);
-	defw_rc_t rc;
+	bool rpc_setup = ntohl(ses->rpc_setup) != 0;
 
 	if (agent_type != EN_DEFW_AGENT &&
 	    agent_type != EN_DEFW_SERVICE &&
@@ -161,20 +215,28 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	 * agent that has the session information */
 	existing = defw_find_agent_by_uuid_passive(ses->agent_id.remote_uuid);
 	if (existing) {
-		existing->iRpcFd = agent->iFileDesc;
 		PDEBUG("existing = %p, agent = %p", existing, agent);
-		PDEBUG("Second connection on an existing agent (%s) is the RPC connection: %d",
-		       existing->name, existing->iRpcFd);
-		if (ses->rpc_setup)
+		if (rpc_setup) {
+			existing->iRpcFd = agent->iFileDesc;
+			PDEBUG("Second connection on an existing agent (%s) is the RPC connection: %d",
+			       existing->name, existing->iRpcFd);
 			set_agent_state(existing, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
-		if (ses->rpc_setup) {
-			gettimeofday(&existing->last_control_activity, NULL);
-			defw_agent_report_peer_ready(existing, "inbound-rpc-ready");
-			rc = defw_send_hb(existing);
-			if (rc != EN_DEFW_RC_OK)
-				PERROR("Failed to send peer identity: %s",
-				       defw_rc2str(rc));
+		} else {
+			existing->iFileDesc = agent->iFileDesc;
+			existing->addr = agent->addr;
+			PDEBUG("Second connection on an existing agent (%s) is the CTRL connection: %d",
+			       existing->name, existing->iFileDesc);
+			set_agent_state(existing, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
+			set_agent_state(existing, DEFW_AGENT_STATE_ALIVE);
+			unset_agent_state(existing, DEFW_AGENT_STATE_NEW);
+			gettimeofday(&existing->time_stamp, NULL);
+			existing->last_control_activity = existing->time_stamp;
+			existing->last_heartbeat_rx = existing->time_stamp;
+			listener_resume_fd(existing->iRpcFd);
 		}
+		listener_report_peer_ready(
+			existing,
+			rpc_setup ? "inbound-rpc-ready" : "inbound-control-ready");
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
 		/* agent should never be the same as existing.
@@ -185,12 +247,6 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		assert(agent != existing);
 		defw_release_agent_blk(agent, false);
 		return EN_DEFW_RC_OK;
-	}
-
-	if (ses->rpc_setup) {
-		PERROR("Protocol Error. Setup of RPC before CNTRL");
-		//defw_release_agent_blk(agent, true);
-		return EN_DEFW_RC_PROTO_ERROR;
 	}
 
 	if (agent_type == EN_DEFW_AGENT)
@@ -207,14 +263,23 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	agent->hostname[MAX_STR_LEN-1] = '\0';
 	strncpy(agent->name, ses->node_name, MAX_STR_LEN);
 	agent->name[MAX_STR_LEN-1] = '\0';
-	set_agent_state(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
-	set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
-	unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	gettimeofday(&agent->time_stamp, NULL);
 	agent->last_control_activity = agent->time_stamp;
 	agent->last_heartbeat_rx = agent->time_stamp;
-	PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
-		agent->name, agent->iFileDesc);
+	if (rpc_setup) {
+		agent->iRpcFd = agent->iFileDesc;
+		agent->iFileDesc = INVALID_TCP_SOCKET;
+		listener_suspend_fd(agent->iRpcFd);
+		set_agent_state(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
+		PDEBUG("First connection on a new agent (%s) is the RPC connection: %d",
+		       agent->name, agent->iRpcFd);
+	} else {
+		set_agent_state(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
+		set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
+		unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
+		PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
+		       agent->name, agent->iFileDesc);
+	}
 
 	return EN_DEFW_RC_OK;
 }
