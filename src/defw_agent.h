@@ -51,8 +51,10 @@ typedef struct defw_peer_event_s {
 	char remote_runtime_id[DEFW_PEER_UUID_STR_LEN];
 	int is_self;
 	char transport_context[MAX_SHORT_STR_LEN];
+	char connection_direction[MAX_SHORT_STR_LEN];
 	char address[MAX_SHORT_STR_LEN];
 	unsigned int listen_port;
+	unsigned int node_type;
 	char node_name[MAX_STR_LEN];
 	char hostname[MAX_STR_LEN];
 	unsigned int pid;
@@ -94,6 +96,9 @@ typedef struct defw_agent_blk_s {
 	defw_connection_direction_t direction;
 	defw_connection_lifecycle_t lifecycle;
 	defw_heartbeat_mode_t heartbeat_mode;
+	defw_connect_status connect_complete_cb;
+	uuid_t connect_req_uuid;
+	int connect_req_pending;
 	int is_loopback;
 	struct timeval last_heartbeat_tx;
 	struct timeval last_heartbeat_rx;

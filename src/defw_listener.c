@@ -202,7 +202,6 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		 */
 		assert(agent != existing);
 		defw_release_agent_blk(agent, false);
-		defw_agent_updated_notify();
 		return EN_DEFW_RC_OK;
 	}
 
@@ -280,8 +279,7 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	agent->last_heartbeat_rx = agent->time_stamp;
 	agent->last_control_activity = agent->time_stamp;
 	if (learned_runtime_id)
-		defw_agent_report_peer_ready_update(agent,
-						    "remote-identity-ready");
+		defw_agent_report_peer_ready(agent, "remote-identity-ready");
 
 	return EN_DEFW_RC_OK;
 }

@@ -139,8 +139,7 @@ class WorkerRequest:
 			self.expected_events = [WorkerEvent.EVENT_INCOMING_RESPONSE]
 		elif wr_type == WorkerRequest.WR_CONNECT:
 			self.ep = ep
-			self.expected_events = [WorkerEvent.EVENT_CONN_COMPLETE,
-									WorkerEvent.EVENT_REFRESH]
+			self.expected_events = [WorkerEvent.EVENT_CONN_COMPLETE]
 		else:
 			raise DEFwInternalError(f"Unexpected WR type {wr_type}")
 		self.blocking = blocking
@@ -195,10 +194,10 @@ class WorkerRequest:
 					if ev == WorkerEvent.EVENT_CONN_COMPLETE:
 						with self.expected_events_lock:
 							self.expected_events.remove(ev)
-						if len(self.expected_events) > 0:
-							self.connect_status = event.connect_status
-						else:
-							raise DEFwCommError("Expected to wait for a REFRESH COMPLETE")
+							remaining = len(self.expected_events)
+						self.connect_status = event.connect_status
+						if remaining == 0:
+							return self.connect_status
 					else:
 						raise DEFwCommError(f"expected REFRESH_COMPLETE got " \
 								f"{event.type2str([event.ev_type])}")

@@ -222,6 +222,55 @@ static bool defw_agent_state_is_set(defw_agent_blk_t *agent, unsigned int state)
 	return set;
 }
 
+static bool defw_agent_ready_to_report(defw_agent_blk_t *agent)
+{
+	if (!agent)
+		return false;
+	if (uuid_is_null(agent->id.remote_uuid))
+		return false;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED))
+		return false;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED))
+		return false;
+
+	return true;
+}
+
+static void defw_agent_complete_pending_connect(defw_agent_blk_t *agent,
+						defw_rc_t status)
+{
+	defw_connect_status cb = NULL;
+	uuid_t req_uuid;
+	bool pending = false;
+
+	if (!agent)
+		return;
+
+	MUTEX_LOCK(&agent->state_mutex);
+	if (agent->connect_req_pending && agent->connect_complete_cb) {
+		cb = agent->connect_complete_cb;
+		uuid_copy(req_uuid, agent->connect_req_uuid);
+		agent->connect_req_pending = 0;
+		pending = true;
+	}
+	MUTEX_UNLOCK(&agent->state_mutex);
+
+	if (pending)
+		cb(status, req_uuid);
+}
+
+static const char *defw_connection_direction2str(defw_connection_direction_t dir)
+{
+	switch (dir) {
+	case DEFW_CONN_DIRECTION_INBOUND:
+		return "INBOUND";
+	case DEFW_CONN_DIRECTION_OUTBOUND:
+		return "OUTBOUND";
+	default:
+		return "";
+	}
+}
+
 static void defw_agent_fill_peer_event(defw_agent_blk_t *agent,
 				       defw_peer_event_type_t event_type,
 				       const char *reason,
@@ -244,10 +293,14 @@ static void defw_agent_fill_peer_event(defw_agent_blk_t *agent,
 	agent->is_loopback = event->is_self;
 	strncpy(event->transport_context, "defw-tcp",
 		sizeof(event->transport_context) - 1);
+	strncpy(event->connection_direction,
+		defw_connection_direction2str(agent->direction),
+		sizeof(event->connection_direction) - 1);
 	addr = inet_ntoa(agent->addr.sin_addr);
 	if (addr)
 		strncpy(event->address, addr, sizeof(event->address) - 1);
 	event->listen_port = agent->listen_port;
+	event->node_type = agent->node_type;
 	strncpy(event->node_name, agent->name, sizeof(event->node_name) - 1);
 	strncpy(event->hostname, agent->hostname, sizeof(event->hostname) - 1);
 	event->pid = (unsigned int) agent->pid;
@@ -264,15 +317,17 @@ void defw_agent_report_peer_ready(defw_agent_blk_t *agent, const char *reason)
 
 	if (!agent)
 		return;
+	if (!defw_agent_ready_to_report(agent))
+		return;
 	if (!defw_agent_mark_once(agent, DEFW_AGENT_PEER_READY_REPORTED))
 		return;
 
 	defw_agent_fill_peer_event(agent, DEFW_PEER_READY, reason, &event);
 	agent->lifecycle = DEFW_CONN_LIFECYCLE_READY;
-	agent->heartbeat_mode = (uuid_is_null(agent->id.remote_uuid) ||
-				 event.is_self) ? DEFW_HEARTBEAT_NONE :
+	agent->heartbeat_mode = event.is_self ? DEFW_HEARTBEAT_NONE :
 				 DEFW_HEARTBEAT_REMOTE;
 	defw_notify_peer_event(&event);
+	defw_agent_complete_pending_connect(agent, EN_DEFW_RC_OK);
 }
 
 void defw_agent_report_peer_ready_update(defw_agent_blk_t *agent,
@@ -282,8 +337,10 @@ void defw_agent_report_peer_ready_update(defw_agent_blk_t *agent,
 
 	if (!agent)
 		return;
-	if (!defw_agent_state_is_set(agent, DEFW_AGENT_PEER_READY_REPORTED))
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_PEER_READY_REPORTED)) {
+		defw_agent_report_peer_ready(agent, reason);
 		return;
+	}
 	if (uuid_is_null(agent->id.remote_uuid))
 		return;
 
@@ -913,6 +970,9 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	agent->direction = DEFW_CONN_DIRECTION_OUTBOUND;
 	agent->node_type = type;
 	agent->lifecycle = DEFW_CONN_LIFECYCLE_HANDSHAKE;
+	agent->connect_complete_cb = status_cb;
+	uuid_copy(agent->connect_req_uuid, req_uuid);
+	agent->connect_req_pending = 1;
 
 	/* establish two connection: CTRL and RPC */
 	agent->iFileDesc = establishTCPConnection(
@@ -972,8 +1032,6 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	pthread_mutex_unlock(&global_var_mutex);
 
 	defw_agent_report_peer_ready(agent, "outbound-rpc-ready");
-
-	status_cb(EN_DEFW_RC_OK, req_uuid);
 
 	free(user_data);
 

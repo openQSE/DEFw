@@ -516,10 +516,14 @@ static PyObject *python_peer_event_to_dict(const defw_peer_event_t *event)
 	    py_dict_set_bool(py_event, "is_self", event->is_self) ||
 	    py_dict_set_string(py_event, "transport_context",
 			       event->transport_context) ||
+	    py_dict_set_string(py_event, "connection_direction",
+			       event->connection_direction) ||
+	    py_dict_set_long(py_event, "node_type", event->node_type) ||
 	    py_dict_set_string(py_event, "reason", event->reason) ||
 	    py_dict_set_double(py_event, "timestamp", timestamp) ||
 	    py_dict_set_string(endpoint, "address", event->address) ||
 	    py_dict_set_long(endpoint, "listen_port", event->listen_port) ||
+	    py_dict_set_long(endpoint, "node_type", event->node_type) ||
 	    py_dict_set_string(endpoint, "node_name", event->node_name) ||
 	    py_dict_set_string(endpoint, "hostname", event->hostname) ||
 	    py_dict_set_long(endpoint, "pid", event->pid) ||

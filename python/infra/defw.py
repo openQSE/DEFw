@@ -3,7 +3,7 @@ from cdefw_agent import *
 from defw_common_def import *
 import defw_common_def as common
 from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound, \
-	DEFwReserveError
+	DEFwReserveError, DEFwAgentNotFound
 from defw_cmd import defw_exec_local_cmd
 import importlib, socket
 import cdefw_global
@@ -1576,7 +1576,11 @@ def connect_to_services(endpoints):
 		)
 		defw_workers.connect_to_agent(wr)
 		agent = _wait_for_bound_agent(connect_ep)
-		connected.append(agent.get_ep() if agent else connect_ep)
+		if not agent:
+			raise DEFwAgentNotFound(
+				f"Connection completed without a bound peer: {connect_ep}"
+			)
+		connected.append(agent.get_ep())
 		logging.defw_core(f"Connection request finished: {connect_ep}")
 	return connected
 
