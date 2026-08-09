@@ -168,6 +168,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	defw_msg_session_t *ses = (defw_msg_session_t *)msg;
 	defw_agent_blk_t *existing;
 	defw_type_t agent_type = ntohl(ses->node_type);
+	defw_rc_t rc;
 
 	if (agent_type != EN_DEFW_AGENT &&
 	    agent_type != EN_DEFW_SERVICE &&
@@ -187,6 +188,10 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		if (ses->rpc_setup) {
 			gettimeofday(&existing->last_control_activity, NULL);
 			defw_agent_report_peer_ready(existing, "inbound-rpc-ready");
+			rc = defw_send_hb(existing);
+			if (rc != EN_DEFW_RC_OK)
+				PERROR("Failed to send peer identity: %s",
+				       defw_rc2str(rc));
 		}
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
