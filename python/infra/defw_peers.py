@@ -12,6 +12,7 @@ PEER_DEGRADED = 'PEER_DEGRADED'
 PEER_LOST = 'PEER_LOST'
 PEER_REMOVED = 'PEER_REMOVED'
 ZERO_UUID = str(uuid.UUID(int=0))
+CONNECTION_OUTBOUND = 'OUTBOUND'
 
 
 def _endpoint_value(endpoint, attr, default=None):
@@ -39,8 +40,10 @@ class PeerTable:
 		self.__pending_targets = {}
 		self.__lock = threading.Lock()
 
-	def remember_connect_target(self, endpoint):
+	def remember_connect_target(self, endpoint, connection_direction=None):
 		record = self.__endpoint_record(endpoint)
+		if connection_direction:
+			record['connection_direction'] = connection_direction
 		runtime_id = _endpoint_value(endpoint, 'remote_uuid', '')
 		signature = _endpoint_signature(endpoint)
 		with self.__lock:
@@ -77,9 +80,12 @@ class PeerTable:
 				})
 				endpoint = merged_endpoint
 
-			runtime_id = event.get('remote_runtime_id') or \
+			event_runtime_id = event.get('remote_runtime_id') or ''
+			runtime_id = event_runtime_id or \
 				(current or {}).get('runtime_id', '')
 			pending = self.__pending_for(runtime_id, endpoint)
+			if not runtime_id:
+				runtime_id = pending.get('runtime_id', '')
 			record = dict(current or {})
 			record.update({
 				'peer_handle': peer_handle,
@@ -87,6 +93,9 @@ class PeerTable:
 				'endpoint': endpoint,
 				'transport_context': event.get('transport_context') or
 					record.get('transport_context', ''),
+				'connection_direction': event.get('connection_direction') or
+					record.get('connection_direction') or
+					pending.get('connection_direction', ''),
 				'is_self': bool(event.get('is_self', False)),
 				'last_seen': timestamp,
 					'node_type': event.get('node_type') or
@@ -107,9 +116,14 @@ class PeerTable:
 			self.__peers[peer_handle] = record
 			return record.copy()
 
-	def get_agent(self, target):
+	def get_agent(self, target, connection_direction=None,
+		      allow_runtime_fallback=False):
 		with self.__lock:
-			record = self.__find_record(target)
+			record = self.__find_record(
+				target,
+				connection_direction=connection_direction,
+				allow_runtime_fallback=allow_runtime_fallback,
+			)
 			if not record:
 				return None
 			return self.__record_to_agent(record, target)
@@ -177,22 +191,34 @@ class PeerTable:
 			return EN_DEFW_DIRSVC
 		return None
 
-	def __find_record(self, target):
+	def __find_record(self, target, connection_direction=None,
+		      allow_runtime_fallback=False):
 		peer_handle = _endpoint_value(target, 'blk_uuid', '')
-		runtime_id = _endpoint_value(target, 'remote_uuid', '')
 		if peer_handle and peer_handle != ZERO_UUID:
 			record = self.__peers.get(peer_handle)
-			if self.__record_matches(record, target):
+			if self.__record_matches(
+				record,
+				target,
+				connection_direction=connection_direction,
+			):
 				return record
-			return None
+			if not allow_runtime_fallback:
+				return None
 
 		for record in self.__peers.values():
-			if self.__record_matches(record, target):
+			if self.__record_matches(
+				record,
+				target,
+				connection_direction=connection_direction,
+			):
 				return record
 		return None
 
-	def __record_matches(self, record, target):
+	def __record_matches(self, record, target, connection_direction=None):
 		if not record or not record.get('callable', False):
+			return False
+		if connection_direction and \
+		   record.get('connection_direction') != connection_direction:
 			return False
 		runtime_id = _endpoint_value(target, 'remote_uuid', '')
 		if runtime_id:
@@ -233,12 +259,19 @@ def apply_event(event):
 	return peer_table.apply_event(event)
 
 
-def remember_connect_target(endpoint):
-	return peer_table.remember_connect_target(endpoint)
+def remember_connect_target(endpoint, connection_direction=None):
+	return peer_table.remember_connect_target(
+		endpoint,
+		connection_direction=connection_direction,
+	)
 
 
-def get_agent(target):
-	return peer_table.get_agent(target)
+def get_agent(target, connection_direction=None, allow_runtime_fallback=False):
+	return peer_table.get_agent(
+		target,
+		connection_direction=connection_direction,
+		allow_runtime_fallback=allow_runtime_fallback,
+	)
 
 
 def get_dirsvc_agent():

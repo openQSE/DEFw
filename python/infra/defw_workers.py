@@ -566,7 +566,10 @@ def connect_to_agent(wr):
 		worker_thread.add_work_request(wr)
 
 	import defw_peers
-	defw_peers.remember_connect_target(wr.ep)
+	defw_peers.remember_connect_target(
+		wr.ep,
+		connection_direction=defw_peers.CONNECTION_OUTBOUND,
+	)
 
 	if wr.ep.is_service():
 		func = defw_connect_to_service

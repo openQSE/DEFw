@@ -1497,10 +1497,14 @@ def dump_all_agents():
 
 	defw_peers.dump()
 
-def get_agent(target):
+def get_agent(target, connection_direction=None, allow_runtime_fallback=False):
 	import defw_peers
 
-	return defw_peers.get_agent(target)
+	return defw_peers.get_agent(
+		target,
+		connection_direction=connection_direction,
+		allow_runtime_fallback=allow_runtime_fallback,
+	)
 
 def updater_thread():
 	global dirsvc
@@ -1517,17 +1521,64 @@ def updater_thread():
 		except queue.Empty:
 			continue
 
+def _zero_blk_endpoint(endpoint):
+	return Endpoint(
+		endpoint.addr,
+		endpoint.port,
+		endpoint.listen_port,
+		endpoint.pid,
+		endpoint.name,
+		endpoint.hostname,
+		endpoint.node_type,
+		endpoint.remote_uuid,
+		blk_uuid=str(uuid.UUID(int=0)),
+	)
+
+
+def _find_bound_agent(endpoint):
+	import defw_peers
+
+	agent = defw_peers.get_agent(endpoint)
+	if agent:
+		return agent
+	return defw_peers.get_agent(
+		endpoint,
+		connection_direction=defw_peers.CONNECTION_OUTBOUND,
+		allow_runtime_fallback=True,
+	)
+
+
+def _wait_for_bound_agent(endpoint, timeout=5):
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		agent = _find_bound_agent(endpoint)
+		if agent:
+			return agent
+		time.sleep(0.1)
+	return None
+
+
 def connect_to_services(endpoints):
 	import defw_workers
 
+	connected = []
 	for ep in endpoints:
+		agent = _find_bound_agent(ep)
+		if agent:
+			connected.append(agent.get_ep())
+			logging.defw_core(f"Reusing connection for endpoint: {ep}")
+			continue
+		connect_ep = _zero_blk_endpoint(ep)
 		wr = defw_workers.WorkerRequest(
 			defw_workers.WorkerRequest.WR_CONNECT,
-			remote_uuid=ep.remote_uuid,
-			ep=ep
+			remote_uuid=connect_ep.remote_uuid,
+			ep=connect_ep
 		)
 		defw_workers.connect_to_agent(wr)
-		logging.defw_core(f"Connection request finished: {ep}")
+		agent = _wait_for_bound_agent(connect_ep)
+		connected.append(agent.get_ep() if agent else connect_ep)
+		logging.defw_core(f"Connection request finished: {connect_ep}")
+	return connected
 
 class _BindingServiceInfo:
 	def __init__(self, endpoint, binding):
@@ -1578,17 +1629,22 @@ def connect_to_binding(resolved_binding):
 
 	record = resolved_binding['service_record']
 	binding = resolved_binding['selected_binding']
+	transport_binding = record.get('transport_binding') or {}
+	peer_handle = record.get('peer_handle') or \
+		transport_binding.get('peer_handle') or str(uuid.UUID(int=0))
 	ep = Endpoint(record['endpoint']['address'], 0,
 		      record['endpoint']['listen_port'],
 		      record['endpoint']['pid'],
 		      record['endpoint']['node_name'],
 		      record['endpoint']['hostname'],
 		      EN_DEFW_SERVICE,
-		      record['runtime_id'])
-	connect_to_services([ep])
+		      record['runtime_id'],
+		      blk_uuid=peer_handle)
+	bound_endpoints = connect_to_services([ep])
+	bound_ep = bound_endpoints[0] if bound_endpoints else ep
 	module = importlib.import_module(binding['client_module'])
 	class_obj = getattr(module, binding['client_class'])
-	api = _instantiate_binding_client(class_obj, ep, binding)
+	api = _instantiate_binding_client(class_obj, bound_ep, binding)
 	logging.defw_core(f"API created from binding: {binding}: {api}")
 	return api
 
