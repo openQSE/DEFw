@@ -408,7 +408,6 @@ static void close_agent_connection_unlocked(defw_agent_blk_t *agent)
 		agent->iRpcFd = -1;
 	}
 
-	defw_agent_updated_notify();
 }
 
 static void close_agent_connection(defw_agent_blk_t *agent)

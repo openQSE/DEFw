@@ -71,7 +71,6 @@ struct dlist_entry {
 };
 #endif
 
-typedef defw_rc_t (*defw_agent_update_cb)(void);
 typedef void (*defw_connect_status)(defw_rc_t status, uuid_t uuid);
 typedef defw_rc_t (*defw_peer_event_cb)(const defw_peer_event_t *event);
 

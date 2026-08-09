@@ -30,8 +30,6 @@ static bool g_bShutdown;
 bool dirsvc_connected;
 bool dirsvc_connect_in_progress;
 pthread_mutex_t global_var_mutex;
-static int agent_notification_idx;
-static defw_agent_update_cb agent_notifications[MAX_AGENT_NOTIFICATION];
 static int connect_complete_idx;
 static defw_connect_status connect_notifications[MAX_AGENT_NOTIFICATION];
 static int peer_event_idx;
@@ -65,15 +63,6 @@ static defw_msg_process_fn_t msg_process_tbl[EN_MSG_TYPE_MAX] = {
 	[EN_MSG_TYPE_SESSION_INFO] = process_msg_session_info,
 };
 
-defw_rc_t defw_register_agent_update_notification_cb(defw_agent_update_cb cb)
-{
-	if (agent_notification_idx >= MAX_AGENT_NOTIFICATION)
-		return EN_DEFW_RC_FAIL;
-	agent_notifications[agent_notification_idx] = cb;
-	agent_notification_idx++;
-	return EN_DEFW_RC_OK;
-}
-
 defw_rc_t defw_register_msg_callback(defw_msg_type_t msg_type, defw_msg_process_fn_t cb)
 {
 	if (msg_type >= EN_MSG_TYPE_MAX || msg_type < EN_MSG_TYPE_HB)
@@ -102,13 +91,6 @@ defw_rc_t defw_register_peer_event_callback(defw_peer_event_cb cb)
 	peer_event_notifications[peer_event_idx] = cb;
 	peer_event_idx++;
 	return EN_DEFW_RC_OK;
-}
-
-void defw_agent_updated_notify(void)
-{
-	int i;
-	for (i = 0; i < agent_notification_idx; i++)
-		agent_notifications[i]();
 }
 
 void defw_notify_connect_complete(defw_rc_t status, uuid_t uuid)

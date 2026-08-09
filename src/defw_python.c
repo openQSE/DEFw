@@ -20,11 +20,6 @@ defw_rc_t python_handle_request(char *rpc, char *uuid);
 defw_rc_t python_handle_response(char *rpc, char *uuid);
 defw_rc_t python_handle_event(char *rpc, char *uuid);
 defw_rc_t python_handle_peer_event(const defw_peer_event_t *event);
-/*
- * python_refresh_agent
- *   After an agent connects trigger python to refresh its state
- */
-defw_rc_t python_refresh_agent(void);
 
 #define RUN_PYTHON_CMD(cmd) {						\
 	int py_rc;							\
@@ -334,7 +329,6 @@ defw_rc_t python_init(char *pname)
 	defw_register_msg_callback(EN_MSG_TYPE_PY_REQUEST, process_msg_py_request);
 	defw_register_msg_callback(EN_MSG_TYPE_PY_RESPONSE, process_msg_py_response);
 	defw_register_msg_callback(EN_MSG_TYPE_PY_EVENT, process_msg_py_event);
-	defw_register_agent_update_notification_cb(python_refresh_agent);
 	defw_register_connect_complete(py_connect_status);
 	defw_register_peer_event_callback(python_handle_peer_event);
 
@@ -418,7 +412,6 @@ int python_check_version()
 typedef enum python_callbacks {
 	EN_PY_CB_REQUEST,
 	EN_PY_CB_RESPONSE,
-	EN_PY_CB_REFRESH,
 	EN_PY_CB_CONNECT,
 	EN_PY_CB_EVENT,
 	EN_PY_CB_MAX,
@@ -427,7 +420,6 @@ typedef enum python_callbacks {
 char *python_callback_str[EN_PY_CB_MAX] = {
 	"put_request",
 	"put_response",
-	"put_refresh",
 	"put_connect_complete",
 	"put_event",
 };
@@ -676,11 +668,6 @@ defw_rc_t python_handle_response(char *msg, char *uuid)
 defw_rc_t python_handle_event(char *msg, char *uuid)
 {
 	return python_handle_op(msg, EN_DEFW_RC_OK, uuid, EN_PY_CB_EVENT);
-}
-
-defw_rc_t python_refresh_agent(void)
-{
-	return python_handle_op(NULL, EN_DEFW_RC_OK, NULL, EN_PY_CB_REFRESH);
 }
 
 defw_rc_t python_handle_connect_complete(defw_rc_t status, char *uuid)
