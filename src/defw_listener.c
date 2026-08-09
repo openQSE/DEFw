@@ -390,14 +390,24 @@ int process_new_agents_helper(defw_agent_blk_t *agent, void *user_data)
 		    hb_fd == INVALID_TCP_SOCKET) {
 			PERROR("agent connection is unexpected (%p) hb_fd = %d, rpc_fd = %d",
 			       agent, hb_fd, rpc_fd);
+			strncpy(agent->failure_reason, "unexpected-new-agent-rpc",
+				sizeof(agent->failure_reason) - 1);
+			defw_release_agent_blk(agent, true);
+			FD_CLR(rpc_fd, tReadSet);
+			(*iNReady)--;
 			goto out;
 		}
 
 		if (hb_fd != INVALID_TCP_SOCKET) {
 			rc = process_agent_message(agent, hb_fd);
 			FD_CLR(hb_fd, tReadSet);
-			if (rc)
+			if (rc) {
 				PERROR("Error processing new agent: %s", defw_rc2str(rc));
+				strncpy(agent->failure_reason,
+					"new-agent-message-failure",
+					sizeof(agent->failure_reason) - 1);
+				defw_release_agent_blk(agent, true);
+			}
 			(*iNReady)--;
 		}
 	}
