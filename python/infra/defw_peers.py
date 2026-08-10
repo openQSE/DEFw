@@ -35,6 +35,32 @@ def _endpoint_signature(endpoint):
 	)
 
 
+def _endpoint_listen_port(endpoint):
+	try:
+		return int(_endpoint_value(endpoint, 'listen_port', 0) or 0)
+	except (TypeError, ValueError):
+		return 0
+
+
+def _endpoint_node_type(endpoint):
+	return _endpoint_value(endpoint, 'node_type', None)
+
+
+def _endpoint_hostname(endpoint):
+	return _endpoint_value(endpoint, 'hostname', '') or \
+		_endpoint_value(endpoint, 'address',
+				_endpoint_value(endpoint, 'addr', ''))
+
+
+def _endpoint_runtime_id(endpoint):
+	runtime_id = _endpoint_value(endpoint, 'remote_uuid', '')
+	if not runtime_id:
+		runtime_id = _endpoint_value(endpoint, 'runtime_id', '')
+	if runtime_id == ZERO_UUID:
+		return ''
+	return runtime_id or ''
+
+
 class PeerTable:
 	def __init__(self):
 		self.__peers = {}
@@ -45,7 +71,7 @@ class PeerTable:
 		record = self.__endpoint_record(endpoint)
 		if connection_direction:
 			record['connection_direction'] = connection_direction
-		runtime_id = _endpoint_value(endpoint, 'remote_uuid', '')
+		runtime_id = _endpoint_runtime_id(endpoint)
 		signature = _endpoint_signature(endpoint)
 		with self.__lock:
 			if runtime_id:
@@ -165,7 +191,7 @@ class PeerTable:
 			'port': _endpoint_value(endpoint, 'port', 0),
 			'node_type': _endpoint_value(endpoint, 'node_type',
 						     EN_DEFW_SERVICE),
-			'runtime_id': _endpoint_value(endpoint, 'remote_uuid', ''),
+			'runtime_id': _endpoint_runtime_id(endpoint),
 		}
 
 	def __pending_for(self, runtime_id, endpoint):
@@ -221,14 +247,32 @@ class PeerTable:
 		if connection_direction and \
 		   record.get('connection_direction') != connection_direction:
 			return False
-		runtime_id = _endpoint_value(target, 'remote_uuid', '')
+		runtime_id = _endpoint_runtime_id(target)
 		if runtime_id:
 			return runtime_id == record.get('runtime_id')
 		signature = _endpoint_signature(target)
 		record_signature = _endpoint_signature(record.get('endpoint'))
-		if not runtime_id and signature and record_signature != signature:
+		if not runtime_id and signature and record_signature != signature and \
+		   not self.__record_matches_transport_endpoint(record, target):
 			return False
 		return True
+
+	def __record_matches_transport_endpoint(self, record, target):
+		endpoint = record.get('endpoint') or {}
+		if _endpoint_listen_port(endpoint) != _endpoint_listen_port(target):
+			return False
+		if not _endpoint_listen_port(endpoint):
+			return False
+		target_node_type = _endpoint_node_type(target)
+		record_node_type = record.get('node_type') or \
+			_endpoint_node_type(endpoint)
+		if target_node_type and record_node_type and \
+		   target_node_type != record_node_type:
+			return False
+		target_hostname = _endpoint_hostname(target)
+		record_hostname = _endpoint_hostname(endpoint)
+		return bool(target_hostname and record_hostname and
+			    target_hostname == record_hostname)
 
 	def __record_to_agent(self, record, target=None):
 		endpoint = record.get('endpoint') or {}

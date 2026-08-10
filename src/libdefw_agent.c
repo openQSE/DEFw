@@ -474,10 +474,10 @@ void defw_release_agent_blk(defw_agent_blk_t *agent, int dead)
 
 void defw_release_agent_conn(defw_agent_blk_t *agent)
 {
-	assert(agent->state == DEFW_AGENT_STATE_NEW);
 	MUTEX_LOCK(&agent_array_mutex);
 	MUTEX_LOCK(&agent->state_mutex);
 
+	assert(agent->state & DEFW_AGENT_STATE_NEW);
 	assert(agent->ref_count > 0);
 	agent->ref_count--;
 

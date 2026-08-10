@@ -1636,12 +1636,19 @@ def connect_to_binding(resolved_binding):
 	transport_binding = record.get('transport_binding') or {}
 	peer_handle = record.get('peer_handle') or \
 		transport_binding.get('peer_handle') or str(uuid.UUID(int=0))
+	node_type = record.get('node_type') or \
+		(record.get('endpoint') or {}).get('node_type')
+	if node_type is None:
+		if record.get('service_type') == 'defw.dirsvc':
+			node_type = EN_DEFW_DIRSVC
+		else:
+			node_type = EN_DEFW_SERVICE
 	ep = Endpoint(record['endpoint']['address'], 0,
 		      record['endpoint']['listen_port'],
 		      record['endpoint']['pid'],
 		      record['endpoint']['node_name'],
 		      record['endpoint']['hostname'],
-		      EN_DEFW_SERVICE,
+		      node_type,
 		      record['runtime_id'],
 		      blk_uuid=peer_handle)
 	bound_endpoints = connect_to_services([ep])
