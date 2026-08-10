@@ -47,7 +47,7 @@ def _normalize_bindings(record):
 	return [dict(binding) for binding in bindings]
 
 
-def _record_bits(record, *names):
+def _record_value(record, *names):
 	for name in names:
 		value = record.get(name)
 		if value not in (-1, None):
@@ -57,24 +57,24 @@ def _record_bits(record, *names):
 		value = properties.get(name)
 		if value not in (-1, None):
 			return value
-	capability = record.get('capability') or {}
-	if 'type' in names:
-		value = capability.get('type')
-		if value not in (-1, None):
-			return value
-	if 'caps' in names:
-		value = capability.get('caps')
-		if value not in (-1, None):
-			return value
 	return -1
 
 
-def _filter_bits(filters, *names):
-	for name in names:
-		value = filters.get(name)
-		if value not in (-1, None):
-			return value
-	return -1
+def _bits_match(record_bits, requested_bits):
+	if requested_bits in (-1, None):
+		return True
+	if record_bits in (-1, None):
+		return False
+	try:
+		record_bits = int(record_bits)
+		requested_bits = int(requested_bits)
+	except (TypeError, ValueError):
+		return False
+	if requested_bits == 0:
+		return True
+	if record_bits == 0:
+		return False
+	return (requested_bits & record_bits) == requested_bits
 
 
 class Directory:
@@ -125,10 +125,9 @@ class Directory:
 				generation = 1
 
 			properties = dict(record.get('properties') or {})
-			qpm_type = _record_bits(record, 'qpm_type', 'type')
-			qpm_capabilities = _record_bits(
-				record, 'qpm_capabilities', 'qpm_capability',
-				'caps')
+			qpm_type = _record_value(record, 'qpm_type')
+			qpm_capabilities = _record_value(
+				record, 'qpm_capabilities', 'qpm_capability')
 			if qpm_type != -1:
 				properties.setdefault('qpm_type', qpm_type)
 			if qpm_capabilities != -1:
@@ -281,20 +280,16 @@ class Directory:
 			value = filters.get(field)
 			if value and record.get(field) != value:
 				return False
-		svc_type = _filter_bits(filters, 'qpm_type', 'svc_type')
-		svc_caps = _filter_bits(
-			filters, 'qpm_capabilities', 'qpm_capability',
-			'qpm_cap', 'svc_caps')
-		if not self.__legacy_bits_match(
-			_record_bits(record, 'qpm_type', 'type'),
-			svc_type
+		if not _bits_match(
+			_record_value(record, 'qpm_type'),
+			filters.get('qpm_type', -1)
 		):
 			return False
-		if not self.__legacy_bits_match(
-			_record_bits(
-				record, 'qpm_capabilities', 'qpm_capability',
-				'caps'),
-			svc_caps
+		qpm_capabilities = filters.get(
+			'qpm_capabilities', filters.get('qpm_capability', -1))
+		if not _bits_match(
+			_record_value(record, 'qpm_capabilities', 'qpm_capability'),
+			qpm_capabilities
 		):
 			return False
 		properties = filters.get('properties') or {}
@@ -324,13 +319,6 @@ class Directory:
 			if value and binding.get(dst) != value:
 				return False
 		return True
-
-	def __legacy_bits_match(self, record_bits, requested_bits):
-		if requested_bits in (-1, None):
-			return True
-		if record_bits in (-1, None):
-			return False
-		return (requested_bits & record_bits) == requested_bits
 
 	def __notify_lifecycle(self, event_type, service_record=None,
 			       peer_event=None, reason=None, details=None):

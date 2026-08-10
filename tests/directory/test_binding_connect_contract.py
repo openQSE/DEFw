@@ -164,11 +164,15 @@ def exercise_active_service_registration():
 				       properties={
 					       'backend': 'iqm',
 					       'service_type': 'qfw.qpm',
+					       'qpm_type': 0b0011,
+					       'qpm_capabilities': 0b0100,
 				       })
 	other_service_info = StubServiceInfo('QPM', cap_type=0b1000, caps=0b0010,
 					     properties={
 						     'backend': 'sim',
 						     'service_type': 'qfw.qpm',
+						     'qpm_type': 0b1000,
+						     'qpm_capabilities': 0b0010,
 					     })
 	service_infos = {
 		runtime_id: service_info,
@@ -216,10 +220,10 @@ def exercise_active_service_registration():
 		       "registered service did not carry peer handle")
 		expect(record['properties']['backend'] == 'iqm',
 		       "registered service did not preserve properties")
-		expect(record['legacy_type'] == 0b0011,
-		       "registered service did not preserve legacy type")
-		expect(record['legacy_capabilities'] == 0b0100,
-		       "registered service did not preserve legacy capabilities")
+		expect(record['qpm_type'] == 0b0011,
+		       "registered service did not preserve QPM type")
+		expect(record['qpm_capabilities'] == 0b0100,
+		       "registered service did not preserve QPM capabilities")
 		directory.register_service(other_service_ep, context={
 			'service_id': 'qpm-sim-ornl',
 			'service_type': 'qfw.qpm',
@@ -243,7 +247,9 @@ def exercise_active_service_registration():
 		expect(len(matches) == 1,
 		       "normal discovery did not return active startup record")
 		filtered_matches = directory.resolve_services(
-			service_name='QPM', svc_type=0b0001, svc_caps=0b0100
+			service_name='QPM',
+			qpm_type=0b0001,
+			qpm_capabilities=0b0100,
 		)
 		expect(len(filtered_matches) == 1,
 		       f"type/capability filter returned {filtered_matches!r}")

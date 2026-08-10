@@ -1,6 +1,6 @@
 from defw_app_util import (
 	defw_get_directory_service,
-	defw_bind_service_by_name,
+	defw_connect_service_by_name,
 	defw_shutdown_services,
 	defw_spawn_services,
 )
@@ -16,10 +16,10 @@ def run():
 	second = None
 	try:
 		dirsvc = defw_get_directory_service()
-		first = defw_bind_service_by_name(dirsvc, "TestCounter")[0]
+		first = defw_connect_service_by_name(dirsvc, "TestCounter")[0]
 		first_id = first.get_instance_id()
 		first.shutdown()
-		second = defw_bind_service_by_name(dirsvc, "TestCounter")[0]
+		second = defw_connect_service_by_name(dirsvc, "TestCounter")[0]
 		second_id = second.get_instance_id()
 		status = PASS if first_id != second_id else FAIL
 		return defwrc(

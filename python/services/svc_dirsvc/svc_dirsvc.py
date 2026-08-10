@@ -127,14 +127,16 @@ class DEFwDirSvc:
 			properties = context_properties
 		capability, cap_type, caps = (
 			self.__service_info_capability(service_info))
-		qpm_type = context.get(
-			'qpm_type',
-			properties.get('qpm_type', cap_type))
+		qpm_type = context.get('qpm_type', properties.get('qpm_type', -1))
 		qpm_capabilities = context.get(
 			'qpm_capabilities',
-			properties.get('qpm_capabilities', caps))
-		properties.setdefault('qpm_type', qpm_type)
-		properties.setdefault('qpm_capabilities', qpm_capabilities)
+			properties.get(
+				'qpm_capabilities',
+				properties.get('qpm_capability', -1)))
+		if qpm_type != -1:
+			properties.setdefault('qpm_type', qpm_type)
+		if qpm_capabilities != -1:
+			properties.setdefault('qpm_capabilities', qpm_capabilities)
 		service_id = (
 			context.get('service_id') or
 			service_info.get_property(

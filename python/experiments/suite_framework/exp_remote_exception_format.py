@@ -1,6 +1,6 @@
 from defw_app_util import (
 	defw_get_directory_service,
-	defw_bind_service_by_name,
+	defw_connect_service_by_name,
 	defw_shutdown_services,
 	defw_spawn_services,
 )
@@ -15,7 +15,7 @@ def run():
 	echo = None
 	try:
 		dirsvc = defw_get_directory_service()
-		echo = defw_bind_service_by_name(dirsvc, "TestEcho")[0]
+		echo = defw_connect_service_by_name(dirsvc, "TestEcho")[0]
 		try:
 			echo.raise_error()
 		except Exception as exc:

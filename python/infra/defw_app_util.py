@@ -8,7 +8,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
 
 import cdefw_global
 import defw
@@ -319,25 +318,36 @@ def defw_get_directory_service(timeout=SYSTEM_UP_TIMEOUT):
 	return defw.dirsvc
 
 
-def defw_bind_service_by_name(dirsvc, svc_name, svc_type=-1,
-			      svc_cap=-1, timeout=SYSTEM_UP_TIMEOUT):
+def defw_connect_service_by_name(dirsvc, service_name,
+				 timeout=SYSTEM_UP_TIMEOUT,
+				 service_type=None,
+				 binding_name=None,
+				 selector_resource=None,
+				 selector_alias=None,
+				 properties=None):
 	wait = 0
 	bindings = []
+	filters = {'service_name': service_name}
+	for key, value in (
+			('service_type', service_type),
+			('binding_name', binding_name),
+			('selector_resource', selector_resource),
+			('selector_alias', selector_alias),
+			('properties', properties),
+	):
+		if value:
+			filters[key] = value
 	while wait < timeout:
-		bindings = dirsvc.resolve_services(
-			service_name=svc_name,
-			svc_type=svc_type,
-			svc_caps=svc_cap,
-		)
+		bindings = dirsvc.resolve_services(**filters)
 		if bindings and len(bindings) > 0:
 			break
 		wait += 1
-		logging.defw_app(f"Waiting to connect to {svc_name}")
-		sleep(1)
+		logging.defw_app(f"Waiting to connect to {service_name}")
+		time.sleep(1)
 
 	if len(bindings) == 0:
 		raise DEFwReserveError(
-			f"Couldn't connect to a {svc_name}, {svc_type}, {svc_cap}")
+			f"Couldn't connect to a {service_name}")
 
 	logging.defw_app(f"Received directory bindings: {bindings}")
 
