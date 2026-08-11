@@ -266,7 +266,9 @@ def exercise_active_service_registration():
 def main():
 	connected = []
 	original_connect_to_agent = defw_workers.connect_to_agent
+	original_wait_for_bound_agent = defw._wait_for_bound_agent
 	defw_workers.connect_to_agent = lambda wr: connected.append(wr.ep)
+	defw._wait_for_bound_agent = lambda ep, timeout=5: StubAgent(ep)
 	try:
 		module = types.ModuleType("binding_client_fixture")
 		module.BindingClient = BindingClient
@@ -310,6 +312,7 @@ def main():
 			defw_remote.get_agent = original_remote_get_agent
 	finally:
 		defw_workers.connect_to_agent = original_connect_to_agent
+		defw._wait_for_bound_agent = original_wait_for_bound_agent
 	expect(dirsvc_api is not None,
 	       "real dirsvc proxy was not returned")
 	expect(len(remote_agent.requests) >= 1,

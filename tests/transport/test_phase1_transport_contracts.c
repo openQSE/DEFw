@@ -138,21 +138,19 @@ static int test_peer_ready_identity_update(void)
 	set_agent_state(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
 
 	defw_agent_report_peer_ready(agent, "outbound-rpc-ready");
-	rc |= expect(peer_event_count == 1,
-		     "initial ready event was not emitted");
-	rc |= expect(peer_events[0].remote_runtime_id[0] == '\0',
-		     "initial ready event unexpectedly had runtime identity");
+	rc |= expect(peer_event_count == 0,
+		     "ready event was emitted before runtime identity");
 	rc |= expect(agent->heartbeat_mode == DEFW_HEARTBEAT_NONE,
 		     "unknown runtime identity should not enable heartbeat");
 
 	uuid_copy(agent->id.remote_uuid, g_defw_cfg.uuid);
 	defw_agent_report_peer_ready_update(agent, "remote-identity-ready");
 
-	rc |= expect(peer_event_count == 2,
-		     "identity update ready event was not emitted");
-	rc |= expect(!strcmp(peer_events[1].remote_runtime_id, local_uuid),
+	rc |= expect(peer_event_count == 1,
+		     "identity-ready event was not emitted");
+	rc |= expect(!strcmp(peer_events[0].remote_runtime_id, local_uuid),
 		     "identity update did not report remote runtime");
-	rc |= expect(peer_events[1].is_self,
+	rc |= expect(peer_events[0].is_self,
 		     "identity update did not classify loopback");
 	rc |= expect(agent->is_loopback,
 		     "agent loopback state was not updated");
