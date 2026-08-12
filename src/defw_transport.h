@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include "defw_common.h"
 #include "defw_message.h"
 #include "defw_agent.h"
@@ -120,6 +121,54 @@ defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len);
  */
 defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
 				       uint64_t *fi_addr_out);
+
+/*
+ * Description of a memory region this process has made available for a peer to
+ * fi_read. key/addr/len are what the peer needs and are the only fields that
+ * travel on the wire; handle is a local registration id used to release the
+ * region once the peer acknowledges the transfer.
+ *
+ * addr is deliberately computed by the registering side: whether a peer must
+ * name the region by its virtual address or by an offset from its start
+ * depends on the memory-registration mode the provider negotiated (the tcp
+ * provider requires neither FI_MR_VIRT_ADDR nor FI_MR_PROV_KEY and so uses
+ * offsets, while an RDMA NIC provider typically wants the virtual address).
+ * Resolving that here keeps the reader free of any provider knowledge.
+ */
+typedef struct defw_rma_desc_s {
+	uint64_t handle; /* local registration id; not sent to the peer */
+	uint64_t key;    /* remote key the peer passes to fi_read */
+	uint64_t addr;   /* remote address: virtual address or offset */
+	uint64_t len;    /* length of the region in bytes */
+} defw_rma_desc_t;
+
+/* True when the active OFI endpoint can serve fi_read (the provider offered
+ * FI_RMA and DEFw can satisfy its registration requirements). Large payloads
+ * fall back to an inline transfer when this is false.
+ */
+bool defw_transport_ofi_rma_capable(void);
+
+/* Register buf/len so a peer can fi_read it, filling in desc. The caller keeps
+ * ownership of buf and must keep it alive and unmodified until the matching
+ * defw_transport_ofi_mr_release().
+ */
+defw_rc_t defw_transport_ofi_mr_reg(const void *buf, size_t len,
+				    defw_rma_desc_t *desc);
+
+/* As defw_transport_ofi_mr_reg, but copies buf into a region owned by the
+ * transport, which is freed on release. This costs one copy and in exchange
+ * the caller's buffer needs no lifetime guarantee at all -- the useful trade
+ * when the source is a Python object that would otherwise have to be kept
+ * referenced until the peer's acknowledgement arrives.
+ */
+defw_rc_t defw_transport_ofi_mr_reg_copy(const void *buf, size_t len,
+					 defw_rma_desc_t *desc);
+
+/* Deregister a region registered above and free it if the transport owns it.
+ * Returns EN_DEFW_RC_FAIL for an unknown handle (double release, or a handle
+ * from a previous endpoint).
+ */
+defw_rc_t defw_transport_ofi_mr_release(uint64_t handle);
 
 /* Dispatch a framed DEFw message received as a single [header][body] buffer
  * (the OFI receive path), as opposed to a streamed socket read. Validates the
