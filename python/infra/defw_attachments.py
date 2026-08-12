@@ -14,11 +14,17 @@ The message body still serializes to YAML, but where a large buffer was found
 it now holds a small marker dict recording the attachment index and enough
 metadata (kind, and for arrays the shape and dtype) to reconstruct the object.
 """
+import base64
 import logging
 
 # Reserved key identifying an extracted-attachment marker in the YAML message.
 # Chosen to be extremely unlikely to collide with an application dict key.
 ATTACH_MARKER_KEY = '__defw_attachment__'
+
+# Reserved top-level key carrying the inline (base64) attachment payloads in
+# the eager transfer used by phase 3b. Phase 3c replaces this with an RMA
+# fi_read rendezvous for large payloads on RMA-capable transports.
+ATTACH_DATA_KEY = '__defw_attachment_data__'
 
 # bytes/bytearray at or above this many bytes are extracted as attachments;
 # smaller ones stay inline in YAML (which handles them fine). NumPy arrays are
@@ -116,3 +122,45 @@ def reinject_attachments(msg, attachments):
 	if not attachments:
 		return msg
 	return _reinject(msg, attachments)
+
+
+def _to_bytes(buf):
+	if isinstance(buf, (bytes, bytearray)):
+		return bytes(buf)
+	# NumPy: tobytes() is unambiguous and works for every dtype (memoryview
+	# cast to 'B' can reject non-standard formats such as complex).
+	if _is_ndarray(buf):
+		return buf.tobytes()
+	# any other buffer-protocol object
+	return memoryview(buf).cast('B').tobytes()
+
+
+def attach_encode(msg, threshold=DEFAULT_ATTACH_THRESHOLD):
+	"""Serialize msg to a YAML string, carrying any large buffers inline as
+	base64 attachments.
+
+	When msg contains no large buffers this is exactly yaml.dump(msg), so
+	ordinary RPCs are unaffected. Inline base64 is the eager transfer for
+	phase 3b; phase 3c moves large payloads over an RMA fi_read rendezvous on
+	RMA-capable transports instead.
+	"""
+	import yaml
+	transformed, attachments = extract_attachments(msg, threshold)
+	if attachments:
+		transformed[ATTACH_DATA_KEY] = [
+			base64.b64encode(_to_bytes(a)).decode('ascii')
+			for a in attachments]
+	return yaml.dump(transformed)
+
+
+def attach_load(msg_str):
+	"""Inverse of attach_encode: yaml.load msg_str and restore any inline
+	attachments it carries. Equivalent to a plain yaml.load for messages
+	without attachments."""
+	import yaml
+	obj = yaml.load(msg_str, Loader=yaml.Loader)
+	if isinstance(obj, dict) and ATTACH_DATA_KEY in obj:
+		encoded = obj.pop(ATTACH_DATA_KEY)
+		attachments = [base64.b64decode(s) for s in encoded]
+		obj = reinject_attachments(obj, attachments)
+	return obj

@@ -8,6 +8,7 @@ from defw import client_agents, service_agents, \
 				active_client_agents, active_service_agents, \
 				me, preferences, service_apis
 from defw_util import print_thread_stack_trace_to_logger
+from defw_attachments import attach_encode, attach_load
 import defw
 
 from collections import deque
@@ -54,7 +55,7 @@ class WorkerEvent:
 		else:
 			self.msg_yaml = None
 			if msg:
-				self.msg_yaml = yaml.load(msg, Loader=yaml.Loader)
+				self.msg_yaml = attach_load(msg)
 		stack_trace_str = "".join(traceback.format_stack())
 		logging.defw_stacktrace(
 			f"workerEvent generated from:\n{stack_trace_str}"
@@ -504,7 +505,7 @@ def put_connect_complete(status, uuid_str):
 def send_rsp(wr):
 	rc = defw_send_rsp(wr.remote_uuid,
 					  wr.blk_uuid,
-					  yaml.dump(wr.msg))
+					  attach_encode(wr.msg))
 	return rc
 
 def send_req(wr):
@@ -514,7 +515,7 @@ def send_req(wr):
 	# non-blocking send
 	rc = defw_send_req(wr.remote_uuid,
 					  wr.blk_uuid,
-					  yaml.dump(wr.msg))
+					  attach_encode(wr.msg))
 
 	if rc:
 		raise DEFwCommError(f"Sending failed with {defw_rc2str(rc)}, " \
