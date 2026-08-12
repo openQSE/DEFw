@@ -55,7 +55,9 @@ class WorkerEvent:
 		else:
 			self.msg_yaml = None
 			if msg:
-				self.msg_yaml = attach_load(msg)
+				# uuid identifies the sending agent, which the RMA
+				# path needs in order to read attachments back
+				self.msg_yaml = attach_load(msg, uuid)
 		stack_trace_str = "".join(traceback.format_stack())
 		logging.defw_stacktrace(
 			f"workerEvent generated from:\n{stack_trace_str}"
@@ -505,7 +507,7 @@ def put_connect_complete(status, uuid_str):
 def send_rsp(wr):
 	rc = defw_send_rsp(wr.remote_uuid,
 					  wr.blk_uuid,
-					  attach_encode(wr.msg))
+					  attach_encode(wr.msg, wr.blk_uuid))
 	return rc
 
 def send_req(wr):
@@ -515,7 +517,7 @@ def send_req(wr):
 	# non-blocking send
 	rc = defw_send_req(wr.remote_uuid,
 					  wr.blk_uuid,
-					  attach_encode(wr.msg))
+					  attach_encode(wr.msg, wr.blk_uuid))
 
 	if rc:
 		raise DEFwCommError(f"Sending failed with {defw_rc2str(rc)}, " \

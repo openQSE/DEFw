@@ -170,6 +170,13 @@ defw_rc_t defw_transport_ofi_mr_reg_copy(const void *buf, size_t len,
  */
 defw_rc_t defw_transport_ofi_mr_release(uint64_t handle);
 
+/* Read len bytes into buf from a region a peer registered and advertised:
+ * fi_addr is the peer (as cached in its agent block), and key/addr are the
+ * descriptor fields it sent. Blocks until the read completes.
+ */
+defw_rc_t defw_transport_ofi_rma_read(uint64_t fi_addr, uint64_t key,
+				      uint64_t addr, void *buf, size_t len);
+
 /* Dispatch a framed DEFw message received as a single [header][body] buffer
  * (the OFI receive path), as opposed to a streamed socket read. Validates the
  * header, finds the sending agent by uuid, and runs the registered handler.

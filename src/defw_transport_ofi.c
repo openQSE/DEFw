@@ -102,6 +102,7 @@ typedef struct defw_ofi_state_s {
 	volatile bool        progress_run;
 	pthread_mutex_t      send_lock;  /* one outstanding send at a time */
 	struct fi_context    send_ctx;
+	struct fi_context    rma_ctx;
 	bool                 up;
 	bool                 rma_capable; /* provider offers FI_RMA (fi_read) */
 	int                  mr_mode;    /* registration mode the provider needs */
@@ -117,6 +118,30 @@ static ssize_t ofi_post_recv(struct ofi_recv_buf *buf)
 {
 	return fi_recv(g_ofi.ep, buf->data, DEFW_OFI_RECV_BUF_SIZE, NULL,
 		       FI_ADDR_UNSPEC, &buf->context);
+}
+
+/*
+ * Report a failed completion, and return the error entry so the caller can
+ * act on it.
+ *
+ * Both codes are printed on purpose. err.err is libfabric's own reason, and
+ * is the only useful one for a failure the library detects rather than the
+ * provider -- a truncated receive, for instance, sets err.err to FI_ETRUNC
+ * and leaves prov_errno at zero, so reporting the provider code alone renders
+ * a real failure as "Success".
+ */
+static void ofi_report_cq_err(struct fid_cq *cq, const char *what,
+			      struct fi_cq_err_entry *err)
+{
+	memset(err, 0, sizeof(*err));
+
+	if (fi_cq_readerr(cq, err, 0) < 1) {
+		PERROR("%s: failed, but no error entry was available", what);
+		return;
+	}
+
+	PERROR("%s: %s (provider: %s)", what, fi_strerror(err->err),
+	       fi_cq_strerror(cq, err->prov_errno, err->err_data, NULL, 0));
 }
 
 /*
@@ -168,12 +193,9 @@ static defw_rc_t ofi_send_msg(fi_addr_t dst, char *body, size_t bodylen,
 	if (ret == 1) {
 		/* send completed */
 	} else if (ret == -FI_EAVAIL) {
-		struct fi_cq_err_entry err = {0};
+		struct fi_cq_err_entry err;
 
-		fi_cq_readerr(g_ofi.tx_cq, &err, 0);
-		PERROR("OFI send completion error: %s",
-		       fi_cq_strerror(g_ofi.tx_cq, err.prov_errno,
-				      err.err_data, NULL, 0));
+		ofi_report_cq_err(g_ofi.tx_cq, "OFI send completion", &err);
 		rc = EN_DEFW_RC_SOCKET_FAIL;
 	} else if (ret == -FI_EAGAIN) {
 		PERROR("OFI send completion timed out");
@@ -206,6 +228,24 @@ static defw_rc_t ofi_send(defw_agent_blk_t *agent, defw_channel_t ch,
 	    !(agent->state & DEFW_AGENT_OFI_ADDR_VALID))
 		return defw_transport_tcp_ops()->send(agent, ch, buf, len, type);
 
+	/*
+	 * The fabric receive path is eager: the peer has fixed-size buffers
+	 * posted, and a message larger than one of them is truncated on
+	 * arrival, which the sender never sees -- it surfaces at the far end
+	 * as a request that never appears. Send anything that big over TCP
+	 * instead, which is a stream and has no such limit.
+	 *
+	 * A large payload normally travels as an RMA attachment and never
+	 * reaches this test. This is the fallback for when it cannot: a peer
+	 * or provider without RMA, where the payload stays inline in the
+	 * message body.
+	 */
+	if (sizeof(defw_message_hdr_t) + len > DEFW_OFI_RECV_BUF_SIZE) {
+		PDEBUG("message of %zu bytes exceeds the %d byte eager buffer; sending over TCP",
+		       len, DEFW_OFI_RECV_BUF_SIZE);
+		return defw_transport_tcp_ops()->send(agent, ch, buf, len, type);
+	}
+
 	return ofi_send_msg((fi_addr_t)agent->ofi_addr, buf, len, type);
 }
 
@@ -237,12 +277,10 @@ static void *ofi_progress_thread(void *arg)
 		} else if (ret == -FI_EAGAIN) {
 			continue; /* poll timeout; re-check progress_run */
 		} else if (ret == -FI_EAVAIL) {
-			struct fi_cq_err_entry err = {0};
+			struct fi_cq_err_entry err;
 
-			fi_cq_readerr(g_ofi.rx_cq, &err, 0);
-			PERROR("OFI recv completion error: %s",
-			       fi_cq_strerror(g_ofi.rx_cq, err.prov_errno,
-					      err.err_data, NULL, 0));
+			ofi_report_cq_err(g_ofi.rx_cq, "OFI recv completion",
+					  &err);
 			if (err.op_context)
 				ofi_post_recv(err.op_context);
 		} else {
@@ -420,6 +458,77 @@ bool defw_transport_ofi_rma_capable(void)
 }
 
 /*
+ * Pull a peer's registered region into buf.
+ *
+ * The transmit CQ carries one completion at a time by construction:
+ * ofi_send_msg issues a send and then waits for its own completion, so a read
+ * that did not hold the same lock would consume the send's completion, or have
+ * its own consumed. Holding send_lock across issue-and-wait keeps that
+ * invariant, and costs nothing here because the peer serves the read from its
+ * own progress engine rather than from anything we hold.
+ *
+ * The context lives in the transport state rather than on the stack: if the
+ * wait times out the operation is still outstanding, and the provider may
+ * write the completion afterwards.
+ */
+defw_rc_t defw_transport_ofi_rma_read(uint64_t fi_addr, uint64_t key,
+				      uint64_t addr, void *buf, size_t len)
+{
+	struct fi_cq_msg_entry entry;
+	defw_rc_t rc = EN_DEFW_RC_OK;
+	ssize_t ret;
+
+	if (!buf || !len)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	if (!g_ofi.up || !g_ofi.rma_capable)
+		return EN_DEFW_RC_FAIL;
+
+	PDEBUG("OFI RMA read: %zu bytes from fi_addr=%lu key=0x%lx addr=0x%lx",
+	       len, (unsigned long)fi_addr, (unsigned long)key,
+	       (unsigned long)addr);
+
+	pthread_mutex_lock(&g_ofi.send_lock);
+
+	do {
+		ret = fi_read(g_ofi.ep, buf, len, NULL, (fi_addr_t)fi_addr,
+			      addr, key, &g_ofi.rma_ctx);
+		if (ret == -FI_EAGAIN)
+			fi_cq_read(g_ofi.tx_cq, &entry, 1);
+	} while (ret == -FI_EAGAIN);
+
+	if (ret) {
+		PERROR("fi_read failed: %s", fi_strerror((int)-ret));
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+		goto out;
+	}
+
+	ret = fi_cq_sread(g_ofi.tx_cq, &entry, 1, NULL,
+			  DEFW_OFI_SEND_TIMEOUT_MS);
+	if (ret == 1) {
+		/* read completed */
+	} else if (ret == -FI_EAVAIL) {
+		struct fi_cq_err_entry err;
+
+		ofi_report_cq_err(g_ofi.tx_cq, "OFI RMA read completion", &err);
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+	} else if (ret == -FI_EAGAIN) {
+		PERROR("OFI RMA read timed out after %d ms",
+		       DEFW_OFI_SEND_TIMEOUT_MS);
+		rc = EN_DEFW_RC_TIMEOUT;
+	} else {
+		PERROR("fi_cq_sread(tx) failed after fi_read: %s",
+		       fi_strerror((int)-ret));
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+	}
+
+out:
+	pthread_mutex_unlock(&g_ofi.send_lock);
+
+	return rc;
+}
+
+/*
  * Prove the RMA path works before anything depends on it: register a buffer,
  * fi_read it back out of ourselves through the fabric, and compare. This
  * exercises exactly what a peer will do, so a provider whose registration or
@@ -431,14 +540,11 @@ bool defw_transport_ofi_rma_capable(void)
  */
 static void ofi_rma_selftest(void)
 {
-	struct fi_cq_msg_entry entry;
-	struct fi_context ctx;
 	defw_rma_desc_t desc;
 	fi_addr_t self = FI_ADDR_UNSPEC;
 	unsigned char *src, *dst;
 	size_t len = DEFW_OFI_SELFTEST_LEN;
 	size_t i;
-	ssize_t ret;
 
 	if (!g_ofi.rma_capable) {
 		PMSG("OFI RMA selftest: skipped, provider %s is not RMA capable",
@@ -466,34 +572,12 @@ static void ofi_rma_selftest(void)
 	if (defw_transport_ofi_mr_reg(src, len, &desc) != EN_DEFW_RC_OK)
 		goto out_av;
 
-	/* the local destination needs no descriptor: DEFw only claims RMA
-	 * capability for providers that do not require FI_MR_LOCAL
+	/* deliberately the same call the receive path uses, so this exercises
+	 * the real read rather than a parallel copy of it
 	 */
-	do {
-		ret = fi_read(g_ofi.ep, dst, len, NULL, self, desc.addr,
-			      desc.key, &ctx);
-		if (ret == -FI_EAGAIN)
-			fi_cq_read(g_ofi.tx_cq, &entry, 1);
-	} while (ret == -FI_EAGAIN);
-
-	if (ret) {
-		PERROR("OFI RMA selftest: fi_read failed: %s",
-		       fi_strerror((int)-ret));
-		goto out_mr;
-	}
-
-	ret = fi_cq_sread(g_ofi.tx_cq, &entry, 1, NULL,
-			  DEFW_OFI_SEND_TIMEOUT_MS);
-	if (ret == -FI_EAVAIL) {
-		struct fi_cq_err_entry err = {0};
-
-		fi_cq_readerr(g_ofi.tx_cq, &err, 0);
-		PERROR("OFI RMA selftest: read completion error: %s",
-		       fi_cq_strerror(g_ofi.tx_cq, err.prov_errno,
-				      err.err_data, NULL, 0));
-	} else if (ret != 1) {
-		PERROR("OFI RMA selftest: no read completion: %s",
-		       fi_strerror((int)-ret));
+	if (defw_transport_ofi_rma_read((uint64_t)self, desc.key, desc.addr,
+					dst, len) != EN_DEFW_RC_OK) {
+		PERROR("OFI RMA selftest: read failed");
 	} else if (memcmp(src, dst, len)) {
 		PERROR("OFI RMA selftest: data mismatch after fi_read");
 	} else {
@@ -502,7 +586,6 @@ static void ofi_rma_selftest(void)
 		     (unsigned long)desc.key, (unsigned long)desc.addr);
 	}
 
-out_mr:
 	defw_transport_ofi_mr_release(desc.handle);
 out_av:
 	fi_av_remove(g_ofi.av, &self, 1, 0);
@@ -844,6 +927,17 @@ defw_rc_t defw_transport_ofi_mr_reg_copy(const void *buf, size_t len,
 defw_rc_t defw_transport_ofi_mr_release(uint64_t handle)
 {
 	(void)handle;
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_rma_read(uint64_t fi_addr, uint64_t key,
+				      uint64_t addr, void *buf, size_t len)
+{
+	(void)fi_addr;
+	(void)key;
+	(void)addr;
+	(void)buf;
+	(void)len;
 	return EN_DEFW_RC_FAIL;
 }
 

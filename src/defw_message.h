@@ -22,6 +22,7 @@ typedef enum {
 	EN_MSG_TYPE_PY_REQUEST,
 	EN_MSG_TYPE_PY_RESPONSE,
 	EN_MSG_TYPE_PY_EVENT,
+	EN_MSG_TYPE_RMA_ACK,
 	EN_MSG_TYPE_MAX
 } defw_msg_type_t;
 
@@ -61,5 +62,16 @@ typedef struct defw_msg_session_s {
 typedef struct defw_msg_num_agents_query_s {
 	int num_agents;
 } defw_msg_num_agents_query_t;
+
+/* Acknowledgement that a peer has finished reading a memory region we exposed
+ * for RMA, so the registration can be dropped. The handle is the registration
+ * id the reader was given in the message that advertised the region; it is
+ * split into two 32-bit halves because DEFw stamps wire integers with htonl
+ * and there is no portable 64-bit equivalent.
+ */
+typedef struct defw_msg_rma_ack_s {
+	unsigned int handle_hi;
+	unsigned int handle_lo;
+} defw_msg_rma_ack_t;
 
 #endif /* DEFW_MESSAGE_H */

@@ -1024,6 +1024,132 @@ defw_rc_t defw_send_rsp(char *dst_uuid, char *blk_uuid, char *yaml)
 	return defw_send(dst_uuid, blk_uuid, yaml, EN_MSG_TYPE_PY_RESPONSE);
 }
 
+defw_rc_t defw_send_rma_ack(defw_agent_blk_t *agent, uint64_t handle)
+{
+	defw_msg_rma_ack_t msg;
+
+	if (!agent)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	msg.handle_hi = htonl((unsigned int)(handle >> 32));
+	msg.handle_lo = htonl((unsigned int)(handle & 0xffffffff));
+
+	return defw_transport_ops()->send(agent, EN_DEFW_CHANNEL_RPC,
+					  (char *)&msg, sizeof(msg),
+					  EN_MSG_TYPE_RMA_ACK);
+}
+
+int defw_rma_available(char *blk_uuid)
+{
+	defw_agent_blk_t *agent;
+	int available;
+
+	if (!defw_transport_ofi_rma_capable())
+		return 0;
+
+	agent = defw_find_agent_by_blk_uuid(blk_uuid);
+	if (!agent)
+		return 0;
+
+	/* the peer has to be reachable on the fabric: it advertised an OFI
+	 * address in the handshake and we inserted it (phase 1b)
+	 */
+	available = (agent->state & DEFW_AGENT_OFI_ADDR_VALID) ? 1 : 0;
+	defw_release_agent_blk(agent, false);
+
+	return available;
+}
+
+defw_rc_t defw_rma_publish(const void *rma_src, size_t rma_srclen,
+			   char **rma_desc)
+{
+	defw_rma_desc_t desc;
+	defw_rc_t rc;
+	char *out;
+
+	if (!rma_src || !rma_srclen || !rma_desc)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	rc = defw_transport_ofi_mr_reg_copy(rma_src, rma_srclen, &desc);
+	if (rc != EN_DEFW_RC_OK)
+		return rc;
+
+	out = calloc(1, DEFW_RMA_DESC_STR_LEN);
+	if (!out) {
+		defw_transport_ofi_mr_release(desc.handle);
+		return EN_DEFW_RC_OOM;
+	}
+
+	snprintf(out, DEFW_RMA_DESC_STR_LEN, "%llu:%llu:%llu:%llu",
+		 (unsigned long long)desc.handle, (unsigned long long)desc.key,
+		 (unsigned long long)desc.addr, (unsigned long long)desc.len);
+	*rma_desc = out;
+
+	return EN_DEFW_RC_OK;
+}
+
+defw_rc_t defw_rma_discard(unsigned long long handle)
+{
+	return defw_transport_ofi_mr_release((uint64_t)handle);
+}
+
+defw_rc_t defw_rma_fetch(char *blk_uuid, unsigned long long handle,
+			 unsigned long long key, unsigned long long addr,
+			 unsigned long long len, char **rma_buf,
+			 size_t *rma_len)
+{
+	defw_agent_blk_t *agent;
+	defw_rc_t rc;
+	char *buf;
+
+	if (!blk_uuid || !len || !rma_buf || !rma_len)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	agent = defw_find_agent_by_blk_uuid(blk_uuid);
+	if (!agent) {
+		PERROR("RMA fetch: no agent with block uuid %s", blk_uuid);
+		return EN_DEFW_RC_AGENT_NOT_FOUND;
+	}
+
+	if (!(agent->state & DEFW_AGENT_OFI_ADDR_VALID)) {
+		PERROR("RMA fetch: agent %s is not reachable over the fabric",
+		       agent->name);
+		defw_release_agent_blk(agent, false);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	buf = malloc((size_t)len);
+	if (!buf) {
+		defw_release_agent_blk(agent, false);
+		return EN_DEFW_RC_OOM;
+	}
+
+	rc = defw_transport_ofi_rma_read(agent->ofi_addr, key, addr, buf,
+					 (size_t)len);
+	if (rc != EN_DEFW_RC_OK) {
+		free(buf);
+		defw_release_agent_blk(agent, false);
+		return rc;
+	}
+
+	/* The peer keeps the region registered until it hears the read is
+	 * done. A failed acknowledgement is not fatal for this transfer -- we
+	 * have the data -- but it does strand the registration until the peer
+	 * tears its endpoint down, so it is worth saying out loud.
+	 */
+	rc = defw_send_rma_ack(agent, (uint64_t)handle);
+	if (rc != EN_DEFW_RC_OK)
+		PERROR("RMA fetch: could not acknowledge handle %llu: %s",
+		       handle, defw_rc2str(rc));
+
+	defw_release_agent_blk(agent, false);
+
+	*rma_buf = buf;
+	*rma_len = (size_t)len;
+
+	return EN_DEFW_RC_OK;
+}
+
 static
 defw_agent_blk_t *find_agent_blk_by_uuid(defw_agent_uuid_t *id, bool full,
 					struct dlist_entry *list)
@@ -1094,6 +1220,51 @@ defw_find_agent_by_uuid_global(defw_agent_uuid_t *id)
 		agent = defw_find_client_agent_by_uuid(id, true);
 	if (!agent)
 		agent = defw_find_active_client_agent_by_uuid(id, true);
+
+	return agent;
+}
+
+static defw_agent_blk_t *
+find_blk_uuid_in_list(uuid_t blk_uuid, struct dlist_entry *list)
+{
+	struct dlist_entry *tmp;
+	defw_agent_blk_t *agent, *found = NULL;
+
+	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+				     entry, tmp) {
+		if (uuid_compare(agent->id.blk_uuid, blk_uuid) == 0) {
+			found = agent;
+			acquire_agent_blk(agent);
+			break;
+		}
+	}
+
+	return found;
+}
+
+/*
+ * The block uuid is assigned locally and is unique to an agent block, so it
+ * identifies a peer on its own. The existing lookups all key on the remote
+ * uuid, which the Python layer is never given; it only ever sees the block
+ * uuid, which is why the RMA fetch needs this one.
+ */
+defw_agent_blk_t *defw_find_agent_by_blk_uuid(char *blk_uuid_str)
+{
+	defw_agent_blk_t *agent;
+	uuid_t blk_uuid;
+
+	if (!blk_uuid_str || uuid_parse(blk_uuid_str, blk_uuid))
+		return NULL;
+
+	MUTEX_LOCK(&agent_array_mutex);
+	agent = find_blk_uuid_in_list(blk_uuid, &agent_active_service_list);
+	if (!agent)
+		agent = find_blk_uuid_in_list(blk_uuid, &agent_service_list);
+	if (!agent)
+		agent = find_blk_uuid_in_list(blk_uuid, &agent_client_list);
+	if (!agent)
+		agent = find_blk_uuid_in_list(blk_uuid, &agent_active_client_list);
+	MUTEX_UNLOCK(&agent_array_mutex);
 
 	return agent;
 }

@@ -61,6 +61,60 @@
        free(*$1);
 %}
 
+/* Binary payload passed in from python, as a (pointer, length) pair.
+ *
+ * The generic char* mapping cannot be used for this: it produces a
+ * NUL-terminated string, which truncates binary data at the first zero byte.
+ * Matching on the argument names keeps this narrowly scoped to the functions
+ * that take a payload, and takes precedence over the single-argument typemaps
+ * above. The pointer is borrowed from the python bytes object, which the
+ * caller's argument tuple keeps alive for the duration of the call, so there
+ * is nothing to release afterwards.
+ */
+%typemap(in) (const void *rma_src, size_t rma_srclen) %{
+    {
+        char *rma_in_buf = NULL;
+        Py_ssize_t rma_in_len = 0;
+
+        if (PyBytes_AsStringAndSize($input, &rma_in_buf, &rma_in_len) < 0)
+            SWIG_fail;
+        $1 = rma_in_buf;
+        $2 = (size_t)rma_in_len;
+    }
+%}
+
+/* Binary payload returned to python, as a malloc'ed (pointer, length) pair
+ * that becomes a bytes object. Mirrors the char** convention above: the
+ * argout typemap builds the result and the freearg typemap releases the
+ * buffer C allocated.
+ */
+%typemap(in, numinputs=0) (char **rma_buf, size_t *rma_len)
+                          (char *rma_out_buf, size_t rma_out_len) %{
+    rma_out_buf = NULL;
+    rma_out_len = 0;
+    $1 = &rma_out_buf;
+    $2 = &rma_out_len;
+%}
+
+%typemap(argout) (char **rma_buf, size_t *rma_len) (PyObject* obj) %{
+    if (*$1) {
+        obj = PyBytes_FromStringAndSize(*$1, (Py_ssize_t)*$2);
+    } else {
+        obj = Py_None;
+        Py_INCREF(obj);
+    }
+#if SWIG_VERSION >= 40100
+    $result = SWIG_Python_AppendOutput($result, obj, $isvoid);
+#else
+    $result = SWIG_Python_AppendOutput($result, obj);
+#endif
+%}
+
+%typemap(freearg) (char **rma_buf, size_t *rma_len) %{
+    if (*$1)
+       free(*$1);
+%}
+
 /* Allows passing void * to functions. Both this typemap and the one below it
  * work in tandem. The first defines how input void* parameters are
  * handled. We use SWIG_ConvertPtr to take a python object and convert it

@@ -79,6 +79,15 @@ defw_rc_t defw_send_hb(defw_agent_blk_t *agent);
 defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup);
 defw_agent_blk_t *defw_find_agent_by_uuid_global(defw_agent_uuid_t *id);
 defw_agent_blk_t *defw_find_agent_by_uuid_passive(uuid_t uuid);
+/* Find an agent by the block uuid, which is the identifier the Python layer
+ * is handed for an incoming message and hands back when replying. Returns the
+ * agent with a reference taken, or NULL.
+ */
+defw_agent_blk_t *defw_find_agent_by_blk_uuid(char *blk_uuid_str);
+/* Tell a peer we have finished reading the region it registered under handle,
+ * so it can deregister and release the memory.
+ */
+defw_rc_t defw_send_rma_ack(defw_agent_blk_t *agent, uint64_t handle);
 void defw_move_to_client_list(defw_agent_blk_t *agent);
 void defw_move_to_service_list(defw_agent_blk_t *agent);
 void defw_release_dead_list_agents(void);
