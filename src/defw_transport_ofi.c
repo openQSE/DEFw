@@ -80,6 +80,7 @@ typedef struct defw_ofi_state_s {
 	pthread_mutex_t      send_lock;  /* one outstanding send at a time */
 	struct fi_context    send_ctx;
 	bool                 up;
+	bool                 rma_capable; /* provider offers FI_RMA (fi_read) */
 } defw_ofi_state_t;
 
 static defw_ofi_state_t g_ofi;
@@ -282,7 +283,6 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 	 * most providers require a per-operation context object.
 	 */
 	hints->ep_attr->type = FI_EP_RDM;
-	hints->caps = FI_MSG;
 	hints->mode = FI_CONTEXT;
 	hints->domain_attr->threading = FI_THREAD_SAFE;
 	if (provider && strlen(provider)) {
@@ -294,7 +294,23 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 		}
 	}
 
+	/* Prefer an RMA-capable endpoint so large payloads can move by fi_read
+	 * (phase 3). Some providers (e.g. sm2) do not offer FI_RMA, so fall back
+	 * to message-only; attachments then stream over TCP instead.
+	 */
+	hints->caps = FI_MSG | FI_RMA | FI_READ | FI_REMOTE_READ;
+	hints->domain_attr->mr_mode = FI_MR_VIRT_ADDR | FI_MR_ALLOCATED |
+				      FI_MR_PROV_KEY;
 	ret = fi_getinfo(DEFW_OFI_VERSION, NULL, NULL, 0, hints, &g_ofi.info);
+	if (ret == 0) {
+		g_ofi.rma_capable = true;
+	} else {
+		hints->caps = FI_MSG;
+		hints->domain_attr->mr_mode = 0;
+		ret = fi_getinfo(DEFW_OFI_VERSION, NULL, NULL, 0, hints,
+				 &g_ofi.info);
+		g_ofi.rma_capable = false;
+	}
 	fi_freeinfo(hints);
 	if (ret) {
 		PERROR("fi_getinfo failed: %s", fi_strerror(-ret));
@@ -302,7 +318,9 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 		return EN_DEFW_RC_FAIL;
 	}
 
-	PMSG("OFI provider selected: %s", g_ofi.info->fabric_attr->prov_name);
+	PMSG("OFI provider selected: %s (rma=%s)",
+	     g_ofi.info->fabric_attr->prov_name,
+	     g_ofi.rma_capable ? "yes" : "no");
 
 	ret = fi_fabric(g_ofi.info->fabric_attr, &g_ofi.fabric, NULL);
 	if (ret) {
