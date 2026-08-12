@@ -8,7 +8,7 @@ from defw import client_agents, service_agents, \
 				active_client_agents, active_service_agents, \
 				me, preferences, service_apis
 from defw_util import print_thread_stack_trace_to_logger
-from defw_attachments import attach_encode, attach_load
+from defw_attachments import attach_encode, attach_load, attach_discard
 import defw
 
 from collections import deque
@@ -505,9 +505,14 @@ def put_connect_complete(status, uuid_str):
 	logging.defw_worker("Putting connect complete")
 
 def send_rsp(wr):
-	rc = defw_send_rsp(wr.remote_uuid,
-					  wr.blk_uuid,
-					  attach_encode(wr.msg, wr.blk_uuid))
+	# published collects the payloads left in our memory for the peer to
+	# read; if the message never goes out, nobody will ever acknowledge
+	# them, so release them here rather than pinning them until shutdown
+	published = []
+	msg = attach_encode(wr.msg, wr.blk_uuid, published=published)
+	rc = defw_send_rsp(wr.remote_uuid, wr.blk_uuid, msg)
+	if rc and published:
+		attach_discard(published)
 	return rc
 
 def send_req(wr):
@@ -515,11 +520,13 @@ def send_req(wr):
 		worker_thread.add_work_request(wr)
 
 	# non-blocking send
-	rc = defw_send_req(wr.remote_uuid,
-					  wr.blk_uuid,
-					  attach_encode(wr.msg, wr.blk_uuid))
+	published = []
+	msg = attach_encode(wr.msg, wr.blk_uuid, published=published)
+	rc = defw_send_req(wr.remote_uuid, wr.blk_uuid, msg)
 
 	if rc:
+		if published:
+			attach_discard(published)
 		raise DEFwCommError(f"Sending failed with {defw_rc2str(rc)}, " \
 							f"{wr.remote_uuid}, {wr.blk_uuid}")
 

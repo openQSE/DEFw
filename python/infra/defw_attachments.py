@@ -22,20 +22,30 @@ import os
 # Chosen to be extremely unlikely to collide with an application dict key.
 ATTACH_MARKER_KEY = '__defw_attachment__'
 
-# Reserved top-level key carrying the inline (base64) attachment payloads.
-# This is the eager path: it works on every transport and stays the right
-# choice for small payloads and for peers we cannot reach over the fabric.
+# Reserved top-level key carrying the attachment payloads, in marker-index
+# order. Each entry either holds the data (a base64 string) or says where to
+# read it (an RMA descriptor dict), so the two can be mixed freely within one
+# message and each payload travels whichever way suits it.
 ATTACH_DATA_KEY = '__defw_attachment_data__'
 
-# Reserved top-level key carrying RMA descriptors instead of payloads. The
-# message then names the data rather than containing it, and the receiver
-# reads it directly out of the sender's memory over the fabric.
-ATTACH_RMA_KEY = '__defw_attachment_rma__'
-
-# Set DEFW_RMA_ATTACHMENTS=1 to move payloads by RMA where the peer supports
-# it. Off by default: the rendezvous is in place but choosing it
-# automatically (on payload size) is a separate step.
+# Set DEFW_RMA_ATTACHMENTS=0 to keep every payload inline regardless of size.
+# RMA is used by default where it is available.
 RMA_ENV = 'DEFW_RMA_ATTACHMENTS'
+
+# Payloads at or above this many bytes travel by RMA when the peer can serve
+# it; smaller ones stay inline, where an extra round trip would cost more than
+# the base64 encoding it saves. Overridable with DEFW_RMA_THRESHOLD, and
+# setting it to 0 sends every attachment by RMA, which is how the RMA path is
+# exercised with small payloads.
+#
+# The default is a judgement rather than a measurement: base64 inflates a
+# payload by a third, and the fabric's eager receive buffer is 256 KiB, so
+# inline payloads much above 192 KiB push the whole message off the eager path
+# anyway. 64 KiB sits well below that and well above the small arrays that
+# ride along with ordinary RPCs. Worth revisiting with numbers when the
+# statevector path adopts this.
+DEFAULT_RMA_THRESHOLD = 64 * 1024
+RMA_THRESHOLD_ENV = 'DEFW_RMA_THRESHOLD'
 
 # bytes/bytearray at or above this many bytes are extracted as attachments;
 # smaller ones stay inline in YAML (which handles them fine). NumPy arrays are
@@ -165,13 +175,20 @@ def _rma_ops():
 	return _agent_mod
 
 
-def rma_requested():
-	return os.environ.get(RMA_ENV, '') not in ('', '0', 'no', 'false')
+def rma_enabled():
+	return os.environ.get(RMA_ENV, '') not in ('0', 'no', 'false', 'off')
+
+
+def rma_threshold():
+	try:
+		return int(os.environ[RMA_THRESHOLD_ENV])
+	except (KeyError, ValueError):
+		return DEFAULT_RMA_THRESHOLD
 
 
 def _rma_usable(blk_uuid):
-	"""Whether this message's payloads can travel by RMA to blk_uuid."""
-	if not blk_uuid or not rma_requested():
+	"""Whether payloads in this message can travel by RMA to blk_uuid."""
+	if not blk_uuid or not rma_enabled():
 		return False
 	ops = _rma_ops()
 	if not ops:
@@ -183,37 +200,61 @@ def _rma_usable(blk_uuid):
 		return False
 
 
-def _rma_publish_all(attachments):
-	"""Register every attachment for the peer to read and return the
-	descriptors. Returns None if any registration fails, having released the
-	ones already made, so the caller can fall back to sending inline."""
-	ops = _rma_ops()
-	descs = []
+def _rma_publish(ops, data):
+	"""Register one payload for the peer to read, or return None to let the
+	caller fall back to sending it inline."""
+	try:
+		rc, desc = ops.defw_rma_publish(data)
+	except Exception as e:
+		logging.warning(f"RMA publish raised, sending inline instead: {e}")
+		return None
+	if rc or not desc:
+		logging.warning(f"RMA publish failed (rc={rc}), "
+				f"sending {len(data)} bytes inline instead")
+		return None
+	handle, key, addr, length = (int(v) for v in desc.split(':'))
+	return {'handle': handle, 'key': key, 'addr': addr, 'len': length}
+
+
+def _encode_payloads(attachments, blk_uuid, published):
+	"""Turn attachments into the wire payload list, choosing per payload
+	between an RMA descriptor and inline base64."""
+	use_rma = _rma_usable(blk_uuid)
+	threshold = rma_threshold()
+	ops = _rma_ops() if use_rma else None
+	payloads = []
+
 	for a in attachments:
-		try:
-			rc, desc = ops.defw_rma_publish(_to_bytes(a))
-		except Exception as e:
-			logging.warning(f"RMA publish raised, using inline: {e}")
-			rc, desc = -1, None
-		if rc or not desc:
-			for d in descs:
-				ops.defw_rma_discard(d['handle'])
-			return None
-		handle, key, addr, length = (int(v) for v in desc.split(':'))
-		descs.append({'handle': handle, 'key': key,
-			      'addr': addr, 'len': length})
-	return descs
+		data = _to_bytes(a)
+		desc = None
+		if use_rma and len(data) >= threshold:
+			desc = _rma_publish(ops, data)
+		if desc is not None:
+			published.append(desc['handle'])
+			payloads.append(desc)
+		else:
+			payloads.append(base64.b64encode(data).decode('ascii'))
+
+	return payloads
 
 
-def attach_encode(msg, blk_uuid=None, threshold=DEFAULT_ATTACH_THRESHOLD):
+def attach_encode(msg, blk_uuid=None, threshold=DEFAULT_ATTACH_THRESHOLD,
+		  published=None):
 	"""Serialize msg to a YAML string, carrying any large buffers as
 	attachments rather than in the YAML itself.
 
-	Attachments travel one of two ways. If RMA is enabled and the peer named
-	by blk_uuid is reachable over the fabric, the message carries only
-	descriptors and the receiver reads the data out of our memory directly;
-	each region stays registered until the receiver acknowledges it.
-	Otherwise the payloads are inlined as base64, which works everywhere.
+	Each attachment travels whichever way suits it. One at or above the RMA
+	threshold, going to a peer reachable over the fabric, is left in our
+	memory and named in the message by a descriptor; the receiver reads it
+	directly and the region stays registered until it acknowledges. Anything
+	smaller, or bound for a peer that cannot do RMA, is inlined as base64.
+	The two mix freely within a message, and a payload that cannot be
+	registered simply goes inline instead.
+
+	published, if given, is extended with the registration handle of every
+	payload left in our memory. A caller that fails to send the message
+	should pass it to attach_discard, or those registrations stay live until
+	the endpoint is torn down.
 
 	When msg contains no large buffers this is exactly yaml.dump(msg), so
 	ordinary RPCs are unaffected either way.
@@ -221,53 +262,60 @@ def attach_encode(msg, blk_uuid=None, threshold=DEFAULT_ATTACH_THRESHOLD):
 	import yaml
 	transformed, attachments = extract_attachments(msg, threshold)
 	if attachments:
-		descs = None
-		if _rma_usable(blk_uuid):
-			descs = _rma_publish_all(attachments)
-		if descs is not None:
-			transformed[ATTACH_RMA_KEY] = descs
-		else:
-			transformed[ATTACH_DATA_KEY] = [
-				base64.b64encode(_to_bytes(a)).decode('ascii')
-				for a in attachments]
+		transformed[ATTACH_DATA_KEY] = _encode_payloads(
+			attachments, blk_uuid,
+			published if published is not None else [])
 	return yaml.dump(transformed)
 
 
-def _rma_fetch_all(descs, blk_uuid):
+def attach_discard(published):
+	"""Release registrations made for a message that was never sent."""
 	ops = _rma_ops()
 	if not ops:
-		raise RuntimeError("received RMA attachments but this DEFw build "
-				   "has no RMA support to fetch them")
+		return
+	for handle in published:
+		try:
+			ops.defw_rma_discard(handle)
+		except Exception as e:
+			logging.warning(f"RMA discard of handle {handle} failed: {e}")
+
+
+def _rma_fetch(desc, blk_uuid):
+	ops = _rma_ops()
+	if not ops:
+		raise RuntimeError("message carries an RMA attachment but this "
+				   "DEFw build has no RMA support to fetch it")
 	if not blk_uuid:
-		raise RuntimeError("received RMA attachments but the sending "
-				   "agent is unknown, so they cannot be fetched")
-	attachments = []
-	for d in descs:
-		rc, data = ops.defw_rma_fetch(str(blk_uuid), d['handle'],
-					      d['key'], d['addr'], d['len'])
-		if rc or data is None:
-			raise RuntimeError(
-				f"RMA fetch failed (rc={rc}) for {d['len']} bytes "
-				f"from agent {blk_uuid}")
-		attachments.append(data)
-	return attachments
+		raise RuntimeError("message carries an RMA attachment but the "
+				   "sending agent is unknown, so it cannot be "
+				   "fetched")
+	rc, data = ops.defw_rma_fetch(str(blk_uuid), desc['handle'],
+				      desc['key'], desc['addr'], desc['len'])
+	if rc or data is None:
+		raise RuntimeError(
+			f"RMA fetch failed (rc={rc}) for {desc['len']} bytes "
+			f"from agent {blk_uuid}")
+	return data
+
+
+def _decode_payloads(payloads, blk_uuid):
+	"""Inverse of _encode_payloads: an entry either holds the data or names
+	a region to read it from."""
+	return [_rma_fetch(p, blk_uuid) if isinstance(p, dict)
+		else base64.b64decode(p)
+		for p in payloads]
 
 
 def attach_load(msg_str, blk_uuid=None):
 	"""Inverse of attach_encode: yaml.load msg_str and restore any
-	attachments it carries, reading them over the fabric when the message
-	carries descriptors rather than inline data. blk_uuid identifies the
-	sending agent and is required only for the RMA case. Equivalent to a
-	plain yaml.load for messages without attachments."""
+	attachments it carries, reading over the fabric those the message names
+	rather than contains. blk_uuid identifies the sending agent and is
+	needed only for the latter. Equivalent to a plain yaml.load for messages
+	without attachments."""
 	import yaml
 	obj = yaml.load(msg_str, Loader=yaml.Loader)
-	if isinstance(obj, dict):
-		if ATTACH_RMA_KEY in obj:
-			descs = obj.pop(ATTACH_RMA_KEY)
-			obj = reinject_attachments(
-				obj, _rma_fetch_all(descs, blk_uuid))
-		elif ATTACH_DATA_KEY in obj:
-			encoded = obj.pop(ATTACH_DATA_KEY)
-			attachments = [base64.b64decode(s) for s in encoded]
-			obj = reinject_attachments(obj, attachments)
+	if isinstance(obj, dict) and ATTACH_DATA_KEY in obj:
+		payloads = obj.pop(ATTACH_DATA_KEY)
+		obj = reinject_attachments(obj,
+					   _decode_payloads(payloads, blk_uuid))
 	return obj
