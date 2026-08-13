@@ -8,6 +8,11 @@
 #define MAX_NUM_AGENTS		1024
 #define HB_TO			2
 
+/* "handle:key:addr:len" -- four unsigned 64-bit values in decimal, three
+ * separators and a terminator, rounded up.
+ */
+#define DEFW_RMA_DESC_STR_LEN	96
+
 #define DEFW_AGENT_STATE_ALIVE (1 << 0)
 #define DEFW_AGENT_CNTRL_CHANNEL_CONNECTED (1 << 1)
 #define DEFW_AGENT_RPC_CHANNEL_CONNECTED (1 << 2)
@@ -186,6 +191,49 @@ int defw_agent_uuid_compare(char *agent_id1, char *agent_id2);
  */
 defw_rc_t defw_send_req(char *dst_uuid, char *blk_uuid, char *yaml);
 defw_rc_t defw_send_rsp(char *dst_uuid, char *blk_uuid, char *yaml);
+
+/*
+ * Large binary payloads (RMA)
+ *
+ * These three carry an RPC's bulk data off the YAML message and onto the
+ * fabric. The sender publishes a buffer, puts the returned descriptor in the
+ * message in place of the data, and the receiver fetches it back. The
+ * registration is released when the fetch acknowledges it, so a published
+ * buffer must always be either fetched or abandoned at shutdown.
+ *
+ * Sizes are unsigned long long rather than uint64_t because SWIG wraps a
+ * uint64_t argument as an opaque pointer object instead of a Python integer.
+ *
+ * defw_rma_available
+ *	Whether bulk data can travel by RMA to the agent with this block uuid:
+ *	the local endpoint must be RMA capable and the peer must be reachable
+ *	over the fabric. Returns 0 when it cannot, and the caller should keep
+ *	the payload inline.
+ *
+ * defw_rma_publish
+ *	Register a copy of the buffer for the peer to read. Returns the
+ *	descriptor as "handle:key:addr:len"; it is text because the message it
+ *	is about to be written into is text, and the fields are split back
+ *	apart by the caller. The copy means the source buffer needs no
+ *	lifetime guarantee.
+ *
+ * defw_rma_fetch
+ *	Read a published region from the agent with this block uuid and return
+ *	it as bytes, acknowledging the transfer so the peer can deregister.
+ *
+ * defw_rma_discard
+ *	Drop a published region that will never be fetched, which is how the
+ *	sender unwinds when it fails partway through publishing a message's
+ *	payloads and falls back to sending them inline.
+ */
+int defw_rma_available(char *blk_uuid);
+defw_rc_t defw_rma_publish(const void *rma_src, size_t rma_srclen,
+			   char **rma_desc);
+defw_rc_t defw_rma_discard(unsigned long long handle);
+defw_rc_t defw_rma_fetch(char *blk_uuid, unsigned long long handle,
+			 unsigned long long key, unsigned long long addr,
+			 unsigned long long len, char **rma_buf,
+			 size_t *rma_len);
 
 static inline defw_agent_uuid_t *defw_get_agent_uuid_raw(defw_agent_blk_t *agent)
 {

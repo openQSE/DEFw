@@ -10,6 +10,7 @@
 #include "defw_agent.h"
 #include "defw_common.h"
 #include "defw_global.h"
+#include "defw_list.h"
 #include "defw_print.h"
 
 /*
@@ -39,6 +40,7 @@
 #include <rdma/fi_eq.h>
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_cm.h>
+#include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
 
 /* Minimum libfabric API version DEFw targets. The container ships 2.3.1. */
@@ -56,12 +58,33 @@
 /* progress-thread CQ poll timeout (ms); short enough to notice shutdown */
 #define DEFW_OFI_PROGRESS_TIMEOUT_MS	1000
 
+/* Set DEFW_OFI_RMA_SELFTEST=1 to run a loopback fi_read against our own
+ * endpoint at startup. Diagnostic only, and off by default.
+ */
+#define DEFW_OFI_RMA_SELFTEST_ENV	"DEFW_OFI_RMA_SELFTEST"
+#define DEFW_OFI_SELFTEST_LEN		(64 * 1024)
+
 /* A posted receive buffer. fi_context MUST be first so a completion's
  * op_context (which points at it) casts straight back to the buffer.
  */
 struct ofi_recv_buf {
 	struct fi_context context;
 	unsigned char     data[DEFW_OFI_RECV_BUF_SIZE];
+};
+
+/* A memory region currently exposed for a peer to fi_read. Registrations are
+ * tracked here rather than handed out as pointers so that the rest of DEFw
+ * (ultimately the Python layer, across a text message) can refer to one by an
+ * opaque integer handle, and so a stale or duplicated release is rejected
+ * instead of dereferencing freed memory.
+ */
+struct ofi_mr_entry {
+	struct dlist_entry entry;
+	uint64_t           handle;
+	struct fid_mr     *mr;
+	void              *buf;
+	size_t             len;
+	bool               owned; /* buf was copied by us, so free it */
 };
 
 typedef struct defw_ofi_state_s {
@@ -79,7 +102,14 @@ typedef struct defw_ofi_state_s {
 	volatile bool        progress_run;
 	pthread_mutex_t      send_lock;  /* one outstanding send at a time */
 	struct fi_context    send_ctx;
+	struct fi_context    rma_ctx;
 	bool                 up;
+	bool                 rma_capable; /* provider offers FI_RMA (fi_read) */
+	int                  mr_mode;    /* registration mode the provider needs */
+	struct dlist_entry   mr_list;    /* registered regions (ofi_mr_entry) */
+	pthread_mutex_t      mr_lock;
+	uint64_t             mr_next_handle;
+	uint64_t             mr_next_key;
 } defw_ofi_state_t;
 
 static defw_ofi_state_t g_ofi;
@@ -88,6 +118,30 @@ static ssize_t ofi_post_recv(struct ofi_recv_buf *buf)
 {
 	return fi_recv(g_ofi.ep, buf->data, DEFW_OFI_RECV_BUF_SIZE, NULL,
 		       FI_ADDR_UNSPEC, &buf->context);
+}
+
+/*
+ * Report a failed completion, and return the error entry so the caller can
+ * act on it.
+ *
+ * Both codes are printed on purpose. err.err is libfabric's own reason, and
+ * is the only useful one for a failure the library detects rather than the
+ * provider -- a truncated receive, for instance, sets err.err to FI_ETRUNC
+ * and leaves prov_errno at zero, so reporting the provider code alone renders
+ * a real failure as "Success".
+ */
+static void ofi_report_cq_err(struct fid_cq *cq, const char *what,
+			      struct fi_cq_err_entry *err)
+{
+	memset(err, 0, sizeof(*err));
+
+	if (fi_cq_readerr(cq, err, 0) < 1) {
+		PERROR("%s: failed, but no error entry was available", what);
+		return;
+	}
+
+	PERROR("%s: %s (provider: %s)", what, fi_strerror(err->err),
+	       fi_cq_strerror(cq, err->prov_errno, err->err_data, NULL, 0));
 }
 
 /*
@@ -139,12 +193,9 @@ static defw_rc_t ofi_send_msg(fi_addr_t dst, char *body, size_t bodylen,
 	if (ret == 1) {
 		/* send completed */
 	} else if (ret == -FI_EAVAIL) {
-		struct fi_cq_err_entry err = {0};
+		struct fi_cq_err_entry err;
 
-		fi_cq_readerr(g_ofi.tx_cq, &err, 0);
-		PERROR("OFI send completion error: %s",
-		       fi_cq_strerror(g_ofi.tx_cq, err.prov_errno,
-				      err.err_data, NULL, 0));
+		ofi_report_cq_err(g_ofi.tx_cq, "OFI send completion", &err);
 		rc = EN_DEFW_RC_SOCKET_FAIL;
 	} else if (ret == -FI_EAGAIN) {
 		PERROR("OFI send completion timed out");
@@ -177,6 +228,24 @@ static defw_rc_t ofi_send(defw_agent_blk_t *agent, defw_channel_t ch,
 	    !(agent->state & DEFW_AGENT_OFI_ADDR_VALID))
 		return defw_transport_tcp_ops()->send(agent, ch, buf, len, type);
 
+	/*
+	 * The fabric receive path is eager: the peer has fixed-size buffers
+	 * posted, and a message larger than one of them is truncated on
+	 * arrival, which the sender never sees -- it surfaces at the far end
+	 * as a request that never appears. Send anything that big over TCP
+	 * instead, which is a stream and has no such limit.
+	 *
+	 * A large payload normally travels as an RMA attachment and never
+	 * reaches this test. This is the fallback for when it cannot: a peer
+	 * or provider without RMA, where the payload stays inline in the
+	 * message body.
+	 */
+	if (sizeof(defw_message_hdr_t) + len > DEFW_OFI_RECV_BUF_SIZE) {
+		PDEBUG("message of %zu bytes exceeds the %d byte eager buffer; sending over TCP",
+		       len, DEFW_OFI_RECV_BUF_SIZE);
+		return defw_transport_tcp_ops()->send(agent, ch, buf, len, type);
+	}
+
 	return ofi_send_msg((fi_addr_t)agent->ofi_addr, buf, len, type);
 }
 
@@ -208,12 +277,10 @@ static void *ofi_progress_thread(void *arg)
 		} else if (ret == -FI_EAGAIN) {
 			continue; /* poll timeout; re-check progress_run */
 		} else if (ret == -FI_EAVAIL) {
-			struct fi_cq_err_entry err = {0};
+			struct fi_cq_err_entry err;
 
-			fi_cq_readerr(g_ofi.rx_cq, &err, 0);
-			PERROR("OFI recv completion error: %s",
-			       fi_cq_strerror(g_ofi.rx_cq, err.prov_errno,
-					      err.err_data, NULL, 0));
+			ofi_report_cq_err(g_ofi.rx_cq, "OFI recv completion",
+					  &err);
 			if (err.op_context)
 				ofi_post_recv(err.op_context);
 		} else {
@@ -226,8 +293,311 @@ static void *ofi_progress_thread(void *arg)
 	return NULL;
 }
 
+/*
+ * Memory registration for the RMA rendezvous.
+ *
+ * A process that wants to hand a peer a large payload registers it here and
+ * advertises the resulting {key, addr, len}; the peer issues an fi_read and
+ * acknowledges, at which point the region is released.
+ *
+ * Two provider behaviors have to be absorbed here so that no caller (and in
+ * particular no peer) has to reason about them:
+ *
+ *   - Key allocation. When the provider requires FI_MR_PROV_KEY it invents the
+ *     key and ignores what we asked for; otherwise the key is ours to choose
+ *     and must be unique among our live registrations. Passing a fresh key
+ *     from a counter and then reading back fi_mr_key() is correct either way.
+ *     A collision is not silent: fi_mr_reg fails with FI_ENOKEY.
+ *
+ *   - Region addressing. When the provider requires FI_MR_VIRT_ADDR the peer
+ *     names the region by our virtual address; otherwise by an offset from the
+ *     start of the region. We resolve that into desc->addr at registration.
+ */
+static defw_rc_t ofi_mr_reg_common(const void *buf, size_t len, bool copy,
+				   defw_rma_desc_t *desc)
+{
+	struct ofi_mr_entry *e;
+	void *region;
+	uint64_t key;
+	int ret;
+
+	if (!buf || !len || !desc)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	if (!g_ofi.up || !g_ofi.rma_capable)
+		return EN_DEFW_RC_FAIL;
+
+	e = calloc(1, sizeof(*e));
+	if (!e)
+		return EN_DEFW_RC_OOM;
+
+	if (copy) {
+		region = malloc(len);
+		if (!region) {
+			free(e);
+			return EN_DEFW_RC_OOM;
+		}
+		memcpy(region, buf, len);
+	} else {
+		region = (void *)buf;
+	}
+
+	pthread_mutex_lock(&g_ofi.mr_lock);
+
+	key = g_ofi.mr_next_key++;
+	ret = fi_mr_reg(g_ofi.domain, region, len, FI_REMOTE_READ, 0, key, 0,
+			&e->mr, NULL);
+	if (ret) {
+		pthread_mutex_unlock(&g_ofi.mr_lock);
+		PERROR("fi_mr_reg failed for %zu bytes: %s", len,
+		       fi_strerror(-ret));
+		if (copy)
+			free(region);
+		free(e);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	e->handle = g_ofi.mr_next_handle++;
+	e->buf = region;
+	e->len = len;
+	e->owned = copy;
+	dlist_insert_tail(&e->entry, &g_ofi.mr_list);
+
+	desc->handle = e->handle;
+	desc->key = fi_mr_key(e->mr);
+	desc->addr = (g_ofi.mr_mode & FI_MR_VIRT_ADDR) ?
+		     (uint64_t)(uintptr_t)region : 0;
+	desc->len = len;
+
+	pthread_mutex_unlock(&g_ofi.mr_lock);
+
+	PDEBUG("OFI MR registered: handle=%lu key=0x%lx addr=0x%lx len=%zu%s",
+	       (unsigned long)desc->handle, (unsigned long)desc->key,
+	       (unsigned long)desc->addr, len, copy ? " (copied)" : "");
+
+	return EN_DEFW_RC_OK;
+}
+
+defw_rc_t defw_transport_ofi_mr_reg(const void *buf, size_t len,
+				    defw_rma_desc_t *desc)
+{
+	return ofi_mr_reg_common(buf, len, false, desc);
+}
+
+defw_rc_t defw_transport_ofi_mr_reg_copy(const void *buf, size_t len,
+					 defw_rma_desc_t *desc)
+{
+	return ofi_mr_reg_common(buf, len, true, desc);
+}
+
+defw_rc_t defw_transport_ofi_mr_release(uint64_t handle)
+{
+	struct ofi_mr_entry *e, *found = NULL;
+	struct dlist_entry *tmp;
+
+	if (!handle || !g_ofi.mr_list.next)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	pthread_mutex_lock(&g_ofi.mr_lock);
+	dlist_foreach_container_safe(&g_ofi.mr_list, struct ofi_mr_entry,
+				     e, entry, tmp) {
+		if (e->handle == handle) {
+			dlist_remove(&e->entry);
+			found = e;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&g_ofi.mr_lock);
+
+	if (!found) {
+		PERROR("OFI MR release: unknown handle %lu",
+		       (unsigned long)handle);
+		return EN_DEFW_RC_FAIL;
+	}
+
+	fi_close(&found->mr->fid);
+	if (found->owned)
+		free(found->buf);
+	PDEBUG("OFI MR released: handle=%lu", (unsigned long)handle);
+	free(found);
+
+	return EN_DEFW_RC_OK;
+}
+
+/* Drop every registration still outstanding. Called at teardown so a peer that
+ * died before acknowledging a transfer cannot leave a region registered.
+ */
+static void ofi_mr_release_all(void)
+{
+	struct ofi_mr_entry *e;
+	struct dlist_entry *tmp;
+	int n = 0;
+
+	if (!g_ofi.mr_list.next)
+		return;
+
+	pthread_mutex_lock(&g_ofi.mr_lock);
+	dlist_foreach_container_safe(&g_ofi.mr_list, struct ofi_mr_entry,
+				     e, entry, tmp) {
+		dlist_remove(&e->entry);
+		fi_close(&e->mr->fid);
+		if (e->owned)
+			free(e->buf);
+		free(e);
+		n++;
+	}
+	pthread_mutex_unlock(&g_ofi.mr_lock);
+
+	if (n)
+		PDEBUG("OFI released %d outstanding memory region(s)", n);
+}
+
+bool defw_transport_ofi_rma_capable(void)
+{
+	return g_ofi.up && g_ofi.rma_capable;
+}
+
+/*
+ * Pull a peer's registered region into buf.
+ *
+ * The transmit CQ carries one completion at a time by construction:
+ * ofi_send_msg issues a send and then waits for its own completion, so a read
+ * that did not hold the same lock would consume the send's completion, or have
+ * its own consumed. Holding send_lock across issue-and-wait keeps that
+ * invariant, and costs nothing here because the peer serves the read from its
+ * own progress engine rather than from anything we hold.
+ *
+ * The context lives in the transport state rather than on the stack: if the
+ * wait times out the operation is still outstanding, and the provider may
+ * write the completion afterwards.
+ */
+defw_rc_t defw_transport_ofi_rma_read(uint64_t fi_addr, uint64_t key,
+				      uint64_t addr, void *buf, size_t len)
+{
+	struct fi_cq_msg_entry entry;
+	defw_rc_t rc = EN_DEFW_RC_OK;
+	ssize_t ret;
+
+	if (!buf || !len)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	if (!g_ofi.up || !g_ofi.rma_capable)
+		return EN_DEFW_RC_FAIL;
+
+	PDEBUG("OFI RMA read: %zu bytes from fi_addr=%lu key=0x%lx addr=0x%lx",
+	       len, (unsigned long)fi_addr, (unsigned long)key,
+	       (unsigned long)addr);
+
+	pthread_mutex_lock(&g_ofi.send_lock);
+
+	do {
+		ret = fi_read(g_ofi.ep, buf, len, NULL, (fi_addr_t)fi_addr,
+			      addr, key, &g_ofi.rma_ctx);
+		if (ret == -FI_EAGAIN)
+			fi_cq_read(g_ofi.tx_cq, &entry, 1);
+	} while (ret == -FI_EAGAIN);
+
+	if (ret) {
+		PERROR("fi_read failed: %s", fi_strerror((int)-ret));
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+		goto out;
+	}
+
+	ret = fi_cq_sread(g_ofi.tx_cq, &entry, 1, NULL,
+			  DEFW_OFI_SEND_TIMEOUT_MS);
+	if (ret == 1) {
+		/* read completed */
+	} else if (ret == -FI_EAVAIL) {
+		struct fi_cq_err_entry err;
+
+		ofi_report_cq_err(g_ofi.tx_cq, "OFI RMA read completion", &err);
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+	} else if (ret == -FI_EAGAIN) {
+		PERROR("OFI RMA read timed out after %d ms",
+		       DEFW_OFI_SEND_TIMEOUT_MS);
+		rc = EN_DEFW_RC_TIMEOUT;
+	} else {
+		PERROR("fi_cq_sread(tx) failed after fi_read: %s",
+		       fi_strerror((int)-ret));
+		rc = EN_DEFW_RC_SOCKET_FAIL;
+	}
+
+out:
+	pthread_mutex_unlock(&g_ofi.send_lock);
+
+	return rc;
+}
+
+/*
+ * Prove the RMA path works before anything depends on it: register a buffer,
+ * fi_read it back out of ourselves through the fabric, and compare. This
+ * exercises exactly what a peer will do, so a provider whose registration or
+ * addressing rules we got wrong fails here with a clear message instead of
+ * corrupting a payload later.
+ *
+ * Runs during init, before the progress thread starts and before any peer is
+ * known, so nothing else is touching the endpoint or the transmit CQ.
+ */
+static void ofi_rma_selftest(void)
+{
+	defw_rma_desc_t desc;
+	fi_addr_t self = FI_ADDR_UNSPEC;
+	unsigned char *src, *dst;
+	size_t len = DEFW_OFI_SELFTEST_LEN;
+	size_t i;
+
+	if (!g_ofi.rma_capable) {
+		PMSG("OFI RMA selftest: skipped, provider %s is not RMA capable",
+		     g_ofi.info->fabric_attr->prov_name);
+		return;
+	}
+
+	src = malloc(len);
+	dst = malloc(len);
+	if (!src || !dst) {
+		PERROR("OFI RMA selftest: out of memory");
+		goto out;
+	}
+
+	for (i = 0; i < len; i++)
+		src[i] = (unsigned char)(i & 0xff);
+	memset(dst, 0, len);
+
+	/* read from ourselves: our own endpoint name is a perfectly good peer */
+	if (fi_av_insert(g_ofi.av, g_ofi.local_addr, 1, &self, 0, NULL) != 1) {
+		PERROR("OFI RMA selftest: fi_av_insert(self) failed");
+		goto out;
+	}
+
+	if (defw_transport_ofi_mr_reg(src, len, &desc) != EN_DEFW_RC_OK)
+		goto out_av;
+
+	/* deliberately the same call the receive path uses, so this exercises
+	 * the real read rather than a parallel copy of it
+	 */
+	if (defw_transport_ofi_rma_read((uint64_t)self, desc.key, desc.addr,
+					dst, len) != EN_DEFW_RC_OK) {
+		PERROR("OFI RMA selftest: read failed");
+	} else if (memcmp(src, dst, len)) {
+		PERROR("OFI RMA selftest: data mismatch after fi_read");
+	} else {
+		PMSG("OFI RMA selftest: passed, %zu bytes read over %s (key=0x%lx addr=0x%lx)",
+		     len, g_ofi.info->fabric_attr->prov_name,
+		     (unsigned long)desc.key, (unsigned long)desc.addr);
+	}
+
+	defw_transport_ofi_mr_release(desc.handle);
+out_av:
+	fi_av_remove(g_ofi.av, &self, 1, 0);
+out:
+	free(src);
+	free(dst);
+}
+
 static void ofi_fini(void)
 {
+	ofi_mr_release_all();
+
 	if (g_ofi.progress_run) {
 		g_ofi.progress_run = false;
 		pthread_join(g_ofi.progress_thread, NULL);
@@ -248,6 +618,7 @@ static void ofi_fini(void)
 		fi_freeinfo(g_ofi.info);
 	free(g_ofi.recv_bufs);
 	pthread_mutex_destroy(&g_ofi.send_lock);
+	pthread_mutex_destroy(&g_ofi.mr_lock);
 	memset(&g_ofi, 0, sizeof(g_ofi));
 }
 
@@ -271,10 +642,16 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 	memset(&g_ofi, 0, sizeof(g_ofi));
 	memset(&av_attr, 0, sizeof(av_attr));
 	pthread_mutex_init(&g_ofi.send_lock, NULL);
+	pthread_mutex_init(&g_ofi.mr_lock, NULL);
+	dlist_init(&g_ofi.mr_list);
+	/* handle and key 0 are reserved as "no registration" */
+	g_ofi.mr_next_handle = 1;
+	g_ofi.mr_next_key = 1;
 
 	hints = fi_allocinfo();
 	if (!hints) {
 		pthread_mutex_destroy(&g_ofi.send_lock);
+		pthread_mutex_destroy(&g_ofi.mr_lock);
 		return EN_DEFW_RC_OOM;
 	}
 
@@ -282,7 +659,6 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 	 * most providers require a per-operation context object.
 	 */
 	hints->ep_attr->type = FI_EP_RDM;
-	hints->caps = FI_MSG;
 	hints->mode = FI_CONTEXT;
 	hints->domain_attr->threading = FI_THREAD_SAFE;
 	if (provider && strlen(provider)) {
@@ -290,19 +666,57 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 		if (!hints->fabric_attr->prov_name) {
 			fi_freeinfo(hints);
 			pthread_mutex_destroy(&g_ofi.send_lock);
+			pthread_mutex_destroy(&g_ofi.mr_lock);
 			return EN_DEFW_RC_OOM;
 		}
 	}
 
+	/* Prefer an RMA-capable endpoint so large payloads can move by fi_read
+	 * (phase 3). Some providers (e.g. sm2) do not offer FI_RMA, so fall back
+	 * to message-only; attachments then stream over TCP instead.
+	 */
+	hints->caps = FI_MSG | FI_RMA | FI_READ | FI_REMOTE_READ;
+	hints->domain_attr->mr_mode = FI_MR_VIRT_ADDR | FI_MR_ALLOCATED |
+				      FI_MR_PROV_KEY;
 	ret = fi_getinfo(DEFW_OFI_VERSION, NULL, NULL, 0, hints, &g_ofi.info);
+	if (ret == 0) {
+		g_ofi.rma_capable = true;
+	} else {
+		hints->caps = FI_MSG;
+		hints->domain_attr->mr_mode = 0;
+		ret = fi_getinfo(DEFW_OFI_VERSION, NULL, NULL, 0, hints,
+				 &g_ofi.info);
+		g_ofi.rma_capable = false;
+	}
 	fi_freeinfo(hints);
 	if (ret) {
 		PERROR("fi_getinfo failed: %s", fi_strerror(-ret));
 		pthread_mutex_destroy(&g_ofi.send_lock);
+		pthread_mutex_destroy(&g_ofi.mr_lock);
 		return EN_DEFW_RC_FAIL;
 	}
 
-	PMSG("OFI provider selected: %s", g_ofi.info->fabric_attr->prov_name);
+	/* The provider answers with the registration rules it actually needs,
+	 * which are usually fewer than we offered (the tcp provider asks for
+	 * none at all). Remember them: they decide how a region is named to a
+	 * peer, and whether we are able to serve RMA at all.
+	 */
+	g_ofi.mr_mode = g_ofi.info->domain_attr->mr_mode;
+
+	/* FI_MR_LOCAL means even the local buffer of an fi_read must be
+	 * registered and passed as a descriptor. DEFw does not do that yet, so
+	 * rather than issue reads the provider will reject, drop back to the
+	 * inline payload path and say so.
+	 */
+	if (g_ofi.rma_capable && (g_ofi.mr_mode & FI_MR_LOCAL)) {
+		PMSG("OFI provider %s requires FI_MR_LOCAL; RMA disabled, large payloads stay inline",
+		     g_ofi.info->fabric_attr->prov_name);
+		g_ofi.rma_capable = false;
+	}
+
+	PMSG("OFI provider selected: %s (rma=%s mr_mode=0x%x)",
+	     g_ofi.info->fabric_attr->prov_name,
+	     g_ofi.rma_capable ? "yes" : "no", g_ofi.mr_mode);
 
 	ret = fi_fabric(g_ofi.info->fabric_attr, &g_ofi.fabric, NULL);
 	if (ret) {
@@ -399,6 +813,9 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 
 	g_ofi.up = true;
 
+	if (getenv(DEFW_OFI_RMA_SELFTEST_ENV))
+		ofi_rma_selftest();
+
 	/* start draining receive completions */
 	g_ofi.progress_run = true;
 	if (pthread_create(&g_ofi.progress_thread, NULL,
@@ -481,6 +898,46 @@ defw_rc_t defw_transport_ofi_av_insert(const void *addr, size_t addrlen,
 	(void)addr;
 	(void)addrlen;
 	(void)fi_addr_out;
+	return EN_DEFW_RC_FAIL;
+}
+
+bool defw_transport_ofi_rma_capable(void)
+{
+	return false;
+}
+
+defw_rc_t defw_transport_ofi_mr_reg(const void *buf, size_t len,
+				    defw_rma_desc_t *desc)
+{
+	(void)buf;
+	(void)len;
+	(void)desc;
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_mr_reg_copy(const void *buf, size_t len,
+					 defw_rma_desc_t *desc)
+{
+	(void)buf;
+	(void)len;
+	(void)desc;
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_mr_release(uint64_t handle)
+{
+	(void)handle;
+	return EN_DEFW_RC_FAIL;
+}
+
+defw_rc_t defw_transport_ofi_rma_read(uint64_t fi_addr, uint64_t key,
+				      uint64_t addr, void *buf, size_t len)
+{
+	(void)fi_addr;
+	(void)key;
+	(void)addr;
+	(void)buf;
+	(void)len;
 	return EN_DEFW_RC_FAIL;
 }
 

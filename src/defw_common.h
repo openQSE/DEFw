@@ -25,8 +25,12 @@
  * address, so its size changed. Old and new builds are intentionally
  * incompatible (the header version check rejects a mismatched peer before
  * its differently-sized session body can be misread).
+ * Bumped to 4: EN_MSG_TYPE_RMA_ACK was added. A build without it would
+ * discard the acknowledgement as an unknown message type and silently leak
+ * the sender's memory registration, so peers are made to disagree on the
+ * version instead and fail the check outright.
  */
-#define DEFW_VERSION_NUMBER		 3
+#define DEFW_VERSION_NUMBER		 4
 
 #define MAX_STR_LEN			1024
 #define MAX_SHORT_STR_LEN		128

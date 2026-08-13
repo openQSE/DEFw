@@ -54,6 +54,7 @@ static defw_rc_t process_msg_unknown(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_get_num_agents(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent);
+static defw_rc_t process_msg_rma_ack(char *msg, defw_agent_blk_t *agent);
 
 static defw_msg_process_fn_t msg_process_tbl[EN_MSG_TYPE_MAX] = {
 	[EN_MSG_TYPE_HB] = process_msg_hb,
@@ -62,7 +63,29 @@ static defw_msg_process_fn_t msg_process_tbl[EN_MSG_TYPE_MAX] = {
 	[EN_MSG_TYPE_PY_RESPONSE] = process_msg_unknown,
 	[EN_MSG_TYPE_PY_EVENT] = process_msg_unknown,
 	[EN_MSG_TYPE_SESSION_INFO] = process_msg_session_info,
+	[EN_MSG_TYPE_RMA_ACK] = process_msg_rma_ack,
 };
+
+/*
+ * A peer has finished reading a region we registered for it, so the
+ * registration can go. This is handled entirely in C: the acknowledgement
+ * exists to end the lifetime of a memory registration, which the Python layer
+ * knows nothing about.
+ */
+static defw_rc_t process_msg_rma_ack(char *msg, defw_agent_blk_t *agent)
+{
+	defw_msg_rma_ack_t *ack = (defw_msg_rma_ack_t *)msg;
+	uint64_t handle;
+
+	(void)agent;
+
+	handle = ((uint64_t)ntohl(ack->handle_hi) << 32) |
+		 (uint64_t)ntohl(ack->handle_lo);
+
+	PDEBUG("RMA ack received for handle %lu", (unsigned long)handle);
+
+	return defw_transport_ofi_mr_release(handle);
+}
 
 defw_rc_t defw_register_agent_update_notification_cb(defw_agent_update_cb cb)
 {
