@@ -562,9 +562,11 @@ int process_new_agents_helper(defw_agent_blk_t *agent, void *user_data)
 	int hb_fd = INVALID_TCP_SOCKET, rpc_fd = INVALID_TCP_SOCKET, rc;
 
 	if (*iNReady) {
-		if (FD_ISSET(agent->iFileDesc, tReadSet))
+		if (agent->iFileDesc != INVALID_TCP_SOCKET &&
+		    FD_ISSET(agent->iFileDesc, tReadSet))
 			hb_fd = agent->iFileDesc;
-		if (FD_ISSET(agent->iRpcFd, tReadSet))
+		if (agent->iRpcFd != INVALID_TCP_SOCKET &&
+		    FD_ISSET(agent->iRpcFd, tReadSet))
 			rpc_fd = agent->iRpcFd;
 
 		/* need to release reference on the connection here,
@@ -629,9 +631,11 @@ static int process_connection_agents_helper(defw_agent_blk_t *agent,
 		goto out;
 
 	if (*iNReady) {
-		if (FD_ISSET(agent->iFileDesc, tReadSet))
+		if (agent->iFileDesc != INVALID_TCP_SOCKET &&
+		    FD_ISSET(agent->iFileDesc, tReadSet))
 			hb_fd = agent->iFileDesc;
-		if (FD_ISSET(agent->iRpcFd, tReadSet))
+		if (agent->iRpcFd != INVALID_TCP_SOCKET &&
+		    FD_ISSET(agent->iRpcFd, tReadSet))
 			rpc_fd = agent->iRpcFd;
 
 		if (hb_fd == INVALID_TCP_SOCKET &&
