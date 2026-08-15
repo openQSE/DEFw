@@ -26,20 +26,7 @@ extern int g_iMaxSelectFd;
 extern pthread_mutex_t global_var_mutex;
 static bool initialized;
 static pthread_mutex_t agent_array_mutex;
-/* new connections which haven't verified themselves are added to this
- * list
- */
-static struct dlist_entry agent_new_list;
-/* verified services connected to me */
-static struct dlist_entry agent_service_list;
-/* clients connected to me */
-static struct dlist_entry agent_client_list;
-/* services I connect to */
-static struct dlist_entry agent_active_service_list;
-/* clients I connect to */
-static struct dlist_entry agent_active_client_list;
-/* dead agents that still have ref count */
-static struct dlist_entry agent_dead_list;
+static struct dlist_entry agent_connection_table;
 
 static bool g_agent_enable_hb = true;
 static struct in_addr g_local_ip;
@@ -63,54 +50,47 @@ typedef struct defw_connect_req_s {
 #define MUTEX_UNLOCK(x) \
   pthread_mutex_unlock(x)
 
-void defw_lock_agent_lists(void)
+const char *defw_peer_event_type2str(defw_peer_event_type_t event_type)
 {
-	MUTEX_LOCK(&agent_array_mutex);
+	switch (event_type) {
+	case DEFW_PEER_READY:
+		return "PEER_READY";
+	case DEFW_PEER_DEGRADED:
+		return "PEER_DEGRADED";
+	case DEFW_PEER_LOST:
+		return "PEER_LOST";
+	case DEFW_PEER_REMOVED:
+		return "PEER_REMOVED";
+	default:
+		return "UNKNOWN_PEER_EVENT";
+	}
 }
 
-void defw_release_agent_lists(void)
-{
-	MUTEX_UNLOCK(&agent_array_mutex);
-}
+static void defw_agent_report_peer_lost(defw_agent_blk_t *agent,
+					const char *reason);
+static void defw_agent_report_peer_removed(defw_agent_blk_t *agent,
+					   const char *reason);
 
 static void count_lists(void)
 {
 	struct dlist_entry *tmp;
 	int count = 0;
 
-	dlist_foreach(&agent_new_list, tmp) {
+	dlist_foreach(&agent_connection_table, tmp) {
 		count++;
 	}
 
-	PDEBUG("agent_new_list len is: %d", count);
-
-	count = 0;
-	dlist_foreach(&agent_service_list, tmp) {
-		count++;
-	}
-
-	PDEBUG("agent_service_list len is: %d", count);
-
-	count = 0;
-	dlist_foreach(&agent_client_list, tmp) {
-		count++;
-	}
-
-	PDEBUG("agent_client_list len is: %d", count);
+	PDEBUG("agent_connection_table len is: %d", count);
 }
 
 void defw_agent_init(void)
 {
-	if (!initialized) {
-		dlist_init(&agent_new_list);
-		dlist_init(&agent_service_list);
-		dlist_init(&agent_client_list);
-		dlist_init(&agent_active_service_list);
-		dlist_init(&agent_active_client_list);
-		dlist_init(&agent_dead_list);
-		pthread_mutex_init(&agent_array_mutex, NULL);
-		initialized = true;
-	}
+	if (initialized)
+		return;
+
+	dlist_init(&agent_connection_table);
+	pthread_mutex_init(&agent_array_mutex, NULL);
+	initialized = true;
 }
 
 char *defw_get_local_ip()
@@ -171,18 +151,26 @@ int defw_agent_uuid_compare(char *agent_id1, char *agent_id2)
 	return (uuid_compare(uuid1, uuid2) == 0);
 }
 
+static void free_dead_agent_if_unreferenced(defw_agent_blk_t *agent)
+{
+	assert(agent && agent->state & DEFW_AGENT_STATE_DEAD);
+
+	if (agent->ref_count == 0) {
+		defw_agent_report_peer_removed(agent, "transport-cleanup");
+		agent->lifecycle = DEFW_CONN_LIFECYCLE_REMOVED;
+		dlist_remove(&agent->entry);
+		memset(agent, 0xdeadbeef, sizeof(*agent));
+		free(agent);
+	}
+}
+
 static void del_dead_agent_locked(defw_agent_blk_t *agent)
 {
 	assert(agent && agent->state & DEFW_AGENT_STATE_DEAD);
 
 	assert(agent->ref_count > 0);
 	agent->ref_count--;
-
-	if (agent->ref_count == 0) {
-		dlist_remove(&agent->entry);
-		memset(agent, 0xdeadbeef, sizeof(*agent));
-		free(agent);
-	}
+	free_dead_agent_if_unreferenced(agent);
 }
 
 void defw_release_dead_list_agents(void)
@@ -191,9 +179,10 @@ void defw_release_dead_list_agents(void)
 	defw_agent_blk_t *agent;
 
 	MUTEX_LOCK(&agent_array_mutex);
-	dlist_foreach_container_safe(&agent_dead_list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp)
-		del_dead_agent_locked(agent);
+		if (agent->state & DEFW_AGENT_STATE_DEAD)
+			del_dead_agent_locked(agent);
 	MUTEX_UNLOCK(&agent_array_mutex);
 }
 
@@ -207,6 +196,198 @@ static inline bool defw_agent_alive(defw_agent_blk_t *agent)
 	MUTEX_UNLOCK(&agent->state_mutex);
 
 	return viable;
+}
+
+static bool defw_agent_mark_once(defw_agent_blk_t *agent, unsigned int state)
+{
+	bool marked = false;
+
+	MUTEX_LOCK(&agent->state_mutex);
+	if (!(agent->state & state)) {
+		agent->state |= state;
+		marked = true;
+	}
+	MUTEX_UNLOCK(&agent->state_mutex);
+
+	return marked;
+}
+
+static bool defw_agent_state_is_set(defw_agent_blk_t *agent, unsigned int state)
+{
+	bool set;
+
+	MUTEX_LOCK(&agent->state_mutex);
+	set = agent->state & state;
+	MUTEX_UNLOCK(&agent->state_mutex);
+
+	return set;
+}
+
+static bool defw_agent_ready_to_report(defw_agent_blk_t *agent)
+{
+	if (!agent)
+		return false;
+	if (uuid_is_null(agent->id.remote_uuid))
+		return false;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED))
+		return false;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED))
+		return false;
+
+	return true;
+}
+
+static void defw_agent_complete_pending_connect(defw_agent_blk_t *agent,
+						defw_rc_t status)
+{
+	defw_connect_status cb = NULL;
+	uuid_t req_uuid;
+	bool pending = false;
+
+	if (!agent)
+		return;
+
+	MUTEX_LOCK(&agent->state_mutex);
+	if (agent->connect_req_pending && agent->connect_complete_cb) {
+		cb = agent->connect_complete_cb;
+		uuid_copy(req_uuid, agent->connect_req_uuid);
+		agent->connect_req_pending = 0;
+		pending = true;
+	}
+	MUTEX_UNLOCK(&agent->state_mutex);
+
+	if (pending)
+		cb(status, req_uuid);
+}
+
+static const char *defw_connection_direction2str(defw_connection_direction_t dir)
+{
+	switch (dir) {
+	case DEFW_CONN_DIRECTION_INBOUND:
+		return "INBOUND";
+	case DEFW_CONN_DIRECTION_OUTBOUND:
+		return "OUTBOUND";
+	default:
+		return "";
+	}
+}
+
+static void defw_agent_fill_peer_event(defw_agent_blk_t *agent,
+				       defw_peer_event_type_t event_type,
+				       const char *reason,
+				       defw_peer_event_t *event)
+{
+	struct timeval now;
+	const char *addr;
+
+	memset(event, 0, sizeof(*event));
+	event->event_type = event_type;
+	uuid_unparse_lower(agent->id.blk_uuid, event->peer_handle);
+	if (!uuid_is_null(agent->id.remote_uuid)) {
+		uuid_unparse_lower(agent->id.remote_uuid,
+				   event->remote_runtime_id);
+		if (!uuid_is_null(g_defw_cfg.uuid) &&
+		    !uuid_compare(agent->id.remote_uuid, g_defw_cfg.uuid))
+			event->is_self = true;
+	}
+
+	agent->is_loopback = event->is_self;
+	strncpy(event->transport_context, "defw-tcp",
+		sizeof(event->transport_context) - 1);
+	strncpy(event->connection_direction,
+		defw_connection_direction2str(agent->direction),
+		sizeof(event->connection_direction) - 1);
+	addr = inet_ntoa(agent->addr.sin_addr);
+	if (addr)
+		strncpy(event->address, addr, sizeof(event->address) - 1);
+	event->listen_port = agent->listen_port;
+	event->node_type = agent->node_type;
+	strncpy(event->node_name, agent->name, sizeof(event->node_name) - 1);
+	strncpy(event->hostname, agent->hostname, sizeof(event->hostname) - 1);
+	event->pid = (unsigned int) agent->pid;
+	if (reason)
+		strncpy(event->reason, reason, sizeof(event->reason) - 1);
+	gettimeofday(&now, NULL);
+	event->timestamp_sec = now.tv_sec;
+	event->timestamp_usec = now.tv_usec;
+}
+
+void defw_agent_report_peer_ready(defw_agent_blk_t *agent, const char *reason)
+{
+	defw_peer_event_t event;
+
+	if (!agent)
+		return;
+	if (!defw_agent_ready_to_report(agent))
+		return;
+	if (!defw_agent_mark_once(agent, DEFW_AGENT_PEER_READY_REPORTED))
+		return;
+
+	defw_agent_fill_peer_event(agent, DEFW_PEER_READY, reason, &event);
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_READY;
+	agent->heartbeat_mode = event.is_self ? DEFW_HEARTBEAT_NONE :
+				 DEFW_HEARTBEAT_REMOTE;
+	defw_notify_peer_event(&event);
+	defw_agent_complete_pending_connect(agent, EN_DEFW_RC_OK);
+}
+
+void defw_agent_report_peer_ready_update(defw_agent_blk_t *agent,
+					 const char *reason)
+{
+	defw_peer_event_t event;
+
+	if (!agent)
+		return;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_PEER_READY_REPORTED)) {
+		defw_agent_report_peer_ready(agent, reason);
+		return;
+	}
+	if (uuid_is_null(agent->id.remote_uuid))
+		return;
+
+	defw_agent_fill_peer_event(agent, DEFW_PEER_READY, reason, &event);
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_READY;
+	agent->heartbeat_mode = event.is_self ? DEFW_HEARTBEAT_NONE :
+				 DEFW_HEARTBEAT_REMOTE;
+	defw_notify_peer_event(&event);
+}
+
+static void defw_agent_report_peer_lost(defw_agent_blk_t *agent,
+					const char *reason)
+{
+	defw_peer_event_t event;
+
+	if (!agent)
+		return;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_PEER_READY_REPORTED))
+		return;
+	if (!defw_agent_mark_once(agent, DEFW_AGENT_PEER_LOST_REPORTED))
+		return;
+
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_LOST;
+	agent->heartbeat_mode = DEFW_HEARTBEAT_NONE;
+	if (reason)
+		strncpy(agent->failure_reason, reason,
+			sizeof(agent->failure_reason) - 1);
+	defw_agent_fill_peer_event(agent, DEFW_PEER_LOST, reason, &event);
+	defw_notify_peer_event(&event);
+}
+
+static void defw_agent_report_peer_removed(defw_agent_blk_t *agent,
+					   const char *reason)
+{
+	defw_peer_event_t event;
+
+	if (!agent)
+		return;
+	if (!defw_agent_state_is_set(agent, DEFW_AGENT_PEER_READY_REPORTED))
+		return;
+	if (!defw_agent_mark_once(agent, DEFW_AGENT_PEER_REMOVED_REPORTED))
+		return;
+
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_REMOVED;
+	defw_agent_fill_peer_event(agent, DEFW_PEER_REMOVED, reason, &event);
+	defw_notify_peer_event(&event);
 }
 
 static void close_agent_connection_unlocked(defw_agent_blk_t *agent)
@@ -228,7 +409,6 @@ static void close_agent_connection_unlocked(defw_agent_blk_t *agent)
 		agent->iRpcFd = -1;
 	}
 
-	defw_agent_updated_notify();
 }
 
 static void close_agent_connection(defw_agent_blk_t *agent)
@@ -247,7 +427,7 @@ void defw_release_agent_blk_unlocked(defw_agent_blk_t *agent, int dead)
 
 	/* if the agent isn't alive and isn't new then it must be dead */
 	if (agent->state & DEFW_AGENT_STATE_DEAD) {
-		del_dead_agent_locked(agent);
+		free_dead_agent_if_unreferenced(agent);
 		return;
 	}
 
@@ -260,8 +440,16 @@ void defw_release_agent_blk_unlocked(defw_agent_blk_t *agent, int dead)
 		 * don't want to close that connection after we've
 		 * transferred it to the agent we already have.
 		 */
-		if (!(agent->state & DEFW_AGENT_STATE_NEW) || dead)
+		if (!(agent->state & DEFW_AGENT_STATE_NEW) || dead) {
+			if (dead)
+				defw_agent_report_peer_lost(agent,
+					agent->failure_reason[0] ?
+					agent->failure_reason :
+					"transport-failure");
 			close_agent_connection_unlocked(agent);
+			defw_agent_report_peer_removed(agent,
+						       "transport-cleanup");
+		}
 		memset(agent, 0xdeadbeef, sizeof(*agent));
 		free(agent);
 	} else if (dead) {
@@ -270,8 +458,10 @@ void defw_release_agent_blk_unlocked(defw_agent_blk_t *agent, int dead)
 		unset_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
 		unset_agent_state(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
 		unset_agent_state(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
-		dlist_remove(&agent->entry);
-		dlist_insert_tail(&agent->entry, &agent_dead_list);
+		defw_agent_report_peer_lost(agent,
+					    agent->failure_reason[0] ?
+					    agent->failure_reason :
+					    "transport-failure");
 		close_agent_connection_unlocked(agent);
 	}
 }
@@ -285,10 +475,10 @@ void defw_release_agent_blk(defw_agent_blk_t *agent, int dead)
 
 void defw_release_agent_conn(defw_agent_blk_t *agent)
 {
-	assert(agent->state == DEFW_AGENT_STATE_NEW);
 	MUTEX_LOCK(&agent_array_mutex);
 	MUTEX_LOCK(&agent->state_mutex);
 
+	assert(agent->state & DEFW_AGENT_STATE_NEW);
 	assert(agent->ref_count > 0);
 	agent->ref_count--;
 
@@ -326,8 +516,26 @@ char *defw_agent_state2str(defw_agent_blk_t *agent)
 	return agent_state_str;
 }
 
-static defw_agent_blk_t *
-find_agent_blk_by_addr(struct sockaddr_in *addr, struct dlist_entry *list)
+static bool defw_agent_matches_filter(defw_agent_blk_t *agent,
+				      defw_connection_direction_t direction,
+				      defw_type_t role,
+				      bool new_only)
+{
+	if (!agent)
+		return false;
+	if (new_only)
+		return agent->state & DEFW_AGENT_STATE_NEW;
+	if (agent->state & DEFW_AGENT_STATE_NEW)
+		return false;
+	if (direction != DEFW_CONN_DIRECTION_UNKNOWN &&
+	    agent->direction != direction)
+		return false;
+	if (role != EN_DEFW_INVALID && agent->node_type != role)
+		return false;
+	return true;
+}
+
+static defw_agent_blk_t *find_agent_blk_by_addr(struct sockaddr_in *addr)
 {
 	defw_agent_blk_t *agent;
 	struct dlist_entry *tmp;
@@ -336,7 +544,7 @@ find_agent_blk_by_addr(struct sockaddr_in *addr, struct dlist_entry *list)
 		return NULL;
 
 	MUTEX_LOCK(&agent_array_mutex);
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
 		if (agent && defw_agent_alive(agent) &&
 		    agent->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
@@ -351,14 +559,18 @@ find_agent_blk_by_addr(struct sockaddr_in *addr, struct dlist_entry *list)
 	return NULL;
 }
 
-void defw_agent_iter(struct dlist_entry *list, process_agent cb, void *user_data)
+static void defw_agent_iter_filtered(process_agent cb, void *user_data,
+				     defw_connection_direction_t direction,
+				     defw_type_t role, bool new_only)
 {
 	struct dlist_entry *tmp;
 	defw_agent_blk_t *agent;
 	int rc;
 
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
+		if (!defw_agent_matches_filter(agent, direction, role, new_only))
+			continue;
 		acquire_agent_blk(agent);
 		rc = cb(agent, user_data);
 		if (rc)
@@ -366,89 +578,69 @@ void defw_agent_iter(struct dlist_entry *list, process_agent cb, void *user_data
 	}
 }
 
-void defw_service_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter(&agent_service_list, cb, user_data);
-}
-
-void defw_client_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter(&agent_client_list, cb, user_data);
-}
-
-void defw_active_service_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter(&agent_active_service_list, cb, user_data);
-}
-
-void defw_active_client_agent_iter(process_agent cb, void *user_data)
-{
-	defw_agent_iter(&agent_active_client_list, cb, user_data);
-}
-
 void defw_new_agent_iter(process_agent cb, void *user_data)
 {
-	defw_agent_iter(&agent_new_list, cb, user_data);
+	defw_agent_iter_filtered(cb, user_data, DEFW_CONN_DIRECTION_UNKNOWN,
+				 EN_DEFW_INVALID, true);
 }
 
-defw_agent_blk_t *defw_get_next_agent(struct dlist_entry *head, struct dlist_entry *list)
+void defw_connection_agent_iter(process_agent cb, void *user_data)
 {
+	struct dlist_entry *tmp;
+	defw_agent_blk_t *agent;
+	int rc;
+
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t,
+				     agent, entry, tmp) {
+		acquire_agent_blk(agent);
+		rc = cb(agent, user_data);
+		if (rc)
+			break;
+	}
+}
+
+static defw_agent_blk_t *
+defw_get_next_agent_filtered(defw_agent_blk_t *previous,
+			     defw_connection_direction_t direction,
+			     defw_type_t role, bool new_only)
+{
+	struct dlist_entry *entry;
 	defw_agent_blk_t *agent = NULL;
 
-	/* reached the end of the list */
-	if (head->next == list)
+	defw_agent_init();
+
+	if (previous)
+		entry = previous->entry.next;
+	else
+		entry = agent_connection_table.next;
+	if (!entry)
 		goto out;
 
-	agent = container_of(head->next, defw_agent_blk_t, entry);
-	acquire_agent_blk(agent);
+	while (entry != &agent_connection_table) {
+		agent = container_of(entry, defw_agent_blk_t, entry);
+		if (defw_agent_matches_filter(agent, direction, role, new_only)) {
+			acquire_agent_blk(agent);
+			goto out;
+		}
+		entry = entry->next;
+	}
+
+	agent = NULL;
 out:
 	return agent;
 }
 
-defw_agent_blk_t *defw_get_next_active_service_agent(defw_agent_blk_t *agent)
-{
-	struct dlist_entry *start = (agent) ? &agent->entry
-	  : &agent_active_service_list;
-
-	return defw_get_next_agent(start, &agent_active_service_list);
-}
-
-defw_agent_blk_t *defw_get_next_active_client_agent(defw_agent_blk_t *agent)
-{
-	struct dlist_entry *start = (agent) ? &agent->entry
-	  : &agent_active_client_list;
-
-	return defw_get_next_agent(start, &agent_active_client_list);
-}
-
-defw_agent_blk_t *defw_get_next_service_agent(defw_agent_blk_t *agent)
-{
-	struct dlist_entry *start = (agent) ? &agent->entry : &agent_service_list;
-
-	return defw_get_next_agent(start, &agent_service_list);
-}
-
-defw_agent_blk_t *defw_get_next_client_agent(defw_agent_blk_t *agent)
-{
-	struct dlist_entry *start = (agent) ? &agent->entry : &agent_client_list;
-
-	return defw_get_next_agent(start, &agent_client_list);
-}
-
 defw_agent_blk_t *defw_get_next_new_agent_conn(defw_agent_blk_t *agent)
 {
-	struct dlist_entry *start = (agent) ? &agent->entry : &agent_new_list;
-
-	return defw_get_next_agent(start, &agent_new_list);
+	return defw_get_next_agent_filtered(agent, DEFW_CONN_DIRECTION_UNKNOWN,
+					    EN_DEFW_INVALID, true);
 }
 
 defw_agent_blk_t *defw_find_create_agent_blk_by_addr(struct sockaddr_in *addr)
 {
 	defw_agent_blk_t *agent;
 
-	agent = find_agent_blk_by_addr(addr, &agent_service_list);
-	if (!agent)
-		agent = find_agent_blk_by_addr(addr, &agent_client_list);
+	agent = find_agent_blk_by_addr(addr);
 	if (!agent)
 		return defw_alloc_agent_blk(addr, true);
 	defw_release_agent_blk(agent, false);
@@ -476,11 +668,7 @@ int defw_agent_get_highest_fd(void)
 {
 	int iMaxFd = INVALID_TCP_SOCKET;
 
-	calculate_highest_fd(&agent_service_list, &iMaxFd);
-	calculate_highest_fd(&agent_active_service_list, &iMaxFd);
-	calculate_highest_fd(&agent_client_list, &iMaxFd);
-	calculate_highest_fd(&agent_active_client_list, &iMaxFd);
-	calculate_highest_fd(&agent_new_list, &iMaxFd);
+	calculate_highest_fd(&agent_connection_table, &iMaxFd);
 
 	return iMaxFd;
 }
@@ -520,9 +708,18 @@ defw_agent_blk_t *defw_alloc_agent_blk(struct sockaddr_in *addr, bool add)
 	pthread_mutex_init(&agent->cond_mutex, NULL);
 	pthread_cond_init(&agent->rpc_wait_cond, NULL);
 	gettimeofday(&agent->time_stamp, NULL);
+	agent->last_heartbeat_rx = agent->time_stamp;
+	agent->last_heartbeat_tx = agent->time_stamp;
+	agent->last_control_activity = agent->time_stamp;
+	agent->handshake_deadline = agent->time_stamp;
+	agent->handshake_deadline.tv_sec += TCP_READ_TIMEOUT_SEC;
 	agent->iFileDesc = INVALID_TCP_SOCKET;
 	agent->iRpcFd = INVALID_TCP_SOCKET;
 	agent->addr = *addr;
+	agent->direction = DEFW_CONN_DIRECTION_INBOUND;
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_NEW;
+	agent->heartbeat_mode = DEFW_HEARTBEAT_NONE;
+	agent->node_type = EN_DEFW_INVALID;
 	set_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	uuid_generate(agent->id.blk_uuid);
 	acquire_agent_blk(agent);
@@ -532,7 +729,7 @@ defw_agent_blk_t *defw_alloc_agent_blk(struct sockaddr_in *addr, bool add)
 	 * agent verifies their identity
 	 */
 	if (add) {
-		dlist_insert_tail(&agent->entry, &agent_new_list);
+		dlist_insert_tail(&agent->entry, &agent_connection_table);
 		count_lists();
 	}
 
@@ -569,38 +766,39 @@ char *defw_agent_ip2str(defw_agent_blk_t *agent)
 	return inet_ntoa(agent->addr.sin_addr);
 }
 
-int get_num_agents(struct dlist_entry *list)
+static int get_num_agents(defw_connection_direction_t direction, defw_type_t role)
 {
 	int num = 0;
 	struct dlist_entry *tmp;
 	defw_agent_blk_t *agent;
 
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
-		num++;
+		if (defw_agent_matches_filter(agent, direction, role, false))
+			num++;
 	}
 
 	return num;
 }
 
-int get_num_service_agents(void)
+int defw_get_num_connection_agents(void)
 {
-	return get_num_agents(&agent_service_list);
+	return get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_SERVICE) +
+	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_DIRSVC) +
+	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_AGENT) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_SERVICE) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_DIRSVC) +
+	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_AGENT);
 }
 
-int get_num_client_agents(void)
-{
-	return get_num_agents(&agent_client_list);
-}
-
-defw_agent_blk_t *find_agent_blk_by_pid(pid_t pid, struct dlist_entry *list)
+defw_agent_blk_t *find_agent_blk_by_pid(pid_t pid)
 {
 	struct dlist_entry *tmp;
 	defw_agent_blk_t *agent, *found = NULL;
 
 	MUTEX_LOCK(&agent_array_mutex);
 
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
 		if (agent->pid == pid) {
 			found = agent;
@@ -615,8 +813,7 @@ defw_agent_blk_t *find_agent_blk_by_pid(pid_t pid, struct dlist_entry *list)
 	return found;
 }
 
-defw_agent_blk_t *find_agent_blk_by_name(char *hostname, char *name,
-					struct dlist_entry *list)
+defw_agent_blk_t *find_agent_blk_by_name(char *hostname, char *name)
 {
 	struct dlist_entry *tmp;
 	defw_agent_blk_t *agent, *found = NULL;
@@ -626,7 +823,7 @@ defw_agent_blk_t *find_agent_blk_by_name(char *hostname, char *name,
 
 	MUTEX_LOCK(&agent_array_mutex);
 
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
 		if (!strcmp(agent->name, name) &&
 		    !strcmp(agent->hostname, hostname)) {
@@ -643,13 +840,7 @@ defw_agent_blk_t *find_agent_blk_by_name(char *hostname, char *name,
 
 defw_agent_blk_t *find_agent_by_name_global(char *hostname, char *name)
 {
-	defw_agent_blk_t *agent;
-
-	agent = find_agent_blk_by_name(hostname, name, &agent_service_list);
-	if (!agent)
-		agent = find_agent_blk_by_name(hostname, name, &agent_client_list);
-
-	return agent;
+	return find_agent_blk_by_name(hostname, name);
 }
 
 defw_rc_t defw_send_session_info(defw_agent_blk_t *agent, bool rpc_setup)
@@ -767,7 +958,6 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	char *hostname = req->hostname;
 	defw_type_t type = req->type;
 	uuid_t req_uuid;
-	struct dlist_entry *list = req->list;
 	defw_connect_status status_cb = req->status_cb;
 	socklen_t  tCliLen;
 	char ip[MAX_STR_LEN];
@@ -796,6 +986,12 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	}
 
 	agent->listen_port = port;
+	agent->direction = DEFW_CONN_DIRECTION_OUTBOUND;
+	agent->node_type = type;
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_HANDSHAKE;
+	agent->connect_complete_cb = status_cb;
+	uuid_copy(agent->connect_req_uuid, req_uuid);
+	agent->connect_req_pending = 1;
 
 	/* establish two connection: CTRL and RPC */
 	agent->iFileDesc = establishTCPConnection(
@@ -837,8 +1033,6 @@ static void *defw_connect_to_agent_thread(void *user_data)
 		agent->hostname[MAX_STR_LEN-1] = '\0';
 	}
 
-	agent->node_type = type;
-
 	/* get socket information for the iFileDesc */
 	tCliLen = sizeof(agent->addr);
 	getsockname(agent->iFileDesc, (struct sockaddr *)&tmp_addr,
@@ -847,7 +1041,7 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	PDEBUG("Active port = %d\n", agent->addr.sin_port);
 
 	MUTEX_LOCK(&agent_array_mutex);
-	dlist_insert_tail(&agent->entry, list);
+	dlist_insert_tail(&agent->entry, &agent_connection_table);
 	MUTEX_UNLOCK(&agent_array_mutex);
 
 	pthread_mutex_lock(&global_var_mutex);
@@ -856,7 +1050,7 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	g_iMaxSelectFd = defw_get_highest_fd();
 	pthread_mutex_unlock(&global_var_mutex);
 
-	status_cb(EN_DEFW_RC_OK, req_uuid);
+	defw_agent_report_peer_ready(agent, "outbound-rpc-ready");
 
 	free(user_data);
 
@@ -921,7 +1115,7 @@ defw_rc_t defw_connect_to_service(char *ip_addr, int port, char *name,
 	 * how to handle function pointer passing in swig */
 	defw_connect_status cb = (status_cb) ? status_cb : defw_notify_connect_complete;
 	return defw_connect_to_agent(ip_addr, port, name, hostname,
-				    type, uuid, &agent_active_service_list, cb);
+				    type, uuid, NULL, cb);
 }
 
 defw_rc_t defw_connect_to_client(char *ip_addr, int port, char *name,
@@ -932,7 +1126,7 @@ defw_rc_t defw_connect_to_client(char *ip_addr, int port, char *name,
 	 * how to handle function pointer passing in swig */
 	defw_connect_status cb = (status_cb) ? status_cb : defw_notify_connect_complete;
 	return defw_connect_to_agent(ip_addr, port, name, hostname,
-				   type, uuid, &agent_active_client_list, cb);
+				   type, uuid, NULL, cb);
 }
 
 static defw_rc_t
@@ -1152,16 +1346,20 @@ defw_rc_t defw_rma_fetch(char *blk_uuid, unsigned long long handle,
 
 static
 defw_agent_blk_t *find_agent_blk_by_uuid(defw_agent_uuid_t *id, bool full,
-					struct dlist_entry *list)
+					defw_connection_direction_t direction)
 {
 	struct dlist_entry *tmp;
 	defw_agent_blk_t *agent, *found = NULL;
 
 	MUTEX_LOCK(&agent_array_mutex);
 
-	dlist_foreach_container_safe(list, defw_agent_blk_t, agent,
+	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
 				     entry, tmp) {
 		bool cmp;
+
+		if (direction != DEFW_CONN_DIRECTION_UNKNOWN &&
+		    agent->direction != direction)
+			continue;
 
 		if (full) {
 			cmp = uuid_compare(agent->id.remote_uuid, id->remote_uuid) == 0 &&
@@ -1187,25 +1385,25 @@ defw_agent_blk_t *find_agent_blk_by_uuid(defw_agent_uuid_t *id, bool full,
 static defw_agent_blk_t *
 defw_find_client_agent_by_uuid(defw_agent_uuid_t *id, bool full)
 {
-	return find_agent_blk_by_uuid(id, full, &agent_client_list);
+	return find_agent_blk_by_uuid(id, full, DEFW_CONN_DIRECTION_INBOUND);
 }
 
 static defw_agent_blk_t *
 defw_find_service_agent_by_uuid(defw_agent_uuid_t *id, bool full)
 {
-	return find_agent_blk_by_uuid(id, full, &agent_service_list);
+	return find_agent_blk_by_uuid(id, full, DEFW_CONN_DIRECTION_INBOUND);
 }
 
 static defw_agent_blk_t *
 defw_find_active_client_agent_by_uuid(defw_agent_uuid_t *id, bool full)
 {
-	return find_agent_blk_by_uuid(id, full, &agent_active_client_list);
+	return find_agent_blk_by_uuid(id, full, DEFW_CONN_DIRECTION_OUTBOUND);
 }
 
 static defw_agent_blk_t *
 defw_find_active_service_agent_by_uuid(defw_agent_uuid_t *id, bool full)
 {
-	return find_agent_blk_by_uuid(id, full, &agent_active_service_list);
+	return find_agent_blk_by_uuid(id, full, DEFW_CONN_DIRECTION_OUTBOUND);
 }
 
 defw_agent_blk_t *
@@ -1257,13 +1455,7 @@ defw_agent_blk_t *defw_find_agent_by_blk_uuid(char *blk_uuid_str)
 		return NULL;
 
 	MUTEX_LOCK(&agent_array_mutex);
-	agent = find_blk_uuid_in_list(blk_uuid, &agent_active_service_list);
-	if (!agent)
-		agent = find_blk_uuid_in_list(blk_uuid, &agent_service_list);
-	if (!agent)
-		agent = find_blk_uuid_in_list(blk_uuid, &agent_client_list);
-	if (!agent)
-		agent = find_blk_uuid_in_list(blk_uuid, &agent_active_client_list);
+	agent = find_blk_uuid_in_list(blk_uuid, &agent_connection_table);
 	MUTEX_UNLOCK(&agent_array_mutex);
 
 	return agent;
@@ -1286,17 +1478,13 @@ defw_find_agent_by_uuid_passive(uuid_t uuid)
 
 void defw_move_to_client_list(defw_agent_blk_t *agent)
 {
-	MUTEX_LOCK(&agent_array_mutex);
-	dlist_remove(&agent->entry);
-	dlist_insert_tail(&agent->entry, &agent_client_list);
-	MUTEX_UNLOCK(&agent_array_mutex);
+	agent->direction = DEFW_CONN_DIRECTION_INBOUND;
+	agent->node_type = EN_DEFW_AGENT;
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_HANDSHAKE;
 }
 
 void defw_move_to_service_list(defw_agent_blk_t *agent)
 {
-	MUTEX_LOCK(&agent_array_mutex);
-	dlist_remove(&agent->entry);
-	dlist_insert_tail(&agent->entry, &agent_service_list);
-	MUTEX_UNLOCK(&agent_array_mutex);
+	agent->direction = DEFW_CONN_DIRECTION_INBOUND;
+	agent->lifecycle = DEFW_CONN_LIFECYCLE_HANDSHAKE;
 }
-

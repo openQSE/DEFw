@@ -8,7 +8,7 @@ lnx_cfg="shm+cxi:cxi0|shm+cxi:cxi1|shm+cxi:cxi2|shm+cxi:cxi3"
 
 if [[ $# -ne 6 ]]; then
   echo "Error: Exactly three parameters (-b, -p and -r) are required."
-  echo "Usage: $0 -b <base port> -r <resource manager hostname> -p <path>"
+  echo "Usage: $0 -b <base port> -r <directory service hostname> -p <path>"
   exit 1
 fi
 

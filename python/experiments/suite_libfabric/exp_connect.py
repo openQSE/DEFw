@@ -5,20 +5,20 @@ from util_data import *
 from defw_exception import DEFwOperationFailure
 
 def run():
-	# connect to the resource manager
-	rsmgr = defw_get_resource_mgr()
-	logging.defw_app(f"{os.getpid()}: got resmgr {rsmgr}")
+	# connect to the directory service
+	dirsvc = defw_get_directory_service()
+	logging.defw_app(f"{os.getpid()}: got dirsvc {dirsvc}")
 
-	# publish it to the resource manager
-	rsmgr.register_agent(me.my_endpoint(), f"I'm {os.getpid()}")
+	# publish it to the directory service
+	dirsvc.register_agent(me.my_endpoint(), f"I'm {os.getpid()}")
 	# Wait until all processes in the world has connected
-	rsmgr.wait_agents()
+	dirsvc.wait_agents()
 	# get the addresses
-	contexts = rsmgr.get_agents_context()
+	contexts = dirsvc.get_agents_context()
 
-	rsmgr.deregister_agent(me.my_endpoint())
+	dirsvc.deregister_agent(me.my_endpoint())
 
-	rsmgr.wait_agents_deregistration()
+	dirsvc.wait_agents_deregistration()
 
 	logging.defw_app(f"Agent Contexts: {contexts}")
 

@@ -3,11 +3,10 @@ defw:
         DEFW_PATH: ${HOME}/ORNL/Quantum/QFw/defw
     parent-address: 127.0.0.1
     parent-port: 8090
-    parent-name: resmgr
-    name: resmgr
+    parent-name: dirsvc
+    name: dirsvc
     shell: interactive
-    type: resmgr
+    type: dirsvc
     path: ${DEFW_PATH}
-    tmp: ${HOME}/tmp/resmgr
+    tmp: ${HOME}/tmp/dirsvc
     loglevel: all
-

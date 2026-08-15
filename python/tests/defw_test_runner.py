@@ -28,8 +28,8 @@ DEFW_ROOT = PYTHON_DIR.parent
 DEFAULT_CONFIG_DIR = TESTS_DIR / "configs"
 DEFAULT_CONFIG_PATH = PYTHON_DIR / "config" / "defw_generic.yaml"
 DEFAULT_MODULES = [
-	"svc_resmgr",
-	"api_resmgr",
+	"svc_dirsvc",
+	"api_dirsvc",
 ]
 DEFAULT_PY_LOG_LEVEL = "critical"
 DEFAULT_PREF = {
@@ -43,6 +43,36 @@ DEFAULT_PREF = {
 	"debug module reload": False,
 }
 PROGRESS_PREFIX = "__DEFW_PROGRESS__:"
+
+
+def build_failure_check_command():
+	lines = [
+		"failures = []",
+		"for suite_result in defw.global_test_results.get()['Tests']:",
+		"    suite_name = suite_result['name']",
+		"    for result in suite_result['SubTests']:",
+		"        if result.get('status') == 'FAIL':",
+		"            failures.append(f\"{suite_name}::{result['name']}\")",
+		"if failures:",
+		"    print('DEFw experiment failures: ' + ', '.join(failures), flush=True)",
+		"    raise SystemExit(1)",
+	]
+	return "\n".join(lines)
+
+
+def resolve_defwp():
+	override = os.environ.get("DEFW_EXECUTABLE")
+	if override:
+		return str(Path(override).resolve())
+	for candidate in [
+		DEFW_ROOT / "src" / "defwp",
+		DEFW_ROOT / "bin" / "defwp",
+		DEFW_ROOT / "src" / "defwp-wrapper",
+		DEFW_ROOT / "bin" / "defwp-wrapper",
+	]:
+		if candidate.is_file() and os.access(candidate, os.X_OK):
+			return str(candidate)
+	raise FileNotFoundError(f"Unable to find defwp under {DEFW_ROOT}")
 
 
 def list_configs():
@@ -167,7 +197,8 @@ def build_environment(config):
 	env = os.environ.copy()
 	defw_path = str(DEFW_ROOT)
 	src_path = str(DEFW_ROOT / "src")
-	agent_name = master.get("agent_name", "master-resmgr")
+	lib_path = str(DEFW_ROOT / "lib")
+	agent_name = master.get("agent_name", "master-dirsvc")
 	listen_port = str(master.get("listen_port", 25100))
 	telnet_port = str(master.get("telnet_port", 25101))
 	log_dir = str(master.get(
@@ -182,17 +213,18 @@ def build_environment(config):
 	))
 	pref_path = write_pref_file(config, log_dir)
 
+	runtime_libs = os.pathsep.join([lib_path, src_path])
 	env["LD_LIBRARY_PATH"] = (
-		f"{src_path}{os.pathsep}{env['LD_LIBRARY_PATH']}"
+		f"{runtime_libs}{os.pathsep}{env['LD_LIBRARY_PATH']}"
 		if env.get("LD_LIBRARY_PATH")
-		else src_path
+		else runtime_libs
 	)
 	env["DEFW_PATH"] = defw_path
 	env["DEFW_CONFIG_PATH"] = str(
 		Path(master.get("config_path", DEFAULT_CONFIG_PATH)).resolve()
 	)
 	env["DEFW_AGENT_NAME"] = agent_name
-	env["DEFW_AGENT_TYPE"] = "resmgr"
+	env["DEFW_AGENT_TYPE"] = "dirsvc"
 	env["DEFW_SHELL_TYPE"] = "cmdline"
 	env["DEFW_LISTEN_PORT"] = listen_port
 	env["DEFW_TELNET_PORT"] = telnet_port
@@ -225,12 +257,13 @@ def build_python_command(config):
 		lines.append(f"suite[{script!r}].run()")
 		lines.append(f"print({(PROGRESS_PREFIX + script)!r}, flush=True)")
 	lines.append("defw.dumpGlobalTestResults()")
+	lines.append(build_failure_check_command())
 	return "\n".join(lines)
 
 
 def build_command(config):
 	return [
-		str(DEFW_ROOT / "src" / "defwp"),
+		resolve_defwp(),
 		"-c",
 		build_python_command(config),
 	]

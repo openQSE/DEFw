@@ -8,5 +8,10 @@ typedef unsigned int bool;
 #include "defw_global.h"
 %}
 
-#include "defw_global.h"
+%include "owned_string.i"
 
+%apply char **DEFW_OWNED_STRING { char **uuid };
+
+%include "defw_global.h"
+
+%clear char **uuid;

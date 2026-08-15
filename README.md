@@ -9,7 +9,7 @@ pluggable services and APIs under `python/services/` and
 `python/service-apis/`.
 
 At runtime, a DEFw instance starts as one of three roles:
-- `resmgr`: the root coordinator for a deployment
+- `dirsvc`: the root directory service for a deployment
 - `service`: a long-lived capability provider such as a launcher or
   other domain-specific service
 - `agent`: a client or worker process that connects into the framework
@@ -22,9 +22,9 @@ files expand those variables into a consistent runtime model.
 flowchart TD
     User[User or experiment] --> Agent[DEFw agent]
     Agent --> API[Service API modules]
-    API --> ResMgr[Resource manager]
-    ResMgr --> Launcher[Launcher service]
-    ResMgr --> Other[Other services]
+    API --> DirSvc[Directory service]
+    DirSvc --> Launcher[Launcher service]
+    DirSvc --> Other[Other services]
     Launcher --> Remote[Remote processes]
 ```
 
@@ -38,9 +38,10 @@ orchestration, and higher-level APIs.
 
 This split keeps the transport and process-control path in native code
 while allowing services and APIs to be implemented quickly in Python. A
-DEFw process starts through `src/defwp`, loads its configuration from
-the YAML file referenced by `DEFW_CONFIG_PATH`, initializes the native
-runtime, then loads the requested Python modules for its role.
+DEFw process starts through the CMake-built or installed `defwp`
+launcher, loads its configuration from the YAML file referenced by
+`DEFW_CONFIG_PATH`, initializes the native runtime, then loads the
+requested Python modules for its role.
 
 Services are generic plug-ins. DEFw does not require a fixed service
 set. Users can provide their own services and service APIs without
@@ -95,7 +96,7 @@ on the target DEFw process.
 
 The normal flow is:
 1. The client creates a service API object, usually from a service-info
-   record returned by the resource manager.
+   or binding record returned by the directory service.
 2. `BaseRemote` generates a `class_id` caller handle unless one is
    supplied explicitly.
 3. `BaseRemote` sends an `instantiate_class` RPC for the target Python
@@ -183,31 +184,40 @@ module while keeping long-lived service objects alive underneath it is a
 fragile runtime model. The default behavior is therefore load-on-first-
 use, not reload-on-every-call.
 
-## Resource Manager Special Case
-The resource manager service, `DEFwResMgr`, is treated specially in the
-worker dispatch path. The active resource manager object already exists
-on the server side, so the worker binds caller handles to that existing
-object rather than constructing a fresh one on demand.
+## Directory Service Special Case
+The directory service, `DEFwDirSvc`, is treated specially in the worker
+dispatch path. The active directory-service object already exists on the
+server side, so the worker binds caller handles to that existing object
+rather than constructing a fresh one on demand.
 
 Conceptually, this is the same shared-instance model used by singleton
-services, but it remains a dedicated special case in the current code.
+services. New service discovery and binding should use the directory
+service naming and APIs.
 
 ## Running DEFw
 1. Install Python dependencies:
    ```bash
    python3 -m pip install -r requirements.txt
    ```
-2. Build the native libraries, SWIG wrappers, and the `defwp` launcher:
+2. Configure and build with CMake:
    ```bash
-   scons
+   cmake -S . -B build
+   cmake --build build
    ```
-3. Start the runtime directly with a configured environment:
+3. Run the build-tree launcher or wrapper with a configured environment:
    ```bash
-   ./src/defwp
+   ./build/runtime/src/defwp
+   ./build/runtime/src/defwp-wrapper
+   ```
+4. Optionally install and run from the install prefix:
+   ```bash
+   cmake --install build --prefix /path/to/defw-install
+   /path/to/defw-install/bin/defwp
+   /path/to/defw-install/bin/defwp-wrapper
    ```
 
 Typical bring-up still follows the same role order:
-1. Start the resource manager.
+1. Start the directory service.
 2. Start one or more services such as `svc_launcher`.
 3. Start a client or experiment driver.
 
@@ -219,9 +229,9 @@ documented below.
 ## Test Runner Workflow
 The supported local test entry point is
 `python/tests/defw_test_runner.py`. It builds the DEFw environment for a
-run, writes a temporary preference file, launches `src/defwp`, selects
-an experiment suite and scripts, and collects logs under the configured
-log directory.
+run, writes a temporary preference file, launches the CMake build-tree
+or installed `defwp` executable, selects an experiment suite and scripts,
+and collects logs under the configured log directory.
 
 ### Prerequisites
 Run all commands below from the `DEFw/` directory after building:
@@ -229,8 +239,21 @@ Run all commands below from the `DEFw/` directory after building:
 ```bash
 cd /path/to/QFw/DEFw
 python3 -m pip install -r requirements.txt
-scons
+cmake -S . -B build
+cmake --build build
 ```
+
+For build-tree test-runner use after a CMake build, point the runner at
+the build runtime:
+
+```bash
+cd build/runtime
+python/tests/defw_test_runner.py smoke
+```
+
+For installed-tree use, run the installed runner and launcher from the
+same prefix, or set `DEFW_EXECUTABLE` to the desired `defwp` or
+`defwp-wrapper` path.
 
 ### Built-In Configurations
 List the available built-in configs:
@@ -301,7 +324,7 @@ For example, `python/tests/configs/smoke.yaml` runs the `framework`
 suite and executes only `remote_exception_format`.
 
 The `modules:` list is combined with the runner defaults
-`svc_resmgr,api_resmgr`. The runner also sets `DEFW_SHELL_TYPE=cmdline`,
+`svc_dirsvc,api_dirsvc`. The runner also sets `DEFW_SHELL_TYPE=cmdline`,
 builds `DEFW_ONLY_LOAD_MODULE`, writes `DEFW_PREF_PATH`, and defaults
 the log root to `master.log_dir`.
 
@@ -353,7 +376,7 @@ scripts:
 modules:
   - api_my_service
 master:
-  agent_name: master-resmgr
+  agent_name: master-dirsvc
   listen_port: 25200
   telnet_port: 25201
   experiment_port_base: 25210
@@ -386,9 +409,9 @@ the current DEFw code and configuration files in this repository.
 | Variable | Description |
 | --- | --- |
 | `DEFW_AGENT_NAME` | Unique name for the current DEFw instance. |
-| `DEFW_AGENT_TYPE` | Runtime role: `agent`, `service`, or `resmgr`. |
+| `DEFW_AGENT_TYPE` | Runtime role: `agent`, `service`, or `dirsvc`. |
 | `DEFW_CONFIG_PATH` | Path to the YAML configuration file consumed at startup. |
-| `DEFW_DISABLE_RESMGR` | If set to `YES`, disables resource-manager handling in the Python infrastructure. |
+| `DEFW_DISABLE_DIRSVC` | Disable automatic directory-service connection for helper or standalone processes. |
 | `DEFW_EXPECTED_AGENT_COUNT` | Expected number of agents for deployments that wait on a full set of workers. |
 | `DEFW_EXPERIMENT_PORT_BASE` | Base port range used when experiments spawn additional service processes. |
 | `DEFW_EXTERNAL_EXPERIMENTS_PATH` | Extra search path for out-of-tree experiment modules. |
@@ -402,7 +425,7 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_PARENT_ADDR` | Parent DEFw IP address or host address. |
 | `DEFW_PARENT_HOSTNAME` | Parent DEFw hostname used by the generic YAML configuration. |
 | `DEFW_PARENT_HNAME` | Legacy hostname variable used by some older setup scripts; prefer `DEFW_PARENT_HOSTNAME`. |
-| `DEFW_PARENT_NAME` | Name of the parent DEFw instance, typically the resource manager. |
+| `DEFW_PARENT_NAME` | Name of the parent DEFw instance, typically the directory service. |
 | `DEFW_PARENT_PORT` | Parent DEFw listen port. |
 | `DEFW_PATH` | Root path of the DEFw checkout or installation. |
 | `DEFW_PREF_PATH` | Path to the DEFw preference YAML file loaded at runtime. |
@@ -410,11 +433,11 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_SHELL_TYPE` | Execution mode such as `interactive`, `cmdline`, or `daemon`. |
 | `DEFW_SQL_PATH` | Optional SQL output path referenced by reporting logic. |
 | `DEFW_TELNET_PORT` | Optional telnet/debug port used by some startup modes. |
-| `LD_LIBRARY_PATH` | Must include `src/` so the generated DEFw shared libraries can be loaded. |
+| `LD_LIBRARY_PATH` | Must include the build-tree `runtime/src/` directory or installed library directory so DEFw shared libraries can be loaded. |
 
 ## Repository Pointers
-- `src/`: C runtime, SWIG inputs, generated wrappers, shared libraries,
-  and `defwp`
+- `src/`: C runtime, SWIG inputs, and launcher sources; CMake writes
+  generated wrappers, shared libraries, and `defwp` under `build/runtime/src/`
 - `python/infra/`: framework bootstrap, module loading, transport, and
   agent lifecycle, RPC dispatch, object registries, and preferences
 - `python/config/`: YAML templates expanded from environment variables

@@ -5,8 +5,8 @@
 
 /* accessor functions to set/get global information */
 
-void disable_resmgr(void);
-int resmgr_disabled(void);
+void disable_dirsvc(void);
+int dirsvc_disabled(void);
 void set_log_level(defw_log_level_t level);
 void set_defw_path(char *path);
 void set_py_path(char *path);

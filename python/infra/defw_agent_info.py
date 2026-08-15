@@ -1,7 +1,6 @@
 from defw_exception import DEFwOutOfResources
 from defw import me
 from enum import IntFlag
-import logging
 
 def get_bit_list(bitstring, IntFlag_class):
 	str_list = list(IntFlag_class.__members__.keys())
@@ -77,23 +76,8 @@ class DEFwServiceInfo:
 	def get_property(self, key, default=None):
 		return self.__properties.get(key, default)
 
-	def is_match(self, svc_name, svc_type, svc_caps):
-		logging.defw_core(f"is_match {svc_name} <-> {self.__service_name}")
-		if svc_name != self.__service_name:
-			return False
-		t = self.__capabilities.get_cap_type()
-		c = self.__capabilities.get_caps()
-		logging.defw_core(f"is_match {bin(t)} <-> {bin(svc_type)}")
-		logging.defw_core(f"is_match {bin(c)} <-> {bin(svc_caps)}")
-		if svc_type != -1:
-			if not (svc_type & t) == svc_type:
-				logging.defw_core("is_match didn't match svc_type")
-				return False
-		if svc_caps != -1:
-			if not (svc_caps & c) == svc_caps:
-				logging.defw_core("is_match didn't match svc_caps")
-				return False
-		return True
+	def get_capabilities(self):
+		return self.__capabilities
 
 	def consume_capacity(self):
 		if self.__cur_capacity == self.__max_capacity:

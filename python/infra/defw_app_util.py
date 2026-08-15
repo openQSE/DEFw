@@ -8,10 +8,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
 
 import cdefw_global
 import defw
+import defw_peers
+from cdefw_agent import EN_DEFW_SERVICE
+from defw_agent import Endpoint
 from defw_exception import DEFwError, DEFwReserveError
 
 SYSTEM_UP_TIMEOUT = 40
@@ -33,8 +35,11 @@ class DEFwServiceProcess:
 	stderr_path: str
 	stdout_handle: object
 	stderr_handle: object
+	service_endpoint: object = None
+	directory_records: object = None
 
 	def shutdown(self, timeout=5):
+		self.deregister()
 		if self.pid > 0:
 			try:
 				os.kill(self.pid, signal.SIGTERM)
@@ -58,6 +63,25 @@ class DEFwServiceProcess:
 			self.process.wait(timeout=timeout)
 		self.stdout_handle.close()
 		self.stderr_handle.close()
+
+	def deregister(self):
+		if not self.directory_records:
+			return
+		try:
+			dirsvc = defw_get_directory_service(timeout=1)
+			for record in list(self.directory_records):
+				dirsvc.deregister_service(
+					record['service_id'],
+					record['runtime_id'],
+					record['generation'],
+				)
+		except Exception:
+			logging.defw_stacktrace(
+				f"Failed to deregister spawned service {self.agent_name}",
+				exc_info=True,
+			)
+		finally:
+			self.directory_records = []
 
 
 def _normalize_service_specs(services):
@@ -140,9 +164,78 @@ def _wait_for_daemon_pid(log_dir, timeout=5):
 	raise DEFwError(f"Timed out waiting for daemon pid in {log_dir}")
 
 
+def _resolve_defwp():
+	override = os.environ.get('DEFW_EXECUTABLE')
+	if override:
+		path = Path(override).resolve()
+		if path.is_file() and os.access(path, os.X_OK):
+			return str(path)
+		raise DEFwError(f"DEFW_EXECUTABLE is not executable: {path}")
+
+	defw_path = Path(cdefw_global.get_defw_path())
+	for candidate in [
+		defw_path / 'src' / 'defwp',
+		defw_path / 'bin' / 'defwp',
+		defw_path / 'src' / 'defwp-wrapper',
+		defw_path / 'bin' / 'defwp-wrapper',
+	]:
+		if candidate.is_file() and os.access(candidate, os.X_OK):
+			return str(candidate)
+	raise DEFwError(f"Unable to find defwp under {defw_path}")
+
+
+def _endpoint_from_peer_record(record, agent_name, listen_port):
+	if not record.get('callable'):
+		return None
+	endpoint = record.get('endpoint') or {}
+	if endpoint.get('node_name') != agent_name:
+		return None
+	try:
+		if int(endpoint.get('listen_port', 0)) != int(listen_port):
+			return None
+	except (TypeError, ValueError):
+		return None
+	runtime_id = record.get('runtime_id') or endpoint.get('runtime_id')
+	peer_handle = record.get('peer_handle')
+	if not runtime_id or not peer_handle:
+		return None
+	return Endpoint(
+		endpoint.get('address', ''),
+		endpoint.get('port', 0),
+		endpoint.get('listen_port', 0),
+		endpoint.get('pid', 0),
+		endpoint.get('node_name', agent_name),
+		endpoint.get('hostname', ''),
+		endpoint.get('node_type') or record.get('node_type') or
+		EN_DEFW_SERVICE,
+		runtime_id,
+		blk_uuid=peer_handle,
+	)
+
+
+def _wait_for_service_endpoint(agent_name, listen_port,
+			       timeout=SYSTEM_UP_TIMEOUT):
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		for record in defw_peers.snapshot().values():
+			endpoint = _endpoint_from_peer_record(
+				record, agent_name, listen_port)
+			if endpoint:
+				return endpoint
+		time.sleep(0.1)
+	raise DEFwReserveError(
+		f"Timed out waiting for service {agent_name} to connect")
+
+
+def _register_spawned_service(agent_name, listen_port):
+	service_endpoint = _wait_for_service_endpoint(agent_name, listen_port)
+	dirsvc = defw_get_directory_service()
+	return service_endpoint, dirsvc.register_service(service_endpoint)
+
+
 def defw_spawn_services(services):
 	specs = _normalize_service_specs(services)
-	defwp = os.path.join(cdefw_global.get_defw_path(), 'src', 'defwp')
+	defwp = _resolve_defwp()
 	spawned = []
 
 	for spec in specs:
@@ -181,6 +274,13 @@ def defw_spawn_services(services):
 			stdout_handle=stdout_handle,
 			stderr_handle=stderr_handle,
 		)
+		try:
+			handle.service_endpoint, handle.directory_records = (
+				_register_spawned_service(agent_name, listen_port)
+			)
+		except Exception:
+			handle.shutdown()
+			raise
 		_SPAWNED_SERVICES.append(handle)
 		spawned.append(handle)
 
@@ -210,30 +310,45 @@ def _shutdown_spawned_services():
 atexit.register(_shutdown_spawned_services)
 
 
-def defw_get_resource_mgr(timeout=SYSTEM_UP_TIMEOUT):
-	if not defw.wait_resmgr(timeout):
-		logging.defw_app("Couldn't find a resmgr")
-		raise DEFwReserveError("Couldn't find a resmgr")
+def defw_get_directory_service(timeout=SYSTEM_UP_TIMEOUT):
+	if not defw.wait_dirsvc(timeout):
+		logging.defw_app("Couldn't find a directory service")
+		raise DEFwReserveError("Couldn't find a directory service")
 
-	return defw.resmgr
+	return defw.dirsvc
 
 
-def defw_reserve_service_by_name(resmgr, svc_name, svc_type=-1,
-								 svc_cap=-1, timeout=SYSTEM_UP_TIMEOUT):
+def defw_connect_service_by_name(dirsvc, service_name,
+				 timeout=SYSTEM_UP_TIMEOUT,
+				 service_type=None,
+				 binding_name=None,
+				 selector_resource=None,
+				 selector_alias=None,
+				 properties=None):
 	wait = 0
+	bindings = []
+	filters = {'service_name': service_name}
+	for key, value in (
+			('service_type', service_type),
+			('binding_name', binding_name),
+			('selector_resource', selector_resource),
+			('selector_alias', selector_alias),
+			('properties', properties),
+	):
+		if value:
+			filters[key] = value
 	while wait < timeout:
-		service_infos = resmgr.get_services(svc_name, svc_type, svc_cap)
-		if service_infos and len(service_infos) > 0:
+		bindings = dirsvc.resolve_services(**filters)
+		if bindings and len(bindings) > 0:
 			break
 		wait += 1
-		logging.defw_app(f"Waiting to connect to {svc_name}")
-		sleep(1)
+		logging.defw_app(f"Waiting to connect to {service_name}")
+		time.sleep(1)
 
-	if len(service_infos) == 0:
-		raise DEFwReserveError(f"Couldn't connect to a {svc_name}, {svc_type}, {svc_cap}")
+	if len(bindings) == 0:
+		raise DEFwReserveError(
+			f"Couldn't connect to a {service_name}")
 
-	logging.defw_app(f"Received service_infos: {service_infos}")
+	logging.defw_app(f"Received directory bindings: {bindings}")
 
-	svc_apis = defw.connect_to_resource(service_infos, svc_name)
-
-	return svc_apis
+	return [defw.connect_to_binding(binding) for binding in bindings]

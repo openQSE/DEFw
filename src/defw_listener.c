@@ -28,13 +28,13 @@ fd_set g_tAllSet;
 int g_iMaxSelectFd = INVALID_TCP_SOCKET;
 static int g_iListenFd = INVALID_TCP_SOCKET;
 static bool g_bShutdown;
-bool resmgr_connected;
-bool resmgr_connect_in_progress;
+bool dirsvc_connected;
+bool dirsvc_connect_in_progress;
 pthread_mutex_t global_var_mutex;
-static int agent_notification_idx;
-static defw_agent_update_cb agent_notifications[MAX_AGENT_NOTIFICATION];
 static int connect_complete_idx;
 static defw_connect_status connect_notifications[MAX_AGENT_NOTIFICATION];
+static int peer_event_idx;
+static defw_peer_event_cb peer_event_notifications[MAX_AGENT_NOTIFICATION];
 
 typedef struct connection_info_s {
 	int *iNReady;
@@ -87,15 +87,6 @@ static defw_rc_t process_msg_rma_ack(char *msg, defw_agent_blk_t *agent)
 	return defw_transport_ofi_mr_release(handle);
 }
 
-defw_rc_t defw_register_agent_update_notification_cb(defw_agent_update_cb cb)
-{
-	if (agent_notification_idx >= MAX_AGENT_NOTIFICATION)
-		return EN_DEFW_RC_FAIL;
-	agent_notifications[agent_notification_idx] = cb;
-	agent_notification_idx++;
-	return EN_DEFW_RC_OK;
-}
-
 defw_rc_t defw_register_msg_callback(defw_msg_type_t msg_type, defw_msg_process_fn_t cb)
 {
 	if (msg_type >= EN_MSG_TYPE_MAX || msg_type < EN_MSG_TYPE_HB)
@@ -115,11 +106,15 @@ defw_rc_t defw_register_connect_complete(defw_connect_status cb)
 	return EN_DEFW_RC_OK;
 }
 
-void defw_agent_updated_notify(void)
+defw_rc_t defw_register_peer_event_callback(defw_peer_event_cb cb)
 {
-	int i;
-	for (i = 0; i < agent_notification_idx; i++)
-		agent_notifications[i]();
+	if (!cb)
+		return EN_DEFW_RC_BAD_PARAM;
+	if (peer_event_idx >= MAX_AGENT_NOTIFICATION)
+		return EN_DEFW_RC_FAIL;
+	peer_event_notifications[peer_event_idx] = cb;
+	peer_event_idx++;
+	return EN_DEFW_RC_OK;
 }
 
 void defw_notify_connect_complete(defw_rc_t status, uuid_t uuid)
@@ -129,15 +124,84 @@ void defw_notify_connect_complete(defw_rc_t status, uuid_t uuid)
 		connect_notifications[i](status, uuid);
 }
 
-static void set_resmgr_connected(defw_rc_t status, uuid_t uuid)
+void defw_notify_peer_event(const defw_peer_event_t *event)
+{
+	int i;
+	defw_rc_t rc;
+
+	if (!event)
+		return;
+
+	for (i = 0; i < peer_event_idx; i++) {
+		rc = peer_event_notifications[i](event);
+		if (rc)
+			PERROR("Peer event callback failed: %s", defw_rc2str(rc));
+	}
+}
+
+static void set_dirsvc_connected(defw_rc_t status, uuid_t uuid)
 {
 	pthread_mutex_lock(&global_var_mutex);
 	if (!status)
-		resmgr_connected = true;
+		dirsvc_connected = true;
 	else
-		resmgr_connected = false;
-	resmgr_connect_in_progress = false;
+		dirsvc_connected = false;
+	dirsvc_connect_in_progress = false;
 	pthread_mutex_unlock(&global_var_mutex);
+}
+
+static void listener_suspend_fd(int fd)
+{
+	if (fd == INVALID_TCP_SOCKET)
+		return;
+
+	pthread_mutex_lock(&global_var_mutex);
+	FD_CLR(fd, &g_tAllSet);
+	pthread_mutex_unlock(&global_var_mutex);
+}
+
+static void listener_resume_fd(int fd)
+{
+	if (fd == INVALID_TCP_SOCKET)
+		return;
+
+	pthread_mutex_lock(&global_var_mutex);
+	FD_SET(fd, &g_tAllSet);
+	if (fd > g_iMaxSelectFd)
+		g_iMaxSelectFd = fd;
+	pthread_mutex_unlock(&global_var_mutex);
+}
+
+static bool listener_peer_ready_pending(defw_agent_blk_t *agent)
+{
+	bool ready;
+
+	if (!agent)
+		return false;
+
+	pthread_mutex_lock(&agent->state_mutex);
+	ready = !uuid_is_null(agent->id.remote_uuid) &&
+		(agent->state & DEFW_AGENT_CNTRL_CHANNEL_CONNECTED) &&
+		(agent->state & DEFW_AGENT_RPC_CHANNEL_CONNECTED) &&
+		!(agent->state & DEFW_AGENT_PEER_READY_REPORTED);
+	pthread_mutex_unlock(&agent->state_mutex);
+
+	return ready;
+}
+
+static void listener_report_peer_ready(defw_agent_blk_t *agent,
+				       const char *reason)
+{
+	defw_rc_t rc;
+
+	if (!listener_peer_ready_pending(agent))
+		return;
+
+	gettimeofday(&agent->last_control_activity, NULL);
+	defw_agent_report_peer_ready(agent, reason);
+	rc = defw_send_hb(agent);
+	if (rc != EN_DEFW_RC_OK)
+		PERROR("Failed to send peer identity: %s", defw_rc2str(rc));
 }
 
 void defw_listener_shutdown(void)
@@ -194,26 +258,41 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	defw_msg_session_t *ses = (defw_msg_session_t *)msg;
 	defw_agent_blk_t *existing;
 	defw_type_t agent_type = ntohl(ses->node_type);
+	bool rpc_setup = ntohl(ses->rpc_setup) != 0;
 
 	if (agent_type != EN_DEFW_AGENT &&
 	    agent_type != EN_DEFW_SERVICE &&
-	    agent_type != EN_DEFW_RESMGR)
+	    agent_type != EN_DEFW_DIRSVC)
 		return EN_DEFW_RC_PROTO_ERROR;
 
 	/* This is an agent on the new list. Let's see if there exists an
 	 * agent that has the session information */
 	existing = defw_find_agent_by_uuid_passive(ses->agent_id.remote_uuid);
 	if (existing) {
-		existing->iRpcFd = agent->iFileDesc;
 		PDEBUG("existing = %p, agent = %p", existing, agent);
-		PDEBUG("Second connection on an existing agent (%s) is the RPC connection: %d",
-		       existing->name, existing->iRpcFd);
-		if (ses->rpc_setup)
+		if (rpc_setup) {
+			existing->iRpcFd = agent->iFileDesc;
+			PDEBUG("Second connection on an existing agent (%s) is the RPC connection: %d",
+			       existing->name, existing->iRpcFd);
 			set_agent_state(existing, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
-		/* in case the OFI address was not learned on the first
-		 * (control) connection, try again here while we hold a ref
-		 */
+		} else {
+			existing->iFileDesc = agent->iFileDesc;
+			existing->addr = agent->addr;
+			PDEBUG("Second connection on an existing agent (%s) is the CTRL connection: %d",
+			       existing->name, existing->iFileDesc);
+			set_agent_state(existing, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
+			set_agent_state(existing, DEFW_AGENT_STATE_ALIVE);
+			unset_agent_state(existing, DEFW_AGENT_STATE_NEW);
+			gettimeofday(&existing->time_stamp, NULL);
+			existing->last_control_activity = existing->time_stamp;
+			existing->last_heartbeat_rx = existing->time_stamp;
+			listener_resume_fd(existing->iRpcFd);
+		}
+		/* Learn the address from either half of the TCP connection pair. */
 		maybe_insert_ofi_addr(existing, ses);
+		listener_report_peer_ready(
+			existing,
+			rpc_setup ? "inbound-rpc-ready" : "inbound-control-ready");
 		/* release ref count acquired when you found the agent */
 		defw_release_agent_blk(existing, false);
 		/* agent should never be the same as existing.
@@ -223,14 +302,7 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 		 */
 		assert(agent != existing);
 		defw_release_agent_blk(agent, false);
-		defw_agent_updated_notify();
 		return EN_DEFW_RC_OK;
-	}
-
-	if (ses->rpc_setup) {
-		PERROR("Protocol Error. Setup of RPC before CNTRL");
-		//defw_release_agent_blk(agent, true);
-		return EN_DEFW_RC_PROTO_ERROR;
 	}
 
 	if (agent_type == EN_DEFW_AGENT)
@@ -247,13 +319,24 @@ static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent)
 	agent->hostname[MAX_STR_LEN-1] = '\0';
 	strncpy(agent->name, ses->node_name, MAX_STR_LEN);
 	agent->name[MAX_STR_LEN-1] = '\0';
-	set_agent_state(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
-	set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
-	unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
 	gettimeofday(&agent->time_stamp, NULL);
 	maybe_insert_ofi_addr(agent, ses);
-	PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
-		agent->name, agent->iFileDesc);
+	agent->last_control_activity = agent->time_stamp;
+	agent->last_heartbeat_rx = agent->time_stamp;
+	if (rpc_setup) {
+		agent->iRpcFd = agent->iFileDesc;
+		agent->iFileDesc = INVALID_TCP_SOCKET;
+		listener_suspend_fd(agent->iRpcFd);
+		set_agent_state(agent, DEFW_AGENT_RPC_CHANNEL_CONNECTED);
+		PDEBUG("First connection on a new agent (%s) is the RPC connection: %d",
+		       agent->name, agent->iRpcFd);
+	} else {
+		set_agent_state(agent, DEFW_AGENT_CNTRL_CHANNEL_CONNECTED);
+		set_agent_state(agent, DEFW_AGENT_STATE_ALIVE);
+		unset_agent_state(agent, DEFW_AGENT_STATE_NEW);
+		PDEBUG("First connection on a new agent (%s) is the Cntrl connection: %d",
+		       agent->name, agent->iFileDesc);
+	}
 
 	return EN_DEFW_RC_OK;
 }
@@ -267,6 +350,7 @@ static defw_rc_t process_msg_unknown(char *msg, defw_agent_blk_t *agent)
 static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 {
 	defw_msg_session_t *hb = (defw_msg_session_t *)msg;
+	bool learned_runtime_id = false;
 	/*
 	char uuid[UUID_STR_LEN];
 	char uuid2[UUID_STR_LEN];
@@ -278,7 +362,7 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	 */
 	if (uuid_is_null(agent->id.remote_uuid)) {
 		uuid_copy(agent->id.remote_uuid, hb->agent_id.remote_uuid);
-		defw_agent_updated_notify();
+		learned_runtime_id = true;
 	} else if (uuid_compare(agent->id.remote_uuid,
 				hb->agent_id.remote_uuid)) {
 		PERROR("Agent %s has changed it's uuid. Has it restarted?",
@@ -300,6 +384,10 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	 * learn it here so we can reach it over the fabric
 	 */
 	maybe_insert_ofi_addr(agent, hb);
+	agent->last_heartbeat_rx = agent->time_stamp;
+	agent->last_control_activity = agent->time_stamp;
+	if (learned_runtime_id)
+		defw_agent_report_peer_ready(agent, "remote-identity-ready");
 
 	return EN_DEFW_RC_OK;
 }
@@ -309,7 +397,7 @@ static defw_rc_t process_msg_get_num_agents(char *msg, defw_agent_blk_t *agent)
 	defw_rc_t rc;
 	defw_msg_num_agents_query_t query;
 
-	query.num_agents = get_num_service_agents() + get_num_client_agents();
+	query.num_agents = defw_get_num_connection_agents();
 	rc = sendTcpMessage(agent->iFileDesc, (char *)&query, sizeof(query));
 	if (rc) {
 		PERROR("failed to send tcp message to get num agents query");
@@ -489,14 +577,24 @@ int process_new_agents_helper(defw_agent_blk_t *agent, void *user_data)
 		    hb_fd == INVALID_TCP_SOCKET) {
 			PERROR("agent connection is unexpected (%p) hb_fd = %d, rpc_fd = %d",
 			       agent, hb_fd, rpc_fd);
+			strncpy(agent->failure_reason, "unexpected-new-agent-rpc",
+				sizeof(agent->failure_reason) - 1);
+			defw_release_agent_blk(agent, true);
+			FD_CLR(rpc_fd, tReadSet);
+			(*iNReady)--;
 			goto out;
 		}
 
 		if (hb_fd != INVALID_TCP_SOCKET) {
 			rc = process_agent_message(agent, hb_fd);
 			FD_CLR(hb_fd, tReadSet);
-			if (rc)
+			if (rc) {
 				PERROR("Error processing new agent: %s", defw_rc2str(rc));
+				strncpy(agent->failure_reason,
+					"new-agent-message-failure",
+					sizeof(agent->failure_reason) - 1);
+				defw_release_agent_blk(agent, true);
+			}
 			(*iNReady)--;
 		}
 	}
@@ -518,13 +616,17 @@ static defw_rc_t process_new_agents(fd_set *tReadSet, int *iNReady)
 	return EN_DEFW_RC_OK;
 }
 
-static int process_active_agents_helper(defw_agent_blk_t *agent, void *user_data)
+static int process_connection_agents_helper(defw_agent_blk_t *agent,
+					    void *user_data)
 {
 	connection_info_t *info = user_data;
 	int *iNReady = info->iNReady;
 	fd_set *tReadSet = info->tReadSet;
 	int hb_fd = INVALID_TCP_SOCKET, rpc_fd = INVALID_TCP_SOCKET, rc;
 	bool dead = false;
+
+	if (agent->state & DEFW_AGENT_STATE_NEW)
+		goto out;
 
 	if (*iNReady) {
 		if (FD_ISSET(agent->iFileDesc, tReadSet))
@@ -543,8 +645,8 @@ static int process_active_agents_helper(defw_agent_blk_t *agent, void *user_data
 			FD_CLR(hb_fd, tReadSet);
 			(*iNReady)--;
 			if (rc && rc != EN_DEFW_RC_NO_DATA_ON_SOCKET) {
-				if (agent->node_type == EN_DEFW_RESMGR)
-					set_resmgr_connected(rc, NULL);
+				if (agent->node_type == EN_DEFW_DIRSVC)
+					set_dirsvc_connected(rc, NULL);
 				PERROR("CTRL msg failure: %s: %d", defw_rc2str(rc),
 				       agent->node_type);
 				dead = true;
@@ -563,8 +665,8 @@ static int process_active_agents_helper(defw_agent_blk_t *agent, void *user_data
 			FD_CLR(rpc_fd, tReadSet);
 			(*iNReady)--;
 			if (rc && rc != EN_DEFW_RC_NO_DATA_ON_SOCKET) {
-				if (agent->node_type == EN_DEFW_RESMGR)
-					set_resmgr_connected(rc, NULL);
+				if (agent->node_type == EN_DEFW_DIRSVC)
+					set_dirsvc_connected(rc, NULL);
 				dead = true;
 				PERROR("RPC msg failure: %s: %d", defw_rc2str(rc),
 				       agent->node_type);
@@ -581,19 +683,13 @@ out:
 	return 1;
 }
 
-static defw_rc_t process_active_agents(fd_set *tReadSet, bool service, int *iNReady)
+static defw_rc_t process_connection_agents(fd_set *tReadSet, int *iNReady)
 {
 	connection_info_t info;
 	info.iNReady = iNReady;
 	info.tReadSet = tReadSet;
 
-	if (service) {
-		defw_active_service_agent_iter(process_active_agents_helper, &info);
-		defw_service_agent_iter(process_active_agents_helper, &info);
-	} else {
-		defw_active_client_agent_iter(process_active_agents_helper, &info);
-		defw_client_agent_iter(process_active_agents_helper, &info);
-	}
+	defw_connection_agent_iter(process_connection_agents_helper, &info);
 
 	return EN_DEFW_RC_OK;
 }
@@ -659,23 +755,34 @@ static defw_rc_t init_comm(struct sockaddr_in *listen_addr)
 	return EN_DEFW_RC_OK;
 }
 
+static int agent_liveness_check_helper(defw_agent_blk_t *agent,
+				       void *user_data)
+{
+	struct timeval *t = user_data;
+	bool dead = false;
+
+	if (agent->state & DEFW_AGENT_STATE_NEW) {
+		if (t->tv_sec >= agent->handshake_deadline.tv_sec) {
+			strncpy(agent->failure_reason, "handshake-timeout",
+				sizeof(agent->failure_reason) - 1);
+			PERROR("agent %s handshake timed out", agent->name);
+			dead = true;
+		}
+	} else if (agent->heartbeat_mode == DEFW_HEARTBEAT_REMOTE &&
+		   t->tv_sec - agent->last_heartbeat_rx.tv_sec >= HB_TO * 100) {
+		strncpy(agent->failure_reason, "heartbeat-timeout",
+			sizeof(agent->failure_reason) - 1);
+		PERROR("agent %s presumed dead", agent->name);
+		dead = true;
+	}
+
+	defw_release_agent_blk(agent, dead);
+	return 0;
+}
+
 void agent_hb_check(struct timeval *t, defw_type_t me)
 {
-	defw_agent_blk_t *agent = NULL;
-
-	while (1) {
-		agent = defw_get_next_client_agent(agent);
-		if (!agent)
-			break;
-		if (t->tv_sec - agent->time_stamp.tv_sec >= HB_TO*100) {
-			/* agent didn't send a HB move to dead list
-			 */
-			PERROR("agent %s presumed dead", agent->name);
-			defw_release_agent_blk(agent, true);
-			continue;
-		}
-		defw_release_agent_blk(agent, false);
-	}
+	defw_connection_agent_iter(agent_liveness_check_helper, t);
 }
 
 static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
@@ -683,9 +790,19 @@ static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
 	bool dead = false;
 	defw_rc_t rc;
 
+	if (agent->heartbeat_mode != DEFW_HEARTBEAT_REMOTE) {
+		defw_release_agent_blk(agent, false);
+		return 0;
+	}
+
 	rc = defw_send_hb(agent);
-	if (rc != EN_DEFW_RC_OK)
+	if (rc != EN_DEFW_RC_OK) {
+		strncpy(agent->failure_reason, "heartbeat-send-failure",
+			sizeof(agent->failure_reason) - 1);
 		dead = true;
+	} else {
+		gettimeofday(&agent->last_heartbeat_tx, NULL);
+	}
 	defw_release_agent_blk(agent, dead);
 
 	return 0;
@@ -697,12 +814,12 @@ static int send_hb_to_agents(defw_agent_blk_t *agent, void *user_data)
  *   messages.  Every period of time it triggers a walk through the agent
  *   list to see if any of the HBs stopped
  *
- *   If I am an Agent, then attempt to connect to the resmgr and add an
+ *   If I am an Agent, then attempt to connect to the dirsvc and add an
  *   agent block on the list of agents. After successful connection send
  *   a regular heart beat.
  *
- *   Since the resmgr's agent block is on the list of agents and its FD is
- *   on the select FD set, then if the resmgr sends the agent a message
+ *   Since the dirsvc's agent block is on the list of agents and its FD is
+ *   on the select FD set, then if the dirsvc sends the agent a message
  *   the agent should be able to process it.
  */
 static void *defw_listener_main(void *usr_data)
@@ -718,8 +835,8 @@ static void *defw_listener_main(void *usr_data)
 	defw_listener_info_t *info;
 	bool send_hb_now = false;
 
-	resmgr_connect_in_progress = false;
-	resmgr_connected = false;
+	dirsvc_connect_in_progress = false;
+	dirsvc_connected = false;
 
 	info = (defw_listener_info_t *)usr_data;
 	if ((!info) ||
@@ -759,23 +876,23 @@ static void *defw_listener_main(void *usr_data)
 
 		defw_release_dead_list_agents();
 
-		/* Everyone registers with the resmgr, even the resmgr
+		/* Everyone registers with the dirsvc, even the dirsvc
 		 * registers with itself
 		 */
-		if (!resmgr_connected && strlen(get_parent_name()) != 0 &&
-		    !resmgr_connect_in_progress && !resmgr_disabled()) {
-			char *resmgr_name = get_parent_name();
+		if (!dirsvc_connected && strlen(get_parent_name()) != 0 &&
+		    !dirsvc_connect_in_progress && !dirsvc_disabled()) {
+			char *dirsvc_name = get_parent_name();
 			char *ip_addr = get_parent_address();
 			int port = get_parent_port();
 
-			PDEBUG("Attempting a connection on resmgr %s:%s:%d",
-			       resmgr_name, ip_addr, port);
+			PDEBUG("Attempting a connection on dirsvc %s:%s:%d",
+			       dirsvc_name, ip_addr, port);
 			rc = defw_connect_to_service(ip_addr, get_parent_port(),
 						    get_parent_name(), get_parent_hostname(),
-						    EN_DEFW_RESMGR, NULL, set_resmgr_connected);
+						    EN_DEFW_DIRSVC, NULL, set_dirsvc_connected);
 			if (rc == EN_DEFW_RC_IN_PROGRESS) {
 				pthread_mutex_lock(&global_var_mutex);
-				resmgr_connect_in_progress = true;
+				dirsvc_connect_in_progress = true;
 				pthread_mutex_unlock(&global_var_mutex);
 			}
 		}
@@ -866,23 +983,15 @@ static void *defw_listener_main(void *usr_data)
 			iNReady--;
 		}
 
-		/* Let's go over the agents we know about and see if any
-		 * of them received a message. We first go over the new
-		 * list to see if we can consolidate them to existing
-		 * agents or move it to one of the other lists.
-		 *
-		 * Then we go over the service list and process messages
-		 * sent from them.
-		 *
-		 * Finally we go over the client list and process messages
-		 * sent from them
+		/* Let's go over the agent connection table and see if any
+		 * known connection received a message. New connections are
+		 * processed first so they can complete identity setup before
+		 * normal message handling.
 		 */
 		if (iNReady)
 			process_new_agents(&tReadSet, &iNReady);
 		if (iNReady)
-			process_active_agents(&tReadSet, true, &iNReady);
-		if (iNReady)
-			process_active_agents(&tReadSet, false, &iNReady);
+			process_connection_agents(&tReadSet, &iNReady);
 
 		/*
 		 * Each node can have a list of clients connected to it
@@ -908,10 +1017,7 @@ static void *defw_listener_main(void *usr_data)
 		}
 
 		if (time_2.tv_sec - time_1.tv_sec >= HB_TO || send_hb_now) {
-			defw_active_service_agent_iter(send_hb_to_agents, NULL);
-			defw_service_agent_iter(send_hb_to_agents, NULL);
-			defw_active_client_agent_iter(send_hb_to_agents, NULL);
-			defw_client_agent_iter(send_hb_to_agents, NULL);
+			defw_connection_agent_iter(send_hb_to_agents, NULL);
 			send_hb_now = false;
 		}
 
@@ -940,7 +1046,7 @@ defw_rc_t defw_spawn_listener(pthread_t *id)
 	pthread_mutex_init(&global_var_mutex, NULL);
 
 	/*
-	 * Spawn the listener thread if we are in resmgr Mode.
+	 * Spawn the listener thread if we are in dirsvc Mode.
 	 * The listener thread listens for Heart beats and deals
 	 * with maintaining the health of the agents. If an agent
 	 * dies and comes back again, then we know how to deal

@@ -42,10 +42,9 @@ void acquire_agent_blk(defw_agent_blk_t *agent);
 int agent_get_hb(void);
 
 /*
- * get the number of registered agents
+ * get the number of known connection records
  */
-int get_num_service_agents(void);
-int get_num_client_agents(void);
+int defw_get_num_connection_agents(void);
 
 /*
  * set_agent_state
@@ -61,6 +60,19 @@ void set_agent_state(defw_agent_blk_t *agent, unsigned int state);
  * it has not pending work. If so then free it
  */
 void unset_agent_state(defw_agent_blk_t *agent, unsigned int state);
+
+/*
+ * defw_agent_report_peer_ready
+ *	report a callable transport peer to peer lifecycle listeners
+ */
+void defw_agent_report_peer_ready(defw_agent_blk_t *agent, const char *reason);
+
+/*
+ * defw_agent_report_peer_ready_update
+ *	report corrected ready metadata after transport identity is known
+ */
+void defw_agent_report_peer_ready_update(defw_agent_blk_t *agent,
+					 const char *reason);
 
 
 /*
@@ -91,10 +103,7 @@ defw_rc_t defw_send_rma_ack(defw_agent_blk_t *agent, uint64_t handle);
 void defw_move_to_client_list(defw_agent_blk_t *agent);
 void defw_move_to_service_list(defw_agent_blk_t *agent);
 void defw_release_dead_list_agents(void);
-void defw_service_agent_iter(process_agent cb, void *user_data);
-void defw_client_agent_iter(process_agent cb, void *user_data);
-void defw_active_service_agent_iter(process_agent cb, void *user_data);
-void defw_active_client_agent_iter(process_agent cb, void *user_data);
 void defw_new_agent_iter(process_agent cb, void *user_data);
+void defw_connection_agent_iter(process_agent cb, void *user_data);
 
 #endif /* LIBDEFW_AGENT_H */

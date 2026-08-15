@@ -14,14 +14,14 @@
 
 defw_config_params_t g_defw_cfg;
 
-void disable_resmgr(void)
+void disable_dirsvc(void)
 {
-	g_defw_cfg.disable_resgmr_connect = true;
+	g_defw_cfg.disable_dirsvc_connect = true;
 }
 
-int resmgr_disabled(void)
+int dirsvc_disabled(void)
 {
-	return g_defw_cfg.disable_resgmr_connect;
+	return g_defw_cfg.disable_dirsvc_connect;
 }
 
 void set_log_level(defw_log_level_t level)
@@ -208,8 +208,10 @@ void set_defw_type(char *type)
 		g_defw_cfg.l_info.type = EN_DEFW_AGENT;
 	else if (!strcasecmp(type, "service"))
 		g_defw_cfg.l_info.type = EN_DEFW_SERVICE;
+	else if (!strcasecmp(type, "dirsvc"))
+		g_defw_cfg.l_info.type = EN_DEFW_DIRSVC;
 	else
-		g_defw_cfg.l_info.type = EN_DEFW_RESMGR;
+		g_defw_cfg.l_info.type = EN_DEFW_DIRSVC;
 }
 
 char *get_defw_results_file_path(void)
@@ -264,5 +266,4 @@ void get_defw_uuid(char **uuid)
 
 void update_py_interactive_shell(void)
 {
-	python_update_interactive_shell();
 }

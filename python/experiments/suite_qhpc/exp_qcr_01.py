@@ -1,5 +1,5 @@
 
-# 1. Bring up the Resource Manager, Quantum Resource and the Client
+# 1. Bring up the Directory Service, Quantum Resource and the Client
 # 2. Show the Client message log -> enable messaging only
 
 import yaml
@@ -11,28 +11,21 @@ AS()
 # provided with the Quantum Resource API
 service_apis.dump()
 
-# Get available services from the Resource Manager
-r = resmgr.get_services()
+# Resolve the Quantum HPC endpoint from the Directory Service
+bindings = dirsvc.resolve_services(service_name='Quantum HPC')
 
 # print available resources
-print(yaml.dump(r))
+print(yaml.dump(bindings))
 
-# reserve the Quantum Resource
-ep = resmgr.reserve(me.my_endpoint(), r)
+if not bindings:
+	raise RuntimeError("No Quantum HPC service binding found")
 
-# print the endpoint
-print(yaml.dump(ep))
-
-# connect to the endpoint(s)
-defw.connect_to_services(ep)
+# connect to the endpoint and instantiate the Quantum Resource API
+qhpc_api = defw.connect_to_binding(bindings[0])
 
 # Show the Active Resources, now we should see the Quantum Resource as
 # well
 AS()
-
-#instantiate the Quantum Resource API so you can use it
-class_obj = getattr(service_apis['Quantum HPC'], r['qhpc']['api'])
-qhpc_api = class_obj(ep[0])
 
 # ----NOTE:
 # All the above can be abstracted away from the user
@@ -80,4 +73,3 @@ qhpc_api.delete_circuit(cid)
 qhpc_api.delete_circuit(cid2)
 qhpc_api.delete_circuit(cid3)
 qhpc_api.delete_circuit(cid)
-

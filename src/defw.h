@@ -31,7 +31,7 @@ typedef struct defw_listener_info_s {
 typedef struct defw_config_params_s {
 	bool initialized;
 	bool safe_shutdown;
-	bool disable_resgmr_connect;
+	bool disable_dirsvc_connect;
 	bool in_daemon_mode;
 	defw_listener_info_t l_info;
 	uuid_t uuid;

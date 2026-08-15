@@ -2,12 +2,12 @@ from pathlib import Path
 from cdefw_agent import *
 from defw_common_def import *
 import defw_common_def as common
-from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound
+from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound, \
+	DEFwReserveError, DEFwAgentNotFound
 from defw_cmd import defw_exec_local_cmd
 import importlib, socket
 import cdefw_global
-from defw_agent import DEFwClientAgents, DEFwServiceAgents, \
-	 DEFwActiveClientAgents, DEFwActiveServiceAgents, Endpoint
+from defw_agent import Endpoint
 import netifaces, random
 import atexit
 import os, subprocess, sys, yaml, fnmatch, logging, csv, uuid, io, signal
@@ -21,13 +21,9 @@ defw_path = ''
 only_load = []
 noinit_load = []
 g_yaml_blocks = []
-client_agents = None
-service_agents = None
-active_client_agents = None
-active_service_agents = None
 defw_config_yaml = None
 me = None
-resmgr = None
+dirsvc = None
 updater_thread = None
 
 def get_nearest_yaml_block():
@@ -634,12 +630,12 @@ class Collection(MethodInterceptor):
 				if f.startswith(self.__prefix) and os.path.splitext(f)[1] == '.py':
 					# add any subidrectories to the sys path
 					if subdir != '.' and not added:
-						subdirectory = os.path.join(self.__abs_path, subdir)
+						subdirectory = subdir
 						if subdirectory not in sys.path:
 							sys.path.append(subdirectory)
 					added = True
 					name = os.path.splitext(f.replace(self.__prefix, ''))[0]
-					db[name] = Script(os.path.join(self.__abs_path, subdir, f), self)
+					db[name] = Script(os.path.join(subdir, f), self)
 
 		self.__max = len(self.__test_db)
 
@@ -954,8 +950,8 @@ class Suites(MethodInterceptor):
 				pass
 
 class ServiceSuitesBase(Suites):
-	def __init__(self, path, prefix="", disabled_methods=[], noload_resmgr=True, suite_prefix='suite_'):
-		self.noload_resmgr = noload_resmgr
+	def __init__(self, path, prefix="", disabled_methods=[], noload_dirsvc=True, suite_prefix='suite_'):
+		self.noload_dirsvc = noload_dirsvc
 		self.suite_prefix = suite_prefix
 		super().__init__(path, prefix=prefix, suite_prefix=suite_prefix, disabled_methods=disabled_methods)
 
@@ -975,11 +971,11 @@ class ServiceSuitesBase(Suites):
 					if noinit_load and d in noinit_load:
 						sys.path.append(mod_path)
 						continue
-					if only_load and d not in only_load and name != 'resmgr':
+					if only_load and d not in only_load and name != 'dirsvc':
 						continue
-					# TODO for now disable loading the resmgr if you're not
-					# the resmgr. is there a better way of handling this?
-					if not me.is_resmgr() and name == 'resmgr' and self.noload_resmgr:
+					if not me.is_dirsvc() and \
+					   name == 'dirsvc' and \
+					   self.noload_dirsvc:
 						continue
 					mod = import_module_from_path(mod_path, path)
 					mname = mod.svc_info['name']
@@ -1021,7 +1017,7 @@ class ServiceSuiteAPIs(ServiceSuitesBase):
 			pass
 		super().__init__(paths,
 						 prefix="api_", disabled_methods=['run', 'edit'],
-						 noload_resmgr=False, suite_prefix="api_")
+						 noload_dirsvc=False, suite_prefix="api_")
 
 class ExpSuites(Suites):
 	def __init__(self):
@@ -1087,8 +1083,8 @@ class Myself:
 			   target.port == self.my_listenport()
 		return rc
 
-	def is_resmgr(self):
-		return self.__my_endpoint.is_resmgr()
+	def is_dirsvc(self):
+		return self.__my_endpoint.is_dirsvc()
 
 	def import_env_vars(self, fpath):
 		with open(fpath, 'r') as f:
@@ -1349,15 +1345,46 @@ def resolve_environment_vars(config):
 
 		recurse_dictionary(config, "", config, resolve_env_var)
 
+def set_default_env(name, value):
+	if not os.environ.get(name):
+		os.environ[name] = str(value)
+
+def setup_generic_config_defaults(defw_path):
+	agent_name = os.environ.get('DEFW_AGENT_NAME')
+	if not agent_name:
+		agent_name = f"defw_python_{uuid.uuid4().hex[:8]}"
+
+	parent_vars = [
+		'DEFW_PARENT_ADDR',
+		'DEFW_PARENT_HOSTNAME',
+		'DEFW_PARENT_NAME',
+		'DEFW_PARENT_PORT',
+	]
+	if not any(os.environ.get(var) for var in parent_vars):
+		set_default_env('DEFW_DISABLE_DIRSVC', 'yes')
+
+	set_default_env('DEFW_AGENT_NAME', agent_name)
+	set_default_env('DEFW_AGENT_TYPE', 'agent')
+	set_default_env('DEFW_SHELL_TYPE', 'cmdline')
+	set_default_env('DEFW_LISTEN_PORT', 0)
+	set_default_env('DEFW_TELNET_PORT', 0)
+	set_default_env('DEFW_PARENT_ADDR', '0.0.0.0')
+	set_default_env('DEFW_PARENT_HOSTNAME', 'None')
+	set_default_env('DEFW_PARENT_NAME', 'None')
+	set_default_env('DEFW_PARENT_PORT', 0)
+	set_default_env('DEFW_PATH', defw_path)
+	set_default_env('DEFW_LOG_DIR', os.path.join('/tmp', agent_name))
+	set_default_env('DEFW_LOG_LEVEL', 'error')
+	set_default_env('DEFW_EXTERNAL_SERVICES_PATH', '')
+	set_default_env('DEFW_EXTERNAL_SERVICE_APIS_PATH', '')
+	set_default_env('DEFW_EXTERNAL_EXPERIMENTS_PATH', '')
+	set_default_env('DEFW_EXPECTED_AGENT_COUNT', 0)
+
 def configure_defw():
 	global defw_path
 	global only_load
 	global noinit_load
 	global defw_config_yaml
-
-	if 'DEFW_DISABLE_RESMGR' in os.environ and \
-		os.environ['DEFW_DISABLE_RESMGR'].upper() == 'YES':
-			cdefw_global.disable_resmgr()
 
 	if 'DEFW_ONLY_LOAD_MODULE' in os.environ:
 		only_load = os.environ['DEFW_ONLY_LOAD_MODULE'].split(',')
@@ -1379,6 +1406,13 @@ def configure_defw():
 	else:
 		config = os.environ['DEFW_CONFIG_PATH']
 
+	if os.path.basename(config) == "defw_generic.yaml":
+		setup_generic_config_defaults(defw_path)
+
+	if 'DEFW_DISABLE_DIRSVC' in os.environ and \
+		os.environ['DEFW_DISABLE_DIRSVC'].upper() == 'YES':
+			cdefw_global.disable_dirsvc()
+
 	cy = None
 	if os.path.isfile(config):
 		with open(config, "r") as f:
@@ -1386,7 +1420,7 @@ def configure_defw():
 			resolve_environment_vars(cy)
 			defw_config_yaml = cy
 			cdefw_global.set_defw_path(cy['defw']['path'])
-			if not cdefw_global.resmgr_disabled():
+			if not cdefw_global.dirsvc_disabled():
 				cdefw_global.set_parent_name(cy['defw']['parent-name'])
 				cdefw_global.set_parent_port(int(cy['defw']['parent-port']))
 				if 'parent-address' not in cy['defw'] and 'parent-hostname' not in cy['defw']:
@@ -1459,35 +1493,21 @@ def configure_defw():
 	return cy
 
 def dump_all_agents():
-	agents = [active_service_agents, service_agents, active_client_agents,
-			  client_agents]
-	for agent_dict in agents:
-		agent_dict.dump()
+	import defw_peers
 
-def get_agent(target):
-	agents = [active_service_agents, service_agents, active_client_agents,
-			  client_agents]
-	for agent_dict in agents:
-		agent_dict.reload()
-		agidx = target.get_id()
-		#print(f"Attempting to find "\
-		#	  f"{agidx}:{agidx in agent_dict} ")
-		#if agidx in agent_dict:
-			#print(f"target id: {target.remote_uuid} " \
-			#	  f"agent id: {agent_dict[agidx].get_remote_uuid()} " \
-			#	  f"target blkuuid: {target.blk_uuid} " \
-			#	  f"agent blkuuid: {agent_dict[agidx].get_blk_uuid()}")
-		if agidx in agent_dict and \
-		   target.remote_uuid == agent_dict[agidx].get_remote_uuid() and \
-		   (target.blk_uuid ==  agent_dict[agidx].get_blk_uuid() or \
-			target.blk_uuid == str(uuid.UUID(int=0))):
-			#print(f"Returning {agidx}:{agent_dict[agidx]}")
-			return agent_dict[agidx]
-	#print(f"get_agent didn't find {target}")
-	return None
+	defw_peers.dump()
+
+def get_agent(target, connection_direction=None, allow_runtime_fallback=False):
+	import defw_peers
+
+	return defw_peers.get_agent(
+		target,
+		connection_direction=connection_direction,
+		allow_runtime_fallback=allow_runtime_fallback,
+	)
 
 def updater_thread():
-	global resmgr
+	global dirsvc
 
 	shutdown = False
 	while not shutdown:
@@ -1496,39 +1516,159 @@ def updater_thread():
 			if event['type'] == 'shutdown':
 				shutdown = True
 				continue
-			if event['type'] == 'resmgr':
+			if event['type'] == 'dirsvc':
 				cdefw_global.update_py_interactive_shell()
 		except queue.Empty:
 			continue
 
+def _zero_blk_endpoint(endpoint):
+	return Endpoint(
+		endpoint.addr,
+		endpoint.port,
+		endpoint.listen_port,
+		endpoint.pid,
+		endpoint.name,
+		endpoint.hostname,
+		endpoint.node_type,
+		endpoint.remote_uuid,
+		blk_uuid=str(uuid.UUID(int=0)),
+	)
+
+
+def _find_bound_agent(endpoint):
+	import defw_peers
+
+	agent = defw_peers.get_agent(endpoint)
+	if agent:
+		return agent
+	return defw_peers.get_agent(
+		endpoint,
+		connection_direction=defw_peers.CONNECTION_OUTBOUND,
+		allow_runtime_fallback=True,
+	)
+
+
+def _wait_for_bound_agent(endpoint, timeout=5):
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		agent = _find_bound_agent(endpoint)
+		if agent:
+			return agent
+		time.sleep(0.1)
+	return None
+
+
 def connect_to_services(endpoints):
+	import defw_workers
+
+	connected = []
 	for ep in endpoints:
-		active_service_agents.connect(ep)
-		logging.defw_core(f"Connection request finished: {ep}")
+		agent = _find_bound_agent(ep)
+		if agent:
+			connected.append(agent.get_ep())
+			logging.defw_core(f"Reusing connection for endpoint: {ep}")
+			continue
+		connect_ep = _zero_blk_endpoint(ep)
+		wr = defw_workers.WorkerRequest(
+			defw_workers.WorkerRequest.WR_CONNECT,
+			remote_uuid=connect_ep.remote_uuid,
+			ep=connect_ep
+		)
+		defw_workers.connect_to_agent(wr)
+		agent = _wait_for_bound_agent(connect_ep)
+		if not agent:
+			raise DEFwAgentNotFound(
+				f"Connection completed without a bound peer: {connect_ep}"
+			)
+		connected.append(agent.get_ep())
+		logging.defw_core(f"Connection request finished: {connect_ep}")
+	return connected
 
-def connect_to_resource(service_infos, res_name):
-	ep = resmgr.reserve(me.my_endpoint(), service_infos)
-	connect_to_services(ep)
-	apis = []
-	for service_info in service_infos:
-		class_obj = getattr(service_apis[res_name], res_name)
-		api = class_obj(service_info)
-		logging.defw_core(f"API created: {res_name}: {api}")
-		apis.append(api)
+class _BindingServiceInfo:
+	def __init__(self, endpoint, binding):
+		self.__endpoint = endpoint
+		self.__binding = binding
 
-	logging.defw_core(f"Returning API array: {apis}")
-	return apis
+	def get_endpoint(self):
+		return self.__endpoint
 
-def wait_resmgr(timeout):
-	global resmgr
+	def get_module_name(self):
+		return self.__binding.get('service_module') or \
+			self.__binding.get('client_module')
+
+	def get_class_name(self):
+		return self.__binding.get('service_class') or \
+			self.__binding.get('client_class')
+
+
+def _accepts_binding_kwargs(class_obj):
+	import inspect
+
+	try:
+		signature = inspect.signature(class_obj)
+	except (TypeError, ValueError):
+		return True
+
+	parameters = signature.parameters.values()
+	if any(param.kind == inspect.Parameter.VAR_KEYWORD
+	       for param in parameters):
+		return True
+
+	names = set(signature.parameters)
+	return {'target', 'remote_module', 'remote_class'}.issubset(names)
+
+
+def _instantiate_binding_client(class_obj, endpoint, binding):
+	if _accepts_binding_kwargs(class_obj):
+		return class_obj(target=endpoint,
+				 remote_module=binding.get('service_module'),
+				 remote_class=binding.get('service_class'))
+
+	service_info = _BindingServiceInfo(endpoint, binding)
+	return class_obj(service_info)
+
+
+def connect_to_binding(resolved_binding):
+	import importlib
+
+	record = resolved_binding['service_record']
+	binding = resolved_binding['selected_binding']
+	transport_binding = record.get('transport_binding') or {}
+	peer_handle = record.get('peer_handle') or \
+		transport_binding.get('peer_handle') or str(uuid.UUID(int=0))
+	node_type = record.get('node_type') or \
+		(record.get('endpoint') or {}).get('node_type')
+	if node_type is None:
+		if record.get('service_type') == 'defw.dirsvc':
+			node_type = EN_DEFW_DIRSVC
+		else:
+			node_type = EN_DEFW_SERVICE
+	ep = Endpoint(record['endpoint']['address'], 0,
+		      record['endpoint']['listen_port'],
+		      record['endpoint']['pid'],
+		      record['endpoint']['node_name'],
+		      record['endpoint']['hostname'],
+		      node_type,
+		      record['runtime_id'],
+		      blk_uuid=peer_handle)
+	bound_endpoints = connect_to_services([ep])
+	bound_ep = bound_endpoints[0] if bound_endpoints else ep
+	module = importlib.import_module(binding['client_module'])
+	class_obj = getattr(module, binding['client_class'])
+	api = _instantiate_binding_client(class_obj, bound_ep, binding)
+	logging.defw_core(f"API created from binding: {binding}: {api}")
+	return api
+
+def wait_dirsvc(timeout):
+	global dirsvc
 
 	wait = 0
-	if not resmgr:
+	if not dirsvc:
 		while wait < timeout:
-			if resmgr:
+			if dirsvc:
 				return True
 			wait += 1
-			logging.defw_core("waiting to connect to resource manager")
+			logging.defw_core("waiting to connect to directory service")
 			time.sleep(1)
 	else:
 		return True
@@ -1537,8 +1677,8 @@ def wait_resmgr(timeout):
 
 # TODO: We need a way to disconnect endpoint
 
-def get_resmgr():
-	return resmgr
+def get_dirsvc():
+	return dirsvc
 
 def get_self():
 	return me
@@ -1557,12 +1697,7 @@ if not cdefw_global.get_defw_initialized():
 	# Access functions can be used to dump it.
 	global_test_results = YamlGlobalTestResults()
 
-	client_agents = DEFwClientAgents()
-	service_agents = DEFwServiceAgents()
-	active_client_agents = DEFwActiveClientAgents()
-	active_service_agents = DEFwActiveServiceAgents()
-
-	# Create an instance of the resource manager because we have
+	# Create an instance of the directory service because we have
 	# a connection to it.
 
 	logging.defw_core("INSTANTIATING myself")
@@ -1576,20 +1711,19 @@ if not cdefw_global.get_defw_initialized():
 	services = ServiceSuites()
 	service_apis = ServiceSuiteAPIs()
 
-	if me.is_resmgr():
-		if 'Resource Manager' in services:
+	if me.is_dirsvc():
+		service = None
+		if 'Directory Service' in services:
+			service = services['Directory Service']
+		if service:
 			if 'DEFW_SQL_PATH' in os.environ:
-				sql_path = os.enviorn['DEFW_SQL_PATH']
+				sql_path = os.environ['DEFW_SQL_PATH']
 			else:
 				sql_path = '/tmp'
-			resmgr = services['Resource Manager'].service_classes[0](sql_path)
+			dirsvc = service.service_classes[0](sql_path)
 
 	# Convenience Variables
 	R = dumpGlobalTestResults
-	C = client_agents.dump
-	S = service_agents.dump
-	AC = active_client_agents.dump
-	AS = active_service_agents.dump
 	I = me.dump_intfs
 	X = me.exit
 

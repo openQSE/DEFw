@@ -46,20 +46,20 @@ module load DEFw/v0.1
 module load libfabric/ompix-upstream-borg-r
 
 export DEFW_LISTEN_PORT=8090
-export DEFW_AGENT_NAME=resmgr_$(hostname)
-export DEFW_AGENT_TYPE=resmgr
+export DEFW_AGENT_NAME=dirsvc_$(hostname)
+export DEFW_AGENT_TYPE=dirsvc
 export DEFW_SHELL_TYPE=daemon
 export DEFW_TELNET_PORT=8091
-export DEFW_ONLY_LOAD_MODULE=svc_resmgr
+export DEFW_ONLY_LOAD_MODULE=svc_dirsvc
 export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
-export DEFW_ONLY_LOAD_MODULE=svc_resmgr,svc_libfabric
+export DEFW_ONLY_LOAD_MODULE=svc_dirsvc,svc_libfabric
 export DEFW_EXPECTED_AGENT_COUNT=$param_NUM_PROCS
 export DEFW_PARENT_HOSTNAME=$(hostname)
 
 ml
 
-# start the resource manager
-echo "Starting Resource Manager"
+# start the directory service
+echo "Starting Directory Service"
 defwp -d
 
 set -xe
