@@ -84,10 +84,4 @@ defw_rc_t python_handle_connect_complete(defw_rc_t status, char *uuid);
  */
 defw_rc_t python_handle_peer_event(const defw_peer_event_t *event);
 
-/*
- * python_update_interactive_shell
- *	update the interactive shell environment
- */
-void python_update_interactive_shell(void);
-
 #endif /* DEFW_PYTHON_H */

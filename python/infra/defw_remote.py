@@ -68,8 +68,8 @@ class BaseRemote(object):
 	# the idea of the *args and **kwargs in the __init__ method is for subclasses
 	# to pass all their arguments to the super() class. Then the superclass can then pass
 	# that to the remote, so the remote class can be instantiated appropriately
-	def __init__(self, class_id=None, service_info=None,
-				 blocking=True, target=None, remote_module=None,
+	def __init__(self, class_id=None, blocking=True, target=None,
+				 remote_module=None,
 				 remote_class=None, *args, **kwargs):
 		self.__own = True
 		self.__remote_module_override = remote_module
@@ -77,15 +77,7 @@ class BaseRemote(object):
 		# if a target is specified other than me then we're going
 		# to execute on that target
 		self.__blocking = blocking
-		if service_info:
-			try:
-				target = service_info.get_endpoint()
-				self.__agent = get_agent(target)
-			except Exception as e:
-				print(e)
-				raise DEFwError("Unknown Agent for service_info: ", service_info)
-			self.__remote = True
-		elif target:
+		if target:
 			try:
 				self.__agent = get_agent(target)
 			except Exception as e:
@@ -99,15 +91,8 @@ class BaseRemote(object):
 		if not self.__agent:
 			raise DEFwAgentNotFound(f"agent not found {target}")
 
-		if service_info:
-			self.__service_module = service_info.get_module_name()
-			try:
-				self.__service_class = service_info.get_class_name()
-			except AttributeError:
-				self.__service_class = type(self).__name__
-		elif target:
-			self.__service_module = type(self).__module__
-			self.__service_class = type(self).__name__
+		self.__service_module = type(self).__module__
+		self.__service_class = type(self).__name__
 		if self.__remote_module_override:
 			self.__service_module = self.__remote_module_override
 		if self.__remote_class_override:

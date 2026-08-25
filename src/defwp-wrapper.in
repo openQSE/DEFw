@@ -36,7 +36,13 @@ uuid="$(make_uuid)"
 default_log_dir="/tmp/defw_${uuid}"
 cleanup_log_dir=0
 
-: "${DEFW_CONFIG_PATH:=${DEFW_PATH}/python/config/defw_generic.yaml}"
+if [[ -z "${DEFW_CONFIG_PATH:-}" ]]; then
+	if [[ -r "${DEFW_PATH}/share/defw/config/defw_generic.yaml" ]]; then
+		DEFW_CONFIG_PATH="${DEFW_PATH}/share/defw/config/defw_generic.yaml"
+	else
+		DEFW_CONFIG_PATH="${DEFW_PATH}/python/config/defw_generic.yaml"
+	fi
+fi
 : "${DEFW_SHELL_TYPE:=cmdline}"
 : "${DEFW_AGENT_TYPE:=agent}"
 : "${DEFW_AGENT_NAME:=defw_python_${uuid}}"

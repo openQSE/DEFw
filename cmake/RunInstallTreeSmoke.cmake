@@ -55,8 +55,6 @@ if(NOT build_rc EQUAL 0)
 endif()
 
 set(site_packages "${DEFW_INSTALL_PREFIX}/${DEFW_PYTHON_INSTALL_DIR}")
-set(typemap_test
-	"${CMAKE_CURRENT_LIST_DIR}/../tests/swig_typemaps/test_typemap_contracts.py")
 set(wrapper_app_marker "${smoke_dir}/installed_wrapper_app.out")
 set(wrapper_app_code
 "marker = os.environ['DEFW_APP_SMOKE_OUTPUT']
@@ -69,7 +67,7 @@ execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"DEFW_PATH=${DEFW_INSTALL_PREFIX}"
-		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/python/config/defw_generic.yaml"
+		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/share/defw/config/defw_generic.yaml"
 		"DEFW_AGENT_NAME=install-executor"
 		"DEFW_AGENT_TYPE=agent"
 		"DEFW_SHELL_TYPE=cmdline"
@@ -98,7 +96,7 @@ execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"DEFW_PATH=${DEFW_INSTALL_PREFIX}"
-		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/python/config/defw_generic.yaml"
+		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/share/defw/config/defw_generic.yaml"
 		"DEFW_AGENT_NAME=install-wrapper"
 		"DEFW_AGENT_TYPE=agent"
 		"DEFW_SHELL_TYPE=cmdline"
@@ -151,7 +149,7 @@ execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"DEFW_PATH=${DEFW_INSTALL_PREFIX}"
-		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/python/config/defw_generic.yaml"
+		"DEFW_CONFIG_PATH=${DEFW_INSTALL_PREFIX}/share/defw/config/defw_generic.yaml"
 		"DEFW_AGENT_NAME=install-direct"
 		"DEFW_AGENT_TYPE=agent"
 		"DEFW_SHELL_TYPE=cmdline"
@@ -176,13 +174,15 @@ if(NOT configured_import_rc EQUAL 0)
 	message(FATAL_ERROR "DEFw install configured Python import smoke failed")
 endif()
 
-execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"DEFW_PATH=${DEFW_INSTALL_PREFIX}"
-		"PYTHONPATH=${site_packages}"
-		"${DEFW_PYTHON}" "${typemap_test}"
-	RESULT_VARIABLE typemap_rc)
-if(NOT typemap_rc EQUAL 0)
-	message(FATAL_ERROR "DEFw install typemap contract smoke failed")
+file(GLOB_RECURSE removed_install_artifacts
+	"${DEFW_INSTALL_PREFIX}/*fwsl*"
+	"${DEFW_INSTALL_PREFIX}/*defw_typemap_fixture*"
+	"${DEFW_INSTALL_PREFIX}/*defw_external_swig_fixture*")
+if(removed_install_artifacts)
+	message(FATAL_ERROR
+		"DEFw install contains test or retired libraries: "
+		"${removed_install_artifacts}")
+endif()
+if(EXISTS "${DEFW_INSTALL_PREFIX}/python/config")
+	message(FATAL_ERROR "DEFw install contains the source configuration tree")
 endif()

@@ -130,9 +130,7 @@ class DEFwDirSvc:
 		qpm_type = context.get('qpm_type', properties.get('qpm_type', -1))
 		qpm_capabilities = context.get(
 			'qpm_capabilities',
-			properties.get(
-				'qpm_capabilities',
-				properties.get('qpm_capability', -1)))
+			properties.get('qpm_capabilities', -1))
 		if qpm_type != -1:
 			properties.setdefault('qpm_type', qpm_type)
 		if qpm_capabilities != -1:

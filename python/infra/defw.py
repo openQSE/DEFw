@@ -1402,7 +1402,12 @@ def configure_defw():
 		defw_path = os.environ['DEFW_PATH']
 
 	if 'DEFW_CONFIG_PATH' not in os.environ:
-		config = os.path.join(defw_path, "python", "config", "defw_generic.yaml")
+		installed_config = os.path.join(
+			defw_path, "share", "defw", "config", "defw_generic.yaml")
+		source_config = os.path.join(
+			defw_path, "python", "config", "defw_generic.yaml")
+		config = installed_config if os.path.isfile(
+			installed_config) else source_config
 	else:
 		config = os.environ['DEFW_CONFIG_PATH']
 
@@ -1516,8 +1521,6 @@ def updater_thread():
 			if event['type'] == 'shutdown':
 				shutdown = True
 				continue
-			if event['type'] == 'dirsvc':
-				cdefw_global.update_py_interactive_shell()
 		except queue.Empty:
 			continue
 
@@ -1584,48 +1587,10 @@ def connect_to_services(endpoints):
 		logging.defw_core(f"Connection request finished: {connect_ep}")
 	return connected
 
-class _BindingServiceInfo:
-	def __init__(self, endpoint, binding):
-		self.__endpoint = endpoint
-		self.__binding = binding
-
-	def get_endpoint(self):
-		return self.__endpoint
-
-	def get_module_name(self):
-		return self.__binding.get('service_module') or \
-			self.__binding.get('client_module')
-
-	def get_class_name(self):
-		return self.__binding.get('service_class') or \
-			self.__binding.get('client_class')
-
-
-def _accepts_binding_kwargs(class_obj):
-	import inspect
-
-	try:
-		signature = inspect.signature(class_obj)
-	except (TypeError, ValueError):
-		return True
-
-	parameters = signature.parameters.values()
-	if any(param.kind == inspect.Parameter.VAR_KEYWORD
-	       for param in parameters):
-		return True
-
-	names = set(signature.parameters)
-	return {'target', 'remote_module', 'remote_class'}.issubset(names)
-
-
 def _instantiate_binding_client(class_obj, endpoint, binding):
-	if _accepts_binding_kwargs(class_obj):
-		return class_obj(target=endpoint,
-				 remote_module=binding.get('service_module'),
-				 remote_class=binding.get('service_class'))
-
-	service_info = _BindingServiceInfo(endpoint, binding)
-	return class_obj(service_info)
+	return class_obj(target=endpoint,
+			 remote_module=binding.get('service_module'),
+			 remote_class=binding.get('service_class'))
 
 
 def connect_to_binding(resolved_binding):

@@ -54,8 +54,6 @@ char *get_defw_tmp_dir(void);
 int get_defw_initialized(void);
 void get_defw_uuid(char **uuid);
 
-void update_py_interactive_shell(void);
-
 static inline const char *defw_rc2str(defw_rc_t rc)
 {
 	static const char * const str[] = {

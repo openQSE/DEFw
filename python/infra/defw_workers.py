@@ -28,22 +28,6 @@ peer_events = deque()
 peer_events_lock = threading.Lock()
 
 
-class _PeerServiceInfo:
-	def __init__(self, endpoint, module_name, class_name):
-		self.__endpoint = endpoint
-		self.__module_name = module_name
-		self.__class_name = class_name
-
-	def get_endpoint(self):
-		return self.__endpoint
-
-	def get_module_name(self):
-		return self.__module_name
-
-	def get_class_name(self):
-		return self.__class_name
-
-
 def is_ready_dirsvc_peer(event, peer_record):
 	if event.get('event_type') != 'PEER_READY':
 		return False
@@ -92,14 +76,6 @@ def _peer_endpoint(peer_record):
 		peer_record.get('node_type', EN_DEFW_DIRSVC),
 		peer_record.get('runtime_id', ''),
 		blk_uuid=peer_record.get('peer_handle', ZERO_UUID),
-	)
-
-
-def _dirsvc_service_info(peer_record):
-	return _PeerServiceInfo(
-		_peer_endpoint(peer_record),
-		'svc_dirsvc.svc_dirsvc',
-		'DEFwDirSvc',
 	)
 
 
@@ -336,8 +312,6 @@ class WorkerThread:
 		defw.dirsvc = None
 		logging.defw_worker(
 			f"Cleared directory service API after {event.get('event_type')}")
-		from defw import updater_queue
-		updater_queue.put({'type': 'dirsvc', 'dirsvc': None})
 
 	def bind_dirsvc_peer(self, peer_record):
 		try:
@@ -349,9 +323,13 @@ class WorkerThread:
 				logging.defw_worker(
 					"Skipping stale directory service peer binding")
 				return
-			service_info = _dirsvc_service_info(peer_record)
-			dirsvc = service_apis[
-				'Directory Service'].service_classes[0](service_info)
+			dirsvc_class = service_apis[
+				'Directory Service'].service_classes[0]
+			dirsvc = dirsvc_class(
+				target=_peer_endpoint(peer_record),
+				remote_module='svc_dirsvc.svc_dirsvc',
+				remote_class='DEFwDirSvc',
+			)
 			if not dirsvc_peer_still_ready(peer_record):
 				logging.defw_worker(
 					"Discarding directory service API for stale peer")
@@ -359,8 +337,6 @@ class WorkerThread:
 			defw.dirsvc = dirsvc
 			logging.defw_worker(
 				f"Created directory service API: {defw.dirsvc}")
-			from defw import updater_queue
-			updater_queue.put({'type': 'dirsvc', 'dirsvc': defw.dirsvc})
 		except Exception as e:
 			if common.is_system_up():
 				logging.defw_worker("Couldn't bind directory service peer")

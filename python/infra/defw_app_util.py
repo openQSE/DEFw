@@ -128,14 +128,12 @@ def _build_service_env(service_spec):
 	Path(log_dir).mkdir(parents=True, exist_ok=True)
 
 	env = os.environ.copy()
+	defw_path = cdefw_global.get_defw_path()
+	config_path = os.environ.get('DEFW_CONFIG_PATH') or os.path.join(
+		defw_path, 'share', 'defw', 'config', 'defw_generic.yaml')
 	env.update({
-		'DEFW_PATH': cdefw_global.get_defw_path(),
-		'DEFW_CONFIG_PATH': os.path.join(
-			cdefw_global.get_defw_path(),
-			'python',
-			'config',
-			'defw_generic.yaml',
-		),
+		'DEFW_PATH': defw_path,
+		'DEFW_CONFIG_PATH': config_path,
 		'DEFW_AGENT_NAME': agent_name,
 		'DEFW_AGENT_TYPE': 'service',
 		'DEFW_SHELL_TYPE': 'daemon',

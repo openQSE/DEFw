@@ -2,9 +2,6 @@ from defw_remote import BaseRemote
 
 
 class DEFwDirSvc(BaseRemote):
-	def __init__(self, si):
-		super().__init__(service_info=si)
-
 	def register_agent(self, client_ep, context=None):
 		pass
 

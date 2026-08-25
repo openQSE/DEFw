@@ -263,7 +263,3 @@ void get_defw_uuid(char **uuid)
 	*uuid = calloc(1, UUID_STR_LEN);
 	uuid_unparse_lower(g_defw_cfg.uuid, *uuid);
 }
-
-void update_py_interactive_shell(void)
-{
-}

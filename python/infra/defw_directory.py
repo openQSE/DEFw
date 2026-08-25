@@ -24,26 +24,10 @@ def _copy_record(record):
 	return copied
 
 
-def _default_binding(record):
-	service_name = record.get('service_name') or record.get('name')
-	client_module = record.get('client_module') or record.get('module')
-	client_class = record.get('client_class') or service_name
-	service_module = record.get('service_module') or record.get('module')
-	service_class = record.get('service_class') or record.get('class_name')
-	return {
-		'binding_name': record.get('binding_name', 'default'),
-		'client_module': client_module,
-		'client_class': client_class,
-		'service_module': service_module,
-		'service_class': service_class,
-		'version': record.get('version', 1),
-	}
-
-
 def _normalize_bindings(record):
 	bindings = record.get('api_bindings') or []
 	if not bindings:
-		bindings = [_default_binding(record)]
+		raise DEFwError("Directory registration missing api_bindings")
 	return [dict(binding) for binding in bindings]
 
 
@@ -126,8 +110,7 @@ class Directory:
 
 			properties = dict(record.get('properties') or {})
 			qpm_type = _record_value(record, 'qpm_type')
-			qpm_capabilities = _record_value(
-				record, 'qpm_capabilities', 'qpm_capability')
+			qpm_capabilities = _record_value(record, 'qpm_capabilities')
 			if qpm_type != -1:
 				properties.setdefault('qpm_type', qpm_type)
 			if qpm_capabilities != -1:
@@ -285,10 +268,9 @@ class Directory:
 			filters.get('qpm_type', -1)
 		):
 			return False
-		qpm_capabilities = filters.get(
-			'qpm_capabilities', filters.get('qpm_capability', -1))
+		qpm_capabilities = filters.get('qpm_capabilities', -1)
 		if not _bits_match(
-			_record_value(record, 'qpm_capabilities', 'qpm_capability'),
+			_record_value(record, 'qpm_capabilities'),
 			qpm_capabilities
 		):
 			return False

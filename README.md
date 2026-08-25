@@ -424,7 +424,6 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_ONLY_LOAD_MODULE` | Comma-separated list of modules to load for a given process. |
 | `DEFW_PARENT_ADDR` | Parent DEFw IP address or host address. |
 | `DEFW_PARENT_HOSTNAME` | Parent DEFw hostname used by the generic YAML configuration. |
-| `DEFW_PARENT_HNAME` | Legacy hostname variable used by some older setup scripts; prefer `DEFW_PARENT_HOSTNAME`. |
 | `DEFW_PARENT_NAME` | Name of the parent DEFw instance, typically the directory service. |
 | `DEFW_PARENT_PORT` | Parent DEFw listen port. |
 | `DEFW_PATH` | Root path of the DEFw checkout or installation. |

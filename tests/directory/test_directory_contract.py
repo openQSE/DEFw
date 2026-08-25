@@ -74,6 +74,13 @@ def main():
 		})
 
 	directory.add_lifecycle_listener(record_lifecycle)
+	missing_bindings = make_record()
+	del missing_bindings['api_bindings']
+	expect_raises(
+		DEFwError,
+		directory.register_service,
+		missing_bindings,
+	)
 	record = directory.register_service(make_record())
 	expect(record['generation'] == 1, "new service generation should start at 1")
 	expect(record['state'] == defw_directory.STATE_UP, "record should be UP")

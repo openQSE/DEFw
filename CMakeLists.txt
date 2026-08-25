@@ -5,6 +5,7 @@ project(DEFw
 	LANGUAGES C)
 
 include(CMakePackageConfigHelpers)
+include(CTest)
 include(GNUInstallDirs)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
@@ -166,28 +167,6 @@ set_target_properties(defw
 	PROPERTIES
 		OUTPUT_NAME defw)
 
-add_library(fwsl SHARED
-	src/defw_listener.c
-	src/defw_python.c
-	src/defw_sl.c)
-defw_common_target_settings(fwsl)
-defw_configure_transport(fwsl)
-target_include_directories(fwsl
-	PRIVATE
-		${Python3_INCLUDE_DIRS})
-target_link_libraries(fwsl
-	PUBLIC
-		defw_global
-		defw_connect
-		defw_agent
-		Threads::Threads
-		"${UUID_LIBRARY}"
-	PRIVATE
-		Python3::Python)
-set_target_properties(fwsl
-	PROPERTIES
-		OUTPUT_NAME fwsl)
-
 add_executable(defwp
 	src/defw.c)
 target_link_libraries(defwp
@@ -204,7 +183,7 @@ set_target_properties(defwp
 		INSTALL_RPATH "${DEFW_EXECUTABLE_INSTALL_RPATH}")
 
 function(defw_add_swig_module module_name interface_file)
-	set(options)
+	set(options NO_INSTALL)
 	set(one_value_args)
 	set(multi_value_args DEPENDS INCLUDE_DIRS LINK_LIBRARIES)
 	cmake_parse_arguments(DEFW_SWIG
@@ -268,14 +247,16 @@ function(defw_add_swig_module module_name interface_file)
 			BUILD_RPATH "${DEFW_BUILD_RPATH}"
 			INSTALL_RPATH "${DEFW_PYTHON_EXTENSION_INSTALL_RPATH}")
 
-	install(TARGETS _${module_name}
-		LIBRARY DESTINATION "${DEFW_PYTHON_INSTALL_DIR}")
-	install(FILES "${proxy_py}"
-		DESTINATION "${DEFW_PYTHON_INSTALL_DIR}")
-	install(TARGETS _${module_name}
-		LIBRARY DESTINATION src)
-	install(FILES "${proxy_py}"
-		DESTINATION src)
+	if(NOT DEFW_SWIG_NO_INSTALL)
+		install(TARGETS _${module_name}
+			LIBRARY DESTINATION "${DEFW_PYTHON_INSTALL_DIR}")
+		install(FILES "${proxy_py}"
+			DESTINATION "${DEFW_PYTHON_INSTALL_DIR}")
+		install(TARGETS _${module_name}
+			LIBRARY DESTINATION src)
+		install(FILES "${proxy_py}"
+			DESTINATION src)
+	endif()
 endfunction()
 
 defw_add_swig_module(cdefw_global swig/cdefw_global.i
@@ -286,6 +267,10 @@ target_link_options(_cdefw_agent
 	PRIVATE
 		"LINKER:--no-as-needed")
 
+set(DEFW_EXTERNAL_SWIG_SCRIPT
+	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/defw_external_swig.py")
+
+if(BUILD_TESTING)
 add_library(defw_typemap_fixture SHARED
 	tests/swig_typemaps/defw_typemap_fixture.c)
 defw_common_target_settings(defw_typemap_fixture)
@@ -294,6 +279,7 @@ target_include_directories(defw_typemap_fixture
 		"${CMAKE_CURRENT_SOURCE_DIR}/tests/swig_typemaps")
 defw_add_swig_module(defw_typemap_fixture
 	tests/swig_typemaps/defw_typemap_fixture.i
+	NO_INSTALL
 	DEPENDS
 		tests/swig_typemaps/defw_typemap_fixture.h
 	INCLUDE_DIRS
@@ -313,8 +299,6 @@ target_include_directories(defw_external_swig_fixture_lib
 	PUBLIC
 		"${CMAKE_CURRENT_SOURCE_DIR}/tests/external_swig")
 
-set(DEFW_EXTERNAL_SWIG_SCRIPT
-	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/defw_external_swig.py")
 set(DEFW_EXTERNAL_SWIG_FIXTURE_DIR
 	"${CMAKE_CURRENT_BINARY_DIR}/external-swig-fixture")
 set(DEFW_EXTERNAL_SWIG_FIXTURE_CONFIG
@@ -345,6 +329,7 @@ add_custom_target(defw_external_swig_fixture_module ALL
 	DEPENDS
 		"${DEFW_EXTERNAL_SWIG_FIXTURE_DIR}/cdefw_external_swig_fixture.py"
 		"${DEFW_EXTERNAL_SWIG_FIXTURE_DIR}/_cdefw_external_swig_fixture.so")
+endif()
 
 if(DEFW_EXTERNAL_SWIG_CONFIG)
 	if(IS_ABSOLUTE "${DEFW_EXTERNAL_SWIG_CONFIG}")
@@ -394,8 +379,7 @@ file(CHMOD "${DEFW_BUILD_SRC_DIR}/defwp-wrapper"
 		GROUP_READ GROUP_EXECUTE
 		WORLD_READ WORLD_EXECUTE)
 
-enable_testing()
-
+if(BUILD_TESTING)
 add_executable(defw_phase1_transport_contracts
 	tests/transport/test_phase1_transport_contracts.c)
 target_include_directories(defw_phase1_transport_contracts
@@ -566,20 +550,14 @@ add_test(NAME defw_install_tree_smoke
 		-DDEFW_PYTHON=${Python3_EXECUTABLE}
 		-DDEFW_PYTHON_INSTALL_DIR=${DEFW_PYTHON_INSTALL_DIR}
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallTreeSmoke.cmake")
+endif()
 
 install(TARGETS
 		defw
 		defw_global
 		defw_connect
 		defw_agent
-		fwsl
 	EXPORT DEFwTargets
-	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-	ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-
-install(TARGETS
-		defw_typemap_fixture
-		defw_external_swig_fixture_lib
 	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 	ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 
@@ -591,7 +569,9 @@ install(PROGRAMS "${DEFW_BUILD_SRC_DIR}/defwp-wrapper"
 install(FILES ${DEFW_PUBLIC_HEADERS}
 	DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/defw")
 install(DIRECTORY python/
-	DESTINATION python)
+	DESTINATION python
+	PATTERN "config" EXCLUDE
+	PATTERN "__pycache__" EXCLUDE)
 install(FILES python/config/defw_generic.yaml
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/defw/config")
 install(DIRECTORY python/infra/

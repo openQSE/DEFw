@@ -198,9 +198,3 @@ class Launcher:
 
 	def test(self):
 		logging.defw_service("Testing Launcher")
-
-	def reserve(self, svc, client_ep, *args, **kwargs):
-		logging.defw_service(f"{client_ep} reserved the {svc}")
-
-	def release(self, services):
-		self.runner_shutdown = True
