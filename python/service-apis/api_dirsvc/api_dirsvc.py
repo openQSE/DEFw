@@ -37,6 +37,3 @@ class DEFwDirSvc(BaseRemote):
 
 	def get_service_generation(self, service_id):
 		pass
-
-	def get_generation(self, service_id):
-		pass

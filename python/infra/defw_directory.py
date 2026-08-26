@@ -255,9 +255,6 @@ class Directory:
 				return None
 			return record['generation']
 
-	def get_generation(self, service_id):
-		return self.get_service_generation(service_id)
-
 	def __record_matches(self, record, filters):
 		for field in ('service_id', 'service_name', 'service_type'):
 			value = filters.get(field)
@@ -356,7 +353,3 @@ def purge_expired(now=None):
 
 def get_service_generation(service_id):
 	return directory.get_service_generation(service_id)
-
-
-def get_generation(service_id):
-	return directory.get_generation(service_id)

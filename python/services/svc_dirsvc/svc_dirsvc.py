@@ -382,9 +382,6 @@ class DEFwDirSvc:
 	def get_service_generation(self, service_id):
 		return defw_directory.get_service_generation(service_id)
 
-	def get_generation(self, service_id):
-		return defw_directory.get_generation(service_id)
-
 	def query(self):
 		from . import SERVICE_DESC, SERVICE_NAME
 

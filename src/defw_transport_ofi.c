@@ -28,7 +28,7 @@
  * receive CQ into the shared message dispatch (defw_ofi_dispatch).
  *
  * The whole libfabric implementation is compiled only when DEFw is built with
- * libfabric (HAVE_LIBFABRIC, set by the SConstruct when libfabric is found).
+ * libfabric (HAVE_LIBFABRIC, set by CMake when libfabric is found).
  * Otherwise a stub reports that OFI is unavailable and the caller falls back
  * to TCP.
  */
