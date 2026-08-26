@@ -1,5 +1,6 @@
 import threading, queue, time, uuid, logging, yaml, importlib, traceback, sys
 import defw_common_def as common
+import defw_trace
 from cdefw_global import *
 from defw_exception import DEFwCommError, DEFwError, DEFwInternalError, DEFwNotFound
 from cdefw_agent import defw_send_req, defw_send_rsp, defw_connect_to_service, \
@@ -467,6 +468,11 @@ class WorkerThread:
 		args = y['rpc']['parameters']['args']
 		kwargs = y['rpc']['parameters']['kwargs']
 		defw_exception_string = None
+		# Scope the caller's trace context to the dispatch, so work done on
+		# this side joins the caller's trace instead of starting its own. A
+		# no-op when nothing is tracing, or when the peer sent no context.
+		trace_token = defw_trace.attach(
+			y['rpc'].get(defw_trace.CARRIER_KEY))
 		try:
 			if rpc_type == 'function_call':
 				logging.defw_rpc(f'remote call to function {function_name}')
@@ -538,6 +544,8 @@ class WorkerThread:
 				header = "Traceback (most recent call last):\n"
 				stacktrace = "".join(exception_list)
 				defw_exception_string = header+stacktrace
+		finally:
+			defw_trace.detach(trace_token)
 		if defw_exception_string:
 			rc_yaml = common.populate_rpc_rsp(target, source, rc, defw_exception_string)
 		else:
