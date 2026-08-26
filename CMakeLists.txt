@@ -363,6 +363,9 @@ endif()
 
 add_custom_target(defw_python_runtime ALL
 	COMMAND
+		"${CMAKE_COMMAND}" -E rm -rf
+		"${DEFW_BUILD_PYTHON_DIR}"
+	COMMAND
 		"${CMAKE_COMMAND}" -E copy_directory
 		"${CMAKE_CURRENT_SOURCE_DIR}/python"
 		"${DEFW_BUILD_PYTHON_DIR}"
