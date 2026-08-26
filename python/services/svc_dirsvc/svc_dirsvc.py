@@ -8,10 +8,10 @@ import yaml
 
 from defw import defw_config_yaml, dump_all_agents, get_agent, me
 from defw_agent_baseapi import BaseAgentAPI
-from defw_agent_info import Capability, DEFwServiceInfo
 from defw_exception import (
 	DEFwAgentNotFound,
 	DEFwCommError,
+	DEFwError,
 	DEFwInternalError,
 	DEFwInProgress,
 	DEFwNotFound,
@@ -26,9 +26,6 @@ AGENT_STATE_ERROR = 1 << 3
 
 
 class DEFwDirSvc:
-	SVC = 'services'
-	CLT = 'clients'
-
 	def __init__(self, sql_path):
 		self.__db_lock = threading.Lock()
 		self.__services_db = {}
@@ -70,87 +67,55 @@ class DEFwDirSvc:
 			'pid': ep.pid,
 		}
 
-	def __binding_for_service_info(self, service_info):
-		import defw
-
-		service_name = service_info.get_service_name()
-		client_module = None
-		client_class = service_name
-		if service_name in defw.service_apis:
-			api_class = defw.service_apis[service_name].service_classes[0]
-			client_module = api_class.__module__
-			client_class = api_class.__name__
-		return {
-			'binding_name': service_info.get_property(
-				'binding_name', 'default'),
-			'client_module': service_info.get_property(
-				'client_module', client_module),
-			'client_class': service_info.get_property(
-				'client_class', client_class),
-			'service_module': service_info.get_property(
-				'service_module', service_info.get_module_name()),
-			'service_class': service_info.get_property(
-				'service_class', service_info.get_class_name()),
-			'version': service_info.get_property('binding_version', 1),
-		}
-
-	def __service_info_properties(self, service_info):
-		get_properties = getattr(service_info, 'get_properties', None)
-		if not callable(get_properties):
-			return {}
-		return dict(get_properties() or {})
-
-	def __service_info_capability(self, service_info):
-		get_capabilities = getattr(service_info, 'get_capabilities', None)
-		if not callable(get_capabilities):
-			return {}, -1, -1
-		capabilities = get_capabilities()
-		if not capabilities:
-			return {}, -1, -1
-		capability = {}
-		get_capability_dict = getattr(
-			capabilities, 'get_capability_dict', None)
-		if callable(get_capability_dict):
-			capability = dict(get_capability_dict() or {})
-		cap_type = capabilities.get_cap_type()
-		caps = capabilities.get_caps()
-		return capability, cap_type, caps
-
-	def __directory_record(self, entry, service_info, context=None):
+	def __directory_record(self, entry, advertisement, context=None):
+		if not isinstance(advertisement, dict):
+			raise DEFwError(
+				"Service query must return metadata dictionaries")
 		ep = entry['agent'].get_ep()
 		context = context if isinstance(context, dict) else {}
-		service_name = service_info.get_service_name()
-		properties = self.__service_info_properties(service_info)
-		if isinstance(context.get('properties'), dict):
-			context_properties = dict(context.get('properties') or {})
-			context_properties.update(properties)
-			properties = context_properties
-		capability, cap_type, caps = (
-			self.__service_info_capability(service_info))
-		qpm_type = context.get('qpm_type', properties.get('qpm_type', -1))
+		service_name = (
+			context.get('service_name') or
+			advertisement.get('service_name'))
+		if not service_name:
+			raise DEFwError("Service metadata missing service_name")
+		properties = dict(context.get('properties') or {})
+		properties.update(advertisement.get('properties') or {})
+		capability = dict(
+			context.get('capability') or
+			advertisement.get('capability') or {})
+		qpm_type = context.get(
+			'qpm_type',
+			advertisement.get(
+				'qpm_type', properties.get('qpm_type', -1)))
 		qpm_capabilities = context.get(
 			'qpm_capabilities',
-			properties.get('qpm_capabilities', -1))
+			advertisement.get(
+				'qpm_capabilities',
+				properties.get('qpm_capabilities', -1)))
 		if qpm_type != -1:
 			properties.setdefault('qpm_type', qpm_type)
 		if qpm_capabilities != -1:
 			properties.setdefault('qpm_capabilities', qpm_capabilities)
 		service_id = (
 			context.get('service_id') or
-			service_info.get_property(
-				'service_id',
-				f"{service_name}:{ep.hostname}:{ep.name}"))
+			advertisement.get('service_id') or
+			properties.get('service_id') or
+			f"{service_name}:{ep.hostname}:{ep.name}")
 		selector = (
 			context.get('selector') or
-			service_info.get_property(
-				'selector', {'resources': [service_name]}))
+			advertisement.get('selector') or
+			properties.get('selector') or
+			{'resources': [service_name]})
 		service_type = context.get('service_type')
 		if service_type is None:
-			service_type = service_info.get_property(
-				'service_type', 'defw.service')
+			service_type = advertisement.get(
+				'service_type', properties.get(
+					'service_type', 'defw.service'))
 		api_bindings = (
 			context.get('api_bindings') or
-			service_info.get_property('api_bindings', None))
+			advertisement.get('api_bindings'))
+		if not api_bindings:
+			raise DEFwError("Service metadata missing api_bindings")
 		return {
 			'service_id': service_id,
 			'service_name': service_name,
@@ -158,9 +123,7 @@ class DEFwDirSvc:
 			'runtime_id': ep.remote_uuid,
 			'peer_handle': ep.blk_uuid,
 			'endpoint': self.__endpoint_record(ep),
-			'api_bindings': api_bindings or [
-				self.__binding_for_service_info(service_info)
-			],
+			'api_bindings': [dict(binding) for binding in api_bindings],
 			'selector': selector,
 			'properties': properties,
 			'capability': capability,
@@ -175,8 +138,9 @@ class DEFwDirSvc:
 		if not entry.get('info'):
 			entry['info'] = entry['api'].query()
 		records = []
-		for service_info in entry.get('info') or []:
-			record = self.__directory_record(entry, service_info, context)
+		for advertisement in entry.get('info') or []:
+			record = self.__directory_record(
+				entry, advertisement, context)
 			records.append(defw_directory.register_service(record))
 		return records
 
@@ -209,7 +173,7 @@ class DEFwDirSvc:
 			raise DEFwAgentNotFound(
 				f"Registration from an unknown client {ep}")
 		client_api = BaseAgentAPI(target=ep)
-		svc_info = client_api.query() if query else []
+		advertisements = client_api.query() if query else []
 		with self.__db_lock:
 			if agent_id not in local_agent_dict:
 				logging.defw_service(
@@ -217,24 +181,17 @@ class DEFwDirSvc:
 				local_agent_dict[agent_id] = {
 					'agent': agent,
 					'api': client_api,
-					'info': svc_info,
+					'info': advertisements,
 					'state': AGENT_STATE_CONNECTED,
 				}
 			else:
 				local_agent_dict[agent_id]['agent'] = agent
 				local_agent_dict[agent_id]['api'] = client_api
 				if query:
-					local_agent_dict[agent_id]['info'] = svc_info
+					local_agent_dict[agent_id]['info'] = advertisements
 			if context is not None:
 				local_agent_dict[agent_id]['context'] = context
 			local_agent_dict[agent_id]['state'] |= AGENT_STATE_REGISTERED
-			loc_db = (
-				DEFwDirSvc.SVC
-				if local_agent_dict is self.__services_db
-				else DEFwDirSvc.CLT)
-			for service_info in local_agent_dict[agent_id]['info']:
-				service_info.add_key(agent_id)
-				service_info.add_loc_db(loc_db)
 		logging.defw_service(
 			f"Registered agent: name={ep.name}, id={agent_id}, "
 			f"local keys={list(local_agent_dict.keys())}")
@@ -385,23 +342,22 @@ class DEFwDirSvc:
 	def query(self):
 		from . import SERVICE_DESC, SERVICE_NAME
 
-		cap = Capability(1, 1, "directory service")
-		return DEFwServiceInfo(
-			SERVICE_NAME,
-			SERVICE_DESC,
-			self.__class__.__name__,
-			self.__class__.__module__,
-			cap,
-			-1,
-			properties={
-				'service_type': 'defw.dirsvc',
-				'api_bindings': [{
-					'binding_name': 'directory',
-					'client_module': 'api_dirsvc',
-					'client_class': 'DEFwDirSvc',
-					'service_module': self.__class__.__module__,
-					'service_class': self.__class__.__name__,
-					'version': 1,
-				}],
+		return {
+			'service_name': SERVICE_NAME,
+			'service_type': 'defw.dirsvc',
+			'api_bindings': [{
+				'binding_name': 'directory',
+				'client_module': 'api_dirsvc',
+				'client_class': 'DEFwDirSvc',
+				'service_module': self.__class__.__module__,
+				'service_class': self.__class__.__name__,
+				'version': 1,
+			}],
+			'selector': {'resources': [SERVICE_NAME]},
+			'properties': {'description': SERVICE_DESC},
+			'capability': {
+				'type': 1,
+				'caps': 1,
+				'description': 'directory service',
 			},
-		)
+		}

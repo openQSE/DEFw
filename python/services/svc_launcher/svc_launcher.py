@@ -1,4 +1,3 @@
-from defw_agent_info import *
 from defw_util import prformat, fg, bg
 from defw import me
 import os, subprocess, copy, yaml, logging, sys, threading, socket, psutil, traceback
@@ -190,11 +189,25 @@ class Launcher:
 
 	def query(self):
 		from . import svc_info
-		cap = Capability(svc_info['name'], svc_info['description'], 1)
-		svc = ServiceDescr(svc_info['name'], svc_info['description'], [cap], 1)
-		info = DEFwServiceInfo(self.__class__.__name__,
-						  self.__class__.__module__, [svc])
-		return info
+		return {
+			'service_name': svc_info['name'],
+			'service_type': 'defw.launcher',
+			'api_bindings': [{
+				'binding_name': 'default',
+				'client_module': 'api_launcher',
+				'client_class': 'Launcher',
+				'service_module': self.__class__.__module__,
+				'service_class': self.__class__.__name__,
+				'version': 1,
+			}],
+			'selector': {'resources': [svc_info['name']]},
+			'properties': {'description': svc_info['description']},
+			'capability': {
+				'type': 1,
+				'caps': 1,
+				'description': svc_info['description'],
+			},
+		}
 
 	def test(self):
 		logging.defw_service("Testing Launcher")

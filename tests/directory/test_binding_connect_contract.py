@@ -63,66 +63,39 @@ class StubMe:
 
 
 class StubServiceAPI:
-	def __init__(self, service_infos):
-		self.__service_infos = service_infos
+	def __init__(self, advertisements):
+		self.__advertisements = advertisements
 
 	def query(self):
-		return list(self.__service_infos)
+		return list(self.__advertisements)
 
 	def unregister(self):
 		pass
 
 
-class StubCapability:
-	def __init__(self, cap_type, caps):
-		self.__cap_type = cap_type
-		self.__caps = caps
-
-	def get_capability_dict(self):
-		return {
-			'type': self.__cap_type,
-			'caps': self.__caps,
+def service_metadata(service_name, cap_type=1, caps=1, properties=None):
+	properties = dict(properties or {})
+	return {
+		'service_name': service_name,
+		'service_type': properties.get('service_type', 'defw.service'),
+		'api_bindings': [{
+			'binding_name': 'execution',
+			'client_module': 'api_qpm_execution',
+			'client_class': 'QPMExecution',
+			'service_module': 'svc_qpm',
+			'service_class': 'QPM',
+			'version': 1,
+		}],
+		'selector': {'resources': [service_name]},
+		'properties': properties,
+		'capability': {
+			'type': cap_type,
+			'caps': caps,
 			'description': 'stub capability',
-		}
-
-	def get_cap_type(self):
-		return self.__cap_type
-
-	def get_caps(self):
-		return self.__caps
-
-
-class StubServiceInfo:
-	def __init__(self, service_name, cap_type=1, caps=1, properties=None):
-		self.__service_name = service_name
-		self.__capability = StubCapability(cap_type, caps)
-		self.__properties = properties or {}
-		self.key = None
-		self.loc_db = None
-
-	def get_service_name(self):
-		return self.__service_name
-
-	def add_key(self, key):
-		self.key = key
-
-	def add_loc_db(self, loc_db):
-		self.loc_db = loc_db
-
-	def get_property(self, key, default=None):
-		return self.__properties.get(key, default)
-
-	def get_properties(self):
-		return self.__properties
-
-	def get_capabilities(self):
-		return self.__capability
-
-	def get_class_name(self):
-		return self.__properties.get('service_class', 'QPM')
-
-	def get_module_name(self):
-		return self.__properties.get('service_module', 'svc_qpm')
+		},
+		'qpm_type': cap_type,
+		'qpm_capabilities': caps,
+	}
 
 
 def make_resolved_binding(client_module, client_class, service_module,
@@ -160,23 +133,23 @@ def exercise_active_service_registration():
 	service_ep = StubEndpoint(runtime_id, peer_handle)
 	other_service_ep = StubEndpoint(other_runtime_id, other_peer_handle)
 	self_ep = StubEndpoint(str(uuid.uuid4()), str(uuid.uuid4()))
-	service_info = StubServiceInfo('QPM', cap_type=0b0011, caps=0b0100,
-				       properties={
+	service_advertisement = service_metadata(
+		'QPM', cap_type=0b0011, caps=0b0100, properties={
 					       'backend': 'iqm',
 					       'service_type': 'qfw.qpm',
 					       'qpm_type': 0b0011,
 					       'qpm_capabilities': 0b0100,
 				       })
-	other_service_info = StubServiceInfo('QPM', cap_type=0b1000, caps=0b0010,
-					     properties={
+	other_service_advertisement = service_metadata(
+		'QPM', cap_type=0b1000, caps=0b0010, properties={
 						     'backend': 'sim',
 						     'service_type': 'qfw.qpm',
 						     'qpm_type': 0b1000,
 						     'qpm_capabilities': 0b0010,
 					     })
-	service_infos = {
-		runtime_id: service_info,
-		other_runtime_id: other_service_info,
+	advertisements = {
+		runtime_id: service_advertisement,
+		other_runtime_id: other_service_advertisement,
 	}
 	originals = {
 		'me': svc_dirsvc.me,
@@ -188,11 +161,11 @@ def exercise_active_service_registration():
 		defw_directory.directory = defw_directory.Directory()
 		svc_dirsvc.me = StubMe(self_ep)
 		svc_dirsvc.get_agent = lambda ep: (
-			StubAgent(ep) if ep.get_id() in service_infos else None
+			StubAgent(ep) if ep.get_id() in advertisements else None
 		)
 		svc_dirsvc.BaseAgentAPI = \
 			lambda target: StubServiceAPI([
-				service_infos[target.remote_uuid]
+				advertisements[target.remote_uuid]
 			])
 
 		directory = svc_dirsvc.DEFwDirSvc('/tmp')

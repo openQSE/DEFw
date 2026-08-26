@@ -7,10 +7,7 @@ class BaseAgentAPI(BaseRemote):
 		super().__init__(target=target, *args, **kwargs)
 
 	def query(self):
-		# go over each of the service in each of the services module and
-		# call their query function. If they don't have a query function
-		# then they won't be picked up or advertised.
-		#
+		# Query each service class for its metadata advertisement.
 		from defw import services
 		svcs = []
 		for svc, module in services:
@@ -38,8 +35,10 @@ def query_service_info(ep, name=None):
 	logging.defw_core(f"Got service infos: {svcs}")
 	if name:
 		for svc in svcs:
-			logging.defw_core(f"SVC info ---{type(svc)}--- is {svc.get_service_name()} <-> {name}")
-			if name == svc.get_service_name():
+			service_name = svc.get('service_name')
+			logging.defw_core(
+				f"Service metadata is {service_name} <-> {name}")
+			if name == service_name:
 				return svc
 		return []
 	return svcs

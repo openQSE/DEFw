@@ -1,7 +1,6 @@
 import uuid
 
 import defw_common_def as common
-from defw_agent_info import Capability, DEFwServiceInfo
 from defw_exception import DEFwError
 
 
@@ -10,15 +9,28 @@ class TestEcho:
 		self._instance_id = str(uuid.uuid4())
 
 	def query(self):
-		cap = Capability(1, 1, "default test echo capability")
-		return DEFwServiceInfo(
-			"TestEcho",
-			"Per-connection echo service for DEFw self-tests",
-			self.__class__.__name__,
-			self.__class__.__module__,
-			cap,
-			-1,
-		)
+		return {
+			'service_name': 'TestEcho',
+			'service_type': 'defw.test.echo',
+			'api_bindings': [{
+				'binding_name': 'default',
+				'client_module': 'api_test_echo',
+				'client_class': 'TestEcho',
+				'service_module': self.__class__.__module__,
+				'service_class': self.__class__.__name__,
+				'version': 1,
+			}],
+			'selector': {'resources': ['TestEcho']},
+			'properties': {
+				'description': (
+					'Per-connection echo service for DEFw self-tests'),
+			},
+			'capability': {
+				'type': 1,
+				'caps': 1,
+				'description': 'default test echo capability',
+			},
+		}
 
 	def get_instance_id(self):
 		return self._instance_id
