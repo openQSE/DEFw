@@ -574,6 +574,8 @@ install(FILES ${DEFW_PUBLIC_HEADERS}
 install(DIRECTORY python/
 	DESTINATION python
 	PATTERN "config" EXCLUDE
+	PATTERN "suite_libfabric" EXCLUDE
+	PATTERN "suite_samples" EXCLUDE
 	PATTERN "__pycache__" EXCLUDE)
 install(FILES python/config/defw_generic.yaml
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/defw/config")
