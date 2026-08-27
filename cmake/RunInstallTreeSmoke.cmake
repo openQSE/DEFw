@@ -83,7 +83,6 @@ execute_process(
 		"DEFW_EXTERNAL_SERVICES_PATH="
 		"DEFW_EXTERNAL_SERVICE_APIS_PATH="
 		"DEFW_EXTERNAL_EXPERIMENTS_PATH="
-		"DEFW_EXPECTED_AGENT_COUNT=0"
 		"PYTHONPATH=${site_packages}"
 		"${DEFW_INSTALL_PREFIX}/bin/defwp" -c
 		"import cdefw_global; print('install executor ok')"
@@ -112,7 +111,6 @@ execute_process(
 		"DEFW_EXTERNAL_SERVICES_PATH="
 		"DEFW_EXTERNAL_SERVICE_APIS_PATH="
 		"DEFW_EXTERNAL_EXPERIMENTS_PATH="
-		"DEFW_EXPECTED_AGENT_COUNT=0"
 		"DEFW_APP_SMOKE_OUTPUT=${wrapper_app_marker}"
 		"PYTHONPATH=${site_packages}"
 		"${DEFW_INSTALL_PREFIX}/bin/defwp-wrapper" -c "${wrapper_app_code}"
@@ -165,7 +163,6 @@ execute_process(
 		"DEFW_EXTERNAL_SERVICES_PATH="
 		"DEFW_EXTERNAL_SERVICE_APIS_PATH="
 		"DEFW_EXTERNAL_EXPERIMENTS_PATH="
-		"DEFW_EXPECTED_AGENT_COUNT=0"
 		"PYTHONPATH=${site_packages}"
 		"${DEFW_PYTHON}" -c
 		"import defw; print('install configured defw import ok')"

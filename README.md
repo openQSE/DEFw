@@ -412,7 +412,6 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_AGENT_TYPE` | Runtime role: `agent`, `service`, or `dirsvc`. |
 | `DEFW_CONFIG_PATH` | Path to the YAML configuration file consumed at startup. |
 | `DEFW_DISABLE_DIRSVC` | Disable automatic directory-service connection for helper or standalone processes. |
-| `DEFW_EXPECTED_AGENT_COUNT` | Expected number of agents for deployments that wait on a full set of workers. |
 | `DEFW_EXPERIMENT_PORT_BASE` | Base port range used when experiments spawn additional service processes. |
 | `DEFW_EXTERNAL_EXPERIMENTS_PATH` | Extra search path for out-of-tree experiment modules. |
 | `DEFW_EXTERNAL_SERVICE_APIS_PATH` | Extra search path for out-of-tree service API modules. |
@@ -430,7 +429,6 @@ the current DEFw code and configuration files in this repository.
 | `DEFW_PREF_PATH` | Path to the DEFw preference YAML file loaded at runtime. |
 | `DEFW_REPORT_MODE` | Controls aggregate test result rendering: `summary`, `detail`, or `both`. |
 | `DEFW_SHELL_TYPE` | Execution mode such as `interactive`, `cmdline`, or `daemon`. |
-| `DEFW_SQL_PATH` | Optional SQL output path referenced by reporting logic. |
 | `DEFW_TELNET_PORT` | Optional telnet/debug port used by some startup modes. |
 | `LD_LIBRARY_PATH` | Must include the build-tree `runtime/src/` directory or installed library directory so DEFw shared libraries can be loaded. |
 

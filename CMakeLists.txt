@@ -507,7 +507,6 @@ add_test(NAME defw_executor_cmd
 		"DEFW_EXTERNAL_SERVICES_PATH="
 		"DEFW_EXTERNAL_SERVICE_APIS_PATH="
 		"DEFW_EXTERNAL_EXPERIMENTS_PATH="
-		"DEFW_EXPECTED_AGENT_COUNT=0"
 		"${DEFW_BUILD_SRC_DIR}/defwp" -c
 		"import cdefw_global; print(cdefw_global.get_defw_path())")
 set_tests_properties(defw_executor_cmd

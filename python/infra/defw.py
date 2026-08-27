@@ -1378,7 +1378,6 @@ def setup_generic_config_defaults(defw_path):
 	set_default_env('DEFW_EXTERNAL_SERVICES_PATH', '')
 	set_default_env('DEFW_EXTERNAL_SERVICE_APIS_PATH', '')
 	set_default_env('DEFW_EXTERNAL_EXPERIMENTS_PATH', '')
-	set_default_env('DEFW_EXPECTED_AGENT_COUNT', 0)
 
 def configure_defw():
 	global defw_path
@@ -1681,11 +1680,7 @@ if not cdefw_global.get_defw_initialized():
 		if 'Directory Service' in services:
 			service = services['Directory Service']
 		if service:
-			if 'DEFW_SQL_PATH' in os.environ:
-				sql_path = os.environ['DEFW_SQL_PATH']
-			else:
-				sql_path = '/tmp'
-			dirsvc = service.service_classes[0](sql_path)
+			dirsvc = service.service_classes[0]()
 
 	# Convenience Variables
 	R = dumpGlobalTestResults

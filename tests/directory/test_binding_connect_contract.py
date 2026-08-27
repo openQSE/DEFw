@@ -54,14 +54,6 @@ class StubAgent:
 		return self.__endpoint
 
 
-class StubMe:
-	def __init__(self, endpoint):
-		self.__endpoint = endpoint
-
-	def my_endpoint(self):
-		return self.__endpoint
-
-
 class StubServiceAPI:
 	def __init__(self, advertisements):
 		self.__advertisements = advertisements
@@ -132,7 +124,6 @@ def exercise_active_service_registration():
 	other_peer_handle = str(uuid.uuid4())
 	service_ep = StubEndpoint(runtime_id, peer_handle)
 	other_service_ep = StubEndpoint(other_runtime_id, other_peer_handle)
-	self_ep = StubEndpoint(str(uuid.uuid4()), str(uuid.uuid4()))
 	service_advertisement = service_metadata(
 		'QPM', cap_type=0b0011, caps=0b0100, properties={
 					       'backend': 'iqm',
@@ -152,14 +143,12 @@ def exercise_active_service_registration():
 		other_runtime_id: other_service_advertisement,
 	}
 	originals = {
-		'me': svc_dirsvc.me,
 		'get_agent': svc_dirsvc.get_agent,
 		'BaseAgentAPI': svc_dirsvc.BaseAgentAPI,
 		'directory': defw_directory.directory,
 	}
 	try:
 		defw_directory.directory = defw_directory.Directory()
-		svc_dirsvc.me = StubMe(self_ep)
 		svc_dirsvc.get_agent = lambda ep: (
 			StubAgent(ep) if ep.get_id() in advertisements else None
 		)
@@ -168,7 +157,7 @@ def exercise_active_service_registration():
 				advertisements[target.remote_uuid]
 			])
 
-		directory = svc_dirsvc.DEFwDirSvc('/tmp')
+		directory = svc_dirsvc.DEFwDirSvc()
 		records = directory.register_service(service_ep, context={
 			'service_id': 'qpm-iqm-ornl',
 			'service_type': 'qfw.qpm',
@@ -231,7 +220,6 @@ def exercise_active_service_registration():
 		       "type/capability filter selected wrong QPM")
 	finally:
 		defw_directory.directory = originals['directory']
-		svc_dirsvc.me = originals['me']
 		svc_dirsvc.get_agent = originals['get_agent']
 		svc_dirsvc.BaseAgentAPI = originals['BaseAgentAPI']
 

@@ -3,35 +3,20 @@ Directory service implementation.
 """
 import logging
 import threading
-import time
-import yaml
 
-from defw import defw_config_yaml, dump_all_agents, get_agent, me
+from defw import dump_all_agents, get_agent
 from defw_agent_baseapi import BaseAgentAPI
 from defw_exception import (
 	DEFwAgentNotFound,
-	DEFwCommError,
 	DEFwError,
-	DEFwInternalError,
-	DEFwInProgress,
-	DEFwNotFound,
 )
 import defw_directory
 
 
-AGENT_STATE_CONNECTED = 1 << 0
-AGENT_STATE_REGISTERED = 1 << 1
-AGENT_STATE_UNREGISTERED = 1 << 2
-AGENT_STATE_ERROR = 1 << 3
-
-
 class DEFwDirSvc:
-	def __init__(self, sql_path):
+	def __init__(self):
 		self.__db_lock = threading.Lock()
 		self.__services_db = {}
-		self.__clients_db = {}
-		self.__my_ep = me.my_endpoint()
-		self.__reload_entries()
 
 	def __live_agent_ids(self):
 		import defw_peers
@@ -53,10 +38,6 @@ class DEFwDirSvc:
 				logging.defw_service(
 					f"Pruning stale directory entry {agent_id}")
 				del db[agent_id]
-
-	def __reload_entries(self):
-		self.__prune_db(self.__clients_db)
-		self.__prune_db(self.__services_db)
 
 	def __endpoint_record(self, ep):
 		return {
@@ -131,8 +112,8 @@ class DEFwDirSvc:
 			'qpm_capabilities': qpm_capabilities,
 		}
 
-	def __register_directory_entries(self, db, agent_id, context=None):
-		entry = db.get(agent_id)
+	def __register_directory_entries(self, agent_id, context=None):
+		entry = self.__services_db.get(agent_id)
 		if not entry:
 			return []
 		if not entry.get('info'):
@@ -144,193 +125,63 @@ class DEFwDirSvc:
 			records.append(defw_directory.register_service(record))
 		return records
 
-	def unset_state(self, db, aid, state):
-		with self.__db_lock:
-			db[aid]['state'] = db[aid]['state'] & ~state
-
-	def set_state(self, db, aid, state):
-		with self.__db_lock:
-			db[aid]['state'] = db[aid]['state'] | state
-
-	def get_state(self, db, aid):
-		with self.__db_lock:
-			return db[aid]['state']
-
-	def __register(self, local_agent_dict, ep, context, query=True):
+	def __register(self, ep, context):
 		agent_id = ep.get_id()
 		logging.defw_service(
-			f"register(name={ep.name}, id={agent_id}, query={query})")
-		self.__reload_entries()
+			f"register(name={ep.name}, id={agent_id})")
+		self.__prune_db(self.__services_db)
 		agent = get_agent(ep)
 		if not agent:
 			logging.defw_service(
 				f"Unknown agent during register: name={ep.name}, "
-				f"id={agent_id}, known keys={list(local_agent_dict.keys())}")
-			if agent_id in local_agent_dict:
-				self.set_state(local_agent_dict, agent_id,
-					       AGENT_STATE_ERROR)
+				f"id={agent_id}, known keys={list(self.__services_db.keys())}")
 			dump_all_agents()
 			raise DEFwAgentNotFound(
 				f"Registration from an unknown client {ep}")
 		client_api = BaseAgentAPI(target=ep)
-		advertisements = client_api.query() if query else []
+		advertisements = client_api.query()
 		with self.__db_lock:
-			if agent_id not in local_agent_dict:
-				logging.defw_service(
-					f"Setting {agent_id} state to CONNECTED")
-				local_agent_dict[agent_id] = {
+			if agent_id not in self.__services_db:
+				self.__services_db[agent_id] = {
 					'agent': agent,
 					'api': client_api,
 					'info': advertisements,
-					'state': AGENT_STATE_CONNECTED,
 				}
 			else:
-				local_agent_dict[agent_id]['agent'] = agent
-				local_agent_dict[agent_id]['api'] = client_api
-				if query:
-					local_agent_dict[agent_id]['info'] = advertisements
+				self.__services_db[agent_id]['agent'] = agent
+				self.__services_db[agent_id]['api'] = client_api
+				self.__services_db[agent_id]['info'] = advertisements
 			if context is not None:
-				local_agent_dict[agent_id]['context'] = context
-			local_agent_dict[agent_id]['state'] |= AGENT_STATE_REGISTERED
+				self.__services_db[agent_id]['context'] = context
 		logging.defw_service(
 			f"Registered agent: name={ep.name}, id={agent_id}, "
-			f"local keys={list(local_agent_dict.keys())}")
-
-	def __deregister(self, local_agent_dict, ep):
-		agent = get_agent(ep)
-		if not agent:
-			raise DEFwAgentNotFound(
-				f"Deregistration from an unknown client {ep}")
-		self.unset_state(
-			local_agent_dict, ep.get_id(), AGENT_STATE_REGISTERED)
-
-	def register_agent(self, ep, context=None):
-		logging.defw_service(
-			f"Agent with ep {ep} registering with directory service")
-		dump_all_agents()
-		self.__register(self.__clients_db, ep, context, query=False)
-		self.__clients_db[ep.get_id()]['context'] = context
-		state = self.get_state(self.__clients_db, ep.get_id())
-		logging.defw_service(
-			f"Agent with ep {ep} registered. Now in state {state}")
-
-	def deregister_agent(self, ep):
-		logging.defw_service(f"Agent with ep {ep} deregistering")
-		self.__deregister(self.__clients_db, ep)
-
-	def ready_agents(self):
-		try:
-			total = int(defw_config_yaml['defw']['expected-agent-count'])
-		except Exception:
-			raise DEFwInternalError(
-				f"Bad configuration: {yaml.dump(defw_config_yaml)}")
-		registered = 0
-		with self.__db_lock:
-			for agent, info in self.__clients_db.items():
-				logging.defw_service(
-					f"{agent} is in state {info['state']}")
-				if info['state'] & AGENT_STATE_REGISTERED:
-					registered += 1
-		if total <= registered:
-			return True
-		raise DEFwInProgress(
-			f"Missing clients. Expected {total}, registered {registered}")
-
-	def wait_agents(self, timeout=10):
-		start = time.time()
-		while True:
-			if time.time() - start > timeout:
-				raise DEFwCommError(
-					"Agents failed to connect to directory service")
-			try:
-				if self.ready_agents():
-					break
-			except Exception as error:
-				if type(error) == DEFwInProgress:
-					continue
-				raise error
-		logging.defw_service(
-			f"wait_agents complete: {self.__clients_db}")
-
-	def dereg_agents(self):
-		registered = 0
-		with self.__db_lock:
-			for agent, info in self.__clients_db.items():
-				if info['state'] & AGENT_STATE_REGISTERED:
-					registered += 1
-		logging.defw_service(f"Agents still registered = {registered}")
-		if registered > 0:
-			raise DEFwInProgress(f"Clients still registered {registered}")
-
-	def wait_agents_deregistration(self, timeout=10):
-		start = time.time()
-		while True:
-			if time.time() - start > timeout:
-				raise DEFwCommError(
-					"Agents failed to deregister from directory service")
-			try:
-				self.dereg_agents()
-				break
-			except Exception as error:
-				if type(error) == DEFwInProgress:
-					continue
-				raise error
-		logging.defw_service(
-			f"wait for agent deregistration complete: {self.__clients_db}")
-
-	def get_agents_context(self):
-		contexts = {}
-		logging.defw_service(f"Currently registered: {self.__clients_db}")
-		with self.__db_lock:
-			num_clients = len(self.__clients_db)
-			for _, value in self.__clients_db.items():
-				agent = value['agent']
-				contexts[agent.get_pid()] = value['context']
-		num_contexts = len(contexts)
-		if num_contexts != num_clients:
-			raise DEFwNotFound(
-				"Clients didn't register properly. "
-				f"Found {num_contexts}. Expected {num_clients}")
-		return dict(sorted(contexts.items()))
+			f"local keys={list(self.__services_db.keys())}")
 
 	def register_service(self, service_ep, context=None):
 		agent_id = service_ep.get_id()
-		self.__register(self.__services_db, service_ep, context)
-		return self.__register_directory_entries(
-			self.__services_db, agent_id, context)
+		self.__register(service_ep, context)
+		return self.__register_directory_entries(agent_id, context)
 
 	def deregister(self, ep):
 		agent_id = ep.get_id()
 		logging.defw_service(
 			f"dirsvc.deregister(name={ep.name}, id={agent_id})")
-		if agent_id not in self.__clients_db and \
-		   agent_id not in self.__services_db:
+		if agent_id not in self.__services_db:
 			raise DEFwAgentNotFound(
 				f"agent {ep.name} ({agent_id}) not found")
-		if agent_id in self.__services_db:
-			logging.defw_service(
-				f"Deregistering service entry name={ep.name}, "
-				f"id={agent_id}")
-			self.__services_db[agent_id]['api'].unregister()
-			for record in defw_directory.query(include_inactive=True):
-				if record['runtime_id'] == agent_id:
-					defw_directory.deregister_service(
-						record['service_id'],
-						record['runtime_id'],
-						record['generation'])
-			del self.__services_db[agent_id]
-		if agent_id in self.__clients_db:
-			logging.defw_service(
-				f"Deregistering client entry name={ep.name}, "
-				f"id={agent_id}")
-			self.__clients_db[agent_id]['api'].unregister()
-			del self.__clients_db[agent_id]
+		logging.defw_service(
+			f"Deregistering service entry name={ep.name}, id={agent_id}")
+		self.__services_db[agent_id]['api'].unregister()
+		for record in defw_directory.query(include_inactive=True):
+			if record['runtime_id'] == agent_id:
+				defw_directory.deregister_service(
+					record['service_id'],
+					record['runtime_id'],
+					record['generation'])
+		del self.__services_db[agent_id]
 
 	def resolve_services(self, **filters):
 		return defw_directory.resolve_services(**filters)
-
-	def query_directory(self, include_inactive=False):
-		return defw_directory.query(include_inactive=include_inactive)
 
 	def deregister_service(self, service_id, runtime_id, generation):
 		return defw_directory.deregister_service(
