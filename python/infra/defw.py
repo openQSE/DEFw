@@ -393,9 +393,6 @@ class Script(MethodInterceptor):
 		self.__parent_suite = collection.get_suite_name().replace('suite_', '')
 		self.__collection = collection
 
-	def is_expected_failure(self, name):
-		return self.__collection.in_expected_failures_list(name)
-
 	def create_docs(self, csvfile):
 		# open script and extract comment block. It is expected to
 		# be at the beginning of the file
@@ -746,9 +743,6 @@ class ASuite(MethodInterceptor):
 
 	def run(self, match='*', num_scripts=0):
 		self.scripts.run(match=match, num_scripts=num_scripts)
-
-	def get_abs_path(self):
-		return self.__abs_path
 
 class Suites(MethodInterceptor):
 	'''
@@ -1575,14 +1569,6 @@ def wait_dirsvc(timeout):
 		return True
 
 	return False
-
-# TODO: We need a way to disconnect endpoint
-
-def get_dirsvc():
-	return dirsvc
-
-def get_self():
-	return me
 
 if not cdefw_global.get_defw_initialized():
 	updater_queue = queue.Queue()

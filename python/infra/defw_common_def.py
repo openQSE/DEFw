@@ -24,14 +24,6 @@ DEFW_LOG_LEVEL_APP_NAME =				"DEFW_APP"
 DEFW_LOG_LEVEL_RPC_NAME =				"DEFW_RPC"
 DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
 
-DEFW_STATUS_STRING = 'DEFw STATUS: '
-DEFW_STATUS_SUCCESS = 'Success'
-DEFW_STATUS_FAILURE = 'Failure'
-DEFW_STATUS_IGNORE = 'Ignore'
-DEFW_CODE_STRING = 'DEFw CODE: '
-MASTER_PORT = 8494
-MASTER_DAEMON_PORT = 8495
-AGENT_DAEMON_PORT = 8094
 DEFW_SCRIPT_PATHS = ['src/',
 		     'python/',
 		     'python/service-apis',
@@ -410,7 +402,7 @@ class SelectedLevelsFilter(logging.Filter):
 			return record.levelno == logging.CRITICAL
 		return record.levelno >= min(self.standard_levels)
 
-def add_logging_level(log_level, level_name, alias_names=None):
+def add_logging_level(log_level, level_name):
 	global CUSTOM_LEVELS
 	global CUSTOM_LEVEL_NAMES
 
@@ -426,10 +418,6 @@ def add_logging_level(log_level, level_name, alias_names=None):
 	CUSTOM_LEVEL_NAMES.add(log_level)
 
 	setattr(logging, func_name, custom_level_logger)
-	if alias_names:
-		for alias_name in alias_names:
-			CUSTOM_LEVELS[alias_name.upper()] = log_level
-			setattr(logging, alias_name.lower(), custom_level_logger)
 
 def add_logging_group(group_name, level_names):
 	global CUSTOM_LEVEL_GROUPS
@@ -473,26 +461,10 @@ def setup_log_file():
 	FILE_HANDLER.setFormatter(logging.Formatter(printformat))
 
 def setup_log_levels():
-	add_logging_level(
-		DEFW_LOG_LEVEL_CORE,
-		DEFW_LOG_LEVEL_CORE_NAME,
-		alias_names=["DEFW_INFRA"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_WORKER,
-		DEFW_LOG_LEVEL_WORKER_NAME,
-		alias_names=["DEFW_WORKERS"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_SERVICE,
-		DEFW_LOG_LEVEL_SERVICE_NAME,
-		alias_names=["DEFW_SERVICES"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_APP,
-		DEFW_LOG_LEVEL_APP_NAME,
-		alias_names=["DEFW_EXPERIMENTS"],
-	)
+	add_logging_level(DEFW_LOG_LEVEL_CORE, DEFW_LOG_LEVEL_CORE_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_WORKER, DEFW_LOG_LEVEL_WORKER_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_SERVICE, DEFW_LOG_LEVEL_SERVICE_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_APP, DEFW_LOG_LEVEL_APP_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_RPC, DEFW_LOG_LEVEL_RPC_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_STACKTRACE, DEFW_LOG_LEVEL_STACKTRACE_NAME)
 	add_logging_group(
@@ -548,9 +520,6 @@ def load_pref():
 			if not global_pref:
 				global_pref = GLOBAL_PREF_DEF
 			else:
-				if 'py_loglevel' not in global_pref and 'loglevel' in global_pref:
-					global_pref['py_loglevel'] = global_pref['loglevel']
-				global_pref.pop('loglevel', None)
 				#compare with the default and fill in any entries
 				#which might not be there.
 				for k, v in GLOBAL_PREF_DEF.items():

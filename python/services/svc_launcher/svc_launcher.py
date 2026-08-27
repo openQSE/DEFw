@@ -170,26 +170,6 @@ class Launcher:
 		logging.defw_service("Launcher Service shutdown requested")
 		self.__shutdown = True
 
-	def blocking_wait(self, pid=-1):
-		while True:
-			with self.__lock_db:
-				if pid == -1:
-					if len(self.__proc_dict) == 0:
-						break;
-					rm_pid = []
-					for pid, proc in self.__proc_dict.items():
-						if proc.poll():
-							rm_pid.append(pid)
-					for pid in rm_pid:
-						del self.__proc_dict[pid]
-				else:
-					if pid in self.__proc_dict.keys() and \
-					self.__proc_dict[pid].poll():
-						self.__proc_dict[pid].terminate()
-						del self.__proc_dict[pid]
-						break
-			sleep(0.0001)
-
 	def query(self):
 		from . import svc_info
 		return {
