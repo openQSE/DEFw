@@ -2,8 +2,6 @@ import code
 import socketserver
 import logging
 import sys
-import threading
-from defw import me
 import defw_telnetservlib as telnetsrvlib
 
 g_tns = None

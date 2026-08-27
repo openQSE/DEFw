@@ -1,4 +1,4 @@
-import os, shlex, subprocess, threading, ctypes, time, logging
+import shlex, subprocess, threading, ctypes, time, logging
 from defw_exception import DEFwError
 import defw_common_def
 

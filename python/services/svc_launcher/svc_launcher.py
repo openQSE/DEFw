@@ -1,18 +1,23 @@
-from defw_util import prformat, fg, bg
-from defw import me
-import os, subprocess, copy, yaml, logging, sys, threading, socket, psutil, traceback
+import copy
+import logging
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import threading
 from time import sleep
-from defw_exception import DEFwError, DEFwInProgress
+from defw_exception import DEFwInProgress
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
-import launcher_common as common
 from defw_cmd import defw_exec_remote_cmd
 
 class Process:
 	def __init__(self, cmd, env, path):
+		self.__cmd = shlex.split(cmd)
+		if not self.__cmd:
+			raise ValueError("process command must not be empty")
 		if path:
-			self.__cmd = os.path.join(path, proc).split()
-		else:
-			self.__cmd = cmd.split()
+			self.__cmd[0] = os.path.join(path, self.__cmd[0])
 		self.__pid = 0
 		self.__process = None
 		self.__appended_env = env
@@ -81,7 +86,6 @@ class Launcher:
 		while not self.__shutdown:
 			with self.__lock_db:
 				for pid, proc in self.__proc_dict.items():
-					exists = psutil.pid_exists(pid)
 					if proc.poll() is not None:
 						logging.defw_service(f"{pid} terminated with rc {proc.returncode()}")
 						stdout, stderr, rc = proc.get_result()
@@ -130,7 +134,6 @@ class Launcher:
 			self.__proc_dict[pid] = proc
 		if not wait:
 			return pid
-		psutilproc = psutil.Process(pid)
 		output, error, rc = proc.get_result()
 		proc.kill()
 		return output, error, rc

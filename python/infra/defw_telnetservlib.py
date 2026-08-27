@@ -32,11 +32,10 @@ import curses.has_key
 import curses
 import logging
 import select
-import re
 if not hasattr(socket, 'SHUT_RDWR'):
 	socket.SHUT_RDWR = 2
 
-__all__ = ["TelnetHandler", "TelnetCLIHandler"]
+__all__ = ["TelnetHandler"]
 
 IAC  = chr(255) # "Interpret As Command"
 DONT = chr(254)
@@ -343,7 +342,8 @@ class TelnetHandler(socketserver.BaseRequestHandler):
 		elif cmd == SB:
 			pass
 		else:
-			logging.defw_core("Unhandled option: %s %s" % (cmdtxt, opttxt, ))
+			logging.defw_core(
+				"Unhandled telnet option: %r %r", cmd, opt)
 
 	def sendcommand(self, cmd, opt=None):
 		"Send a telnet command (IAC)"

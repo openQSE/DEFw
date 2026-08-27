@@ -1,7 +1,6 @@
-import time, yaml, string, io, traceback, math
-import random, os, threading, sys, logging
+import time, string, io, traceback, math
+import random, threading, sys, logging
 from defw_cmd import defw_exec_local_cmd
-from defw_exception import DEFwError
 
 reset = '\033[0m'
 bold = '\033[01m'
@@ -52,32 +51,6 @@ def get_now():
 def prformat(color, *args, **kwargs):
 	print(color, *args, **kwargs)
 	print(reset)
-
-class IfwThread(threading.Thread):
-	def __init__(self, name, function, exception=False, *args, **kwargs):
-		threading.Thread.__init__(self)
-		self.name = name
-		self.thread_id = threading.get_ident()
-		self.rc = None
-		self.exception = exception
-		self.args = args
-		self.kwargs = kwargs
-		self.function = function
-
-	def run(self):
-		self.rc = self.function(*self.args, **self.kwargs)
-
-	def raise_exception(self):
-		res = ctypes.pythonapi.PyThreadState_SetAsyncExc(self.thread_id,
-				ctypes.py_object(SystemExit))
-		if res > 1:
-			ctypes.pythonapi.PyThreadState_SetAsyncExc(self.thread_id, 0)
-
-def generate_random_int_array(size, minimum=1, maximum=3000):
-	return random.sample(range(minimum, maximum), size)
-
-def generate_random_bytes(size):
-	return os.urandom(size)
 
 def generate_random_string(length):
 	characters = string.ascii_letters + string.digits  # Includes both letters and digits
@@ -189,13 +162,6 @@ def print_all_thread_stack_traces_to_logger():
 		temp_stderr.close()
 		sys.stderr = sys.__stderr__
 
-def print_thread_stack_traces():
-	frames = sys._current_frames()
-	tnames = get_thread_names()
-	for thread_id, frame in frames.items():
-		print(f"Thread = {thread_id}: {tnames[thread_id]}")
-		traceback.print_stack(frame)
-
 def round_half_up(number):
 	whole_part = math.floor(number)
 	fractional_part = number - whole_part
@@ -210,4 +176,3 @@ def round_to_nearest_power_of_two(number):
 
 	nearest_power_of_two = 2 ** int(math.log2(number) + 0.5)
 	return nearest_power_of_two
-

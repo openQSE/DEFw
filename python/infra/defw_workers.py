@@ -1,4 +1,4 @@
-import threading, queue, time, uuid, logging, yaml, importlib, traceback, sys
+import threading, queue, time, uuid, logging, importlib, traceback, sys
 import defw_common_def as common
 from cdefw_global import *
 from defw_exception import DEFwCommError, DEFwError, DEFwInternalError, DEFwNotFound
@@ -6,12 +6,10 @@ from cdefw_agent import defw_send_req, defw_send_rsp, defw_connect_to_service, \
 			defw_connect_to_client, EN_DEFW_DIRSVC
 from defw_agent import Endpoint
 from defw import me, preferences, service_apis
-from defw_util import print_thread_stack_trace_to_logger
 from defw_attachments import attach_encode, attach_load, attach_discard
 import defw
 
 from collections import deque
-import time
 
 INSTANCE_MODE_SINGLETON = 'singleton'
 INSTANCE_MODE_PER_CONNECTION = 'per_connection'
@@ -429,7 +427,6 @@ class WorkerThread:
 			logging.defw_rpc(me.my_endpoint())
 			return
 		source = y['rpc']['src']
-		hostname = source.hostname
 		mname = y['rpc']['module']
 		rpc_type = y['rpc']['type']
 		if rpc_type == 'function_call':

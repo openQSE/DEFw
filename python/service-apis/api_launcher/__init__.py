@@ -1,4 +1,3 @@
-from defw_util import prformat, fg, bg
 from .api_launcher import Launcher
 
 # This is used by the infrastructure to display information about

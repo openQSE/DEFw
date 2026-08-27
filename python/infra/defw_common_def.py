@@ -1,7 +1,6 @@
 import cdefw_global
 from defw_exception import DEFwError, DEFwDumper, DEFwNotFound
 import logging, os, yaml, shutil, threading, time, sys
-import cdefw_global
 from pathlib import Path
 from collections import deque
 

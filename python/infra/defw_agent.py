@@ -1,8 +1,8 @@
 from cdefw_agent import *
 from defw_common_def import *
 from defw_exception import *
-import yaml, logging, sys, ctypes, uuid
-import ipaddress, traceback, time, threading
+import yaml, logging, uuid
+import time
 
 class Endpoint:
 	def __init__(self, addr, port, listen_port, pid, name, hostname,
@@ -119,7 +119,6 @@ class Agent:
 		if not mname:
 			raise DEFwError("A method or a function name need to be specified")
 
-		start = time.time()
 		rpc = populate_rpc_req(src, self.__endpoint, rpc_type, module, cname,
 				       mname, class_id, *args, **kwargs)
 		wr = defw_workers.WorkerRequest(defw_workers.WorkerRequest.WR_SEND_MSG,

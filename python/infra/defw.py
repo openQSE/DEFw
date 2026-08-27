@@ -2,17 +2,14 @@ from pathlib import Path
 from cdefw_agent import *
 from defw_common_def import *
 import defw_common_def as common
-from defw_exception import DEFwError, DEFwDumper, DEFwCommError, DEFwNotFound, \
-	DEFwReserveError, DEFwAgentNotFound
-from defw_cmd import defw_exec_local_cmd
+from defw_exception import DEFwError, DEFwDumper, DEFwAgentNotFound
 import importlib, socket
 import cdefw_global
 from defw_agent import Endpoint
 import netifaces, random
-import atexit
-import os, subprocess, sys, yaml, fnmatch, logging, csv, uuid, io, signal
-import shutil, traceback, datetime, re, copy, threading, queue, time
-from defw_util import prformat, fg, bg, generate_random_string, \
+import os, subprocess, sys, yaml, fnmatch, logging, csv, uuid, signal
+import traceback, datetime, re, copy, threading, queue, time
+from defw_util import generate_random_string, \
 	 get_lscpu, get_today, get_now, print_all_thread_stack_traces_to_logger
 
 preferences = {}
@@ -484,36 +481,6 @@ class Script(MethodInterceptor):
 					  "".join(meta['tc']['txt']),
 					   self.name)
 
-	def initialize(self):
-		name = self.name.replace(self.__prefix, '')
-
-		preferences = common.global_pref
-
-		module = __import__(self.name)
-		# force a reload in case it has changed since it has
-		# been previously be imported
-		importlib.reload(module)
-		try:
-			module_run = getattr(module, 'initialize')
-		except Exception as e:
-			logging.defw_core(e)
-			return
-		# run the script
-		if hasattr(module_run, '__call__'):
-			try:
-				logging.defw_core("Initializing Module: %s" % str(self.name))
-				rc = module_run()
-			except Exception as e:
-				if preferences['halt_on_exception']:
-					raise e
-				else:
-					# if the script went out of its way to say I want to halt all execution
-					# then honor that.
-					if type(e) == DEFwError and e.halt:
-						raise e
-					else:
-						logging.defw_core("Initializing %s failed" % str(self.name))
-
 	def execute_method_by_name(self, method_name):
 		global global_test_results
 		global preferences
@@ -717,9 +684,6 @@ class Collection(MethodInterceptor):
 		scripts_dict['scripts'].sort()
 		print(yaml.dump(scripts_dict, Dumper=DEFwDumper, indent=2, sort_keys=True))
 
-	def get_suite_name(self):
-		return self.__suite_name
-
 	def len(self):
 		return len(self.__test_db)
 
@@ -905,7 +869,6 @@ class Suites(MethodInterceptor):
 			sl = list(self.test_db.keys())
 		else:
 			sl = [item for item in re.split(',| ', suite_list) if len(item.strip()) > 0]
-		num_scripts = 0
 		for k, v in self.test_db.items():
 			if k in sl:
 				numscripts[k] = v.get_num_scripts('*')
@@ -1510,7 +1473,7 @@ def get_agent(target, connection_direction=None, allow_runtime_fallback=False):
 		allow_runtime_fallback=allow_runtime_fallback,
 	)
 
-def updater_thread():
+def _updater_loop():
 	global dirsvc
 
 	shutdown = False
@@ -1691,7 +1654,7 @@ if not cdefw_global.get_defw_initialized():
 	# set debug level
 	#set_logging_level('debug')
 
-	updater_thread = threading.Thread(target=updater_thread, args=())
+	updater_thread = threading.Thread(target=_updater_loop, args=())
 	updater_thread.daemon = True
 	updater_thread.start()
 
