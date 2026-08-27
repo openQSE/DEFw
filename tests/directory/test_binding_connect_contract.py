@@ -8,6 +8,7 @@ import defw
 import defw_remote
 import defw_workers
 from api_dirsvc import DEFwDirSvc
+from api_events import BaseEventAPI
 from defw_exception import DEFwReserveError
 
 
@@ -112,6 +113,32 @@ def make_resolved_binding(client_module, client_class, service_module,
 			'service_class': service_class,
 		},
 	}
+
+
+def exercise_event_callback_binding():
+	remote_agent = StubRemoteAgent()
+	original_get_agent = defw_remote.get_agent
+	defw_remote.get_agent = lambda target: remote_agent
+	try:
+		callback = BaseEventAPI(
+			class_id='event-callback', target=object())
+		callback.put({'event': 'complete'})
+	finally:
+		defw_remote.get_agent = original_get_agent
+
+	expect(len(remote_agent.requests) == 1,
+	       "event callback did not send one RPC")
+	args, _ = remote_agent.requests[0]
+	expect(args[0] == 'method_call',
+	       "event callback sent the wrong RPC")
+	expect(args[2] == 'defw_event_baseapi',
+	       "event callback did not bind the event implementation module")
+	expect(args[3] == 'BaseEventAPI',
+	       "event callback did not bind the event implementation class")
+	expect(args[4] == 'put',
+	       "event callback did not invoke put")
+	expect(args[5] == 'event-callback',
+	       "event callback did not preserve the registered class id")
 
 
 def exercise_active_service_registration():
@@ -287,6 +314,7 @@ def main():
 	       "real dirsvc proxy did not use selected service class")
 
 	exercise_active_service_registration()
+	exercise_event_callback_binding()
 
 
 if __name__ == "__main__":
