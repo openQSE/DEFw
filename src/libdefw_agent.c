@@ -29,8 +29,6 @@ static pthread_mutex_t agent_array_mutex;
 static struct dlist_entry agent_connection_table;
 
 static bool g_agent_enable_hb = true;
-static struct in_addr g_local_ip;
-
 typedef struct defw_connect_req_s {
 	char ip_addr[MAX_SHORT_STR_LEN];
 	char name[MAX_SHORT_STR_LEN];
@@ -91,11 +89,6 @@ void defw_agent_init(void)
 	dlist_init(&agent_connection_table);
 	pthread_mutex_init(&agent_array_mutex, NULL);
 	initialized = true;
-}
-
-char *defw_get_local_ip()
-{
-	return inet_ntoa(g_local_ip);
 }
 
 unsigned int defw_agent_get_pid(defw_agent_blk_t *agent)
@@ -291,7 +284,6 @@ static void defw_agent_fill_peer_event(defw_agent_blk_t *agent,
 			event->is_self = true;
 	}
 
-	agent->is_loopback = event->is_self;
 	strncpy(event->transport_context, "defw-tcp",
 		sizeof(event->transport_context) - 1);
 	strncpy(event->connection_direction,
@@ -705,8 +697,6 @@ defw_agent_blk_t *defw_alloc_agent_blk(struct sockaddr_in *addr, bool add)
 
 	dlist_init(&agent->entry);
 	pthread_mutex_init(&agent->state_mutex, NULL);
-	pthread_mutex_init(&agent->cond_mutex, NULL);
-	pthread_cond_init(&agent->rpc_wait_cond, NULL);
 	gettimeofday(&agent->time_stamp, NULL);
 	agent->last_heartbeat_rx = agent->time_stamp;
 	agent->last_heartbeat_tx = agent->time_stamp;
@@ -764,31 +754,6 @@ char *defw_agent_ip2str(defw_agent_blk_t *agent)
 		return NULL;
 
 	return inet_ntoa(agent->addr.sin_addr);
-}
-
-static int get_num_agents(defw_connection_direction_t direction, defw_type_t role)
-{
-	int num = 0;
-	struct dlist_entry *tmp;
-	defw_agent_blk_t *agent;
-
-	dlist_foreach_container_safe(&agent_connection_table, defw_agent_blk_t, agent,
-				     entry, tmp) {
-		if (defw_agent_matches_filter(agent, direction, role, false))
-			num++;
-	}
-
-	return num;
-}
-
-int defw_get_num_connection_agents(void)
-{
-	return get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_SERVICE) +
-	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_DIRSVC) +
-	       get_num_agents(DEFW_CONN_DIRECTION_INBOUND, EN_DEFW_AGENT) +
-	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_SERVICE) +
-	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_DIRSVC) +
-	       get_num_agents(DEFW_CONN_DIRECTION_OUTBOUND, EN_DEFW_AGENT);
 }
 
 defw_agent_blk_t *find_agent_blk_by_pid(pid_t pid)

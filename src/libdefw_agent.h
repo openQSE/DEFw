@@ -42,11 +42,6 @@ void acquire_agent_blk(defw_agent_blk_t *agent);
 int agent_get_hb(void);
 
 /*
- * get the number of known connection records
- */
-int defw_get_num_connection_agents(void);
-
-/*
  * set_agent_state
  *
  * convenience function to set the agent state

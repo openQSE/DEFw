@@ -89,8 +89,6 @@ typedef defw_rc_t (*defw_peer_event_cb)(const defw_peer_event_t *event);
 typedef struct defw_agent_blk_s {
 	struct dlist_entry entry;
 	pthread_mutex_t state_mutex;
-	pthread_mutex_t cond_mutex;
-	pthread_cond_t rpc_wait_cond;
 	pid_t pid;
 	defw_agent_uuid_t id;
 	unsigned int version;
@@ -110,7 +108,6 @@ typedef struct defw_agent_blk_s {
 	defw_connect_status connect_complete_cb;
 	uuid_t connect_req_uuid;
 	int connect_req_pending;
-	int is_loopback;
 	struct timeval last_heartbeat_tx;
 	struct timeval last_heartbeat_rx;
 	struct timeval last_control_activity;
@@ -133,11 +130,6 @@ static inline void defw_free_state_str(char *str)
 {
 	free(str);
 }
-
-/* get_local_ip
- *   gets the local IP address being used to send messages to the master
- */
-char *defw_get_local_ip();
 
 /*
  * defw_agent_get_pid

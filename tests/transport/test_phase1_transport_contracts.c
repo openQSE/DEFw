@@ -108,8 +108,6 @@ static int test_connection_table_iteration_order(void)
 		     "connection iterator did not preserve dirsvc order");
 	rc |= expect(collected.agents[1] == service,
 		     "connection iterator did not preserve service order");
-	rc |= expect(defw_get_num_connection_agents() == 2,
-		     "connection count did not include known records");
 
 	release_agent(dirsvc);
 	release_agent(service);
@@ -152,8 +150,6 @@ static int test_peer_ready_identity_update(void)
 		     "identity update did not report remote runtime");
 	rc |= expect(peer_events[0].is_self,
 		     "identity update did not classify loopback");
-	rc |= expect(agent->is_loopback,
-		     "agent loopback state was not updated");
 	rc |= expect(agent->heartbeat_mode == DEFW_HEARTBEAT_NONE,
 		     "loopback ready update should disable heartbeat");
 

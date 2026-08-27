@@ -44,16 +44,6 @@ void set_defw_safe_shutdown(int safe)
 	g_defw_cfg.safe_shutdown = safe;
 }
 
-char *get_py_path(void)
-{
-	return g_defw_cfg.py_path;
-}
-
-void set_py_path(char *path)
-{
-	strncpy(g_defw_cfg.py_path, path, MAX_STR_LEN);
-}
-
 char *get_parent_name(void)
 {
 	return g_defw_cfg.parent_name;
@@ -82,36 +72,6 @@ char *get_hostname(void)
 void set_hostname(char *name)
 {
 	strncpy(g_defw_cfg.hostname, name, MAX_STR_LEN);
-}
-
-char *get_suite_name(void)
-{
-	return g_defw_cfg.suite;
-}
-
-void set_suite_name(char *name)
-{
-	strncpy(g_defw_cfg.suite, name, MAX_STR_LEN);
-}
-
-char *get_script_name(void)
-{
-	return g_defw_cfg.script;
-}
-
-void set_script_name(char *name)
-{
-	strncpy(g_defw_cfg.script, name, MAX_STR_LEN);
-}
-
-char *get_matching_pattern(void)
-{
-	return g_defw_cfg.pattern;
-}
-
-void set_matching_pattern(char *pattern)
-{
-	strncpy(g_defw_cfg.pattern, pattern, MAX_STR_LEN);
 }
 
 char *get_listen_address(void)
@@ -150,11 +110,6 @@ void set_node_name(char *name)
 	strncpy(g_defw_cfg.l_info.hb_info.node_name, name, MAX_STR_LEN);
 }
 
-int get_agent_telnet_port(void)
-{
-	return g_defw_cfg.l_info.hb_info.agent_telnet_port;
-}
-
 void set_agent_telnet_port(int port)
 {
 	g_defw_cfg.l_info.hb_info.agent_telnet_port = port;
@@ -182,11 +137,6 @@ void set_parent_port(int port)
 	g_defw_cfg.l_info.hb_info.parent_address.sin_port = port;
 }
 
-defw_run_mode_t get_defw_mode(void)
-{
-	return g_defw_cfg.shell;
-}
-
 void set_defw_mode(char *mode)
 {
 	if (!strcasecmp(mode, "daemon"))
@@ -212,26 +162,6 @@ void set_defw_type(char *type)
 		g_defw_cfg.l_info.type = EN_DEFW_DIRSVC;
 	else
 		g_defw_cfg.l_info.type = EN_DEFW_DIRSVC;
-}
-
-char *get_defw_results_file_path(void)
-{
-	return g_defw_cfg.results_file;
-}
-
-void set_defw_results_file_path(char *path)
-{
-	strncpy(g_defw_cfg.results_file, path, MAX_STR_LEN);
-}
-
-char *get_defw_cfg_file_path(void)
-{
-	return g_defw_cfg.cfg_path;
-}
-
-void set_defw_cfg_file_path(char *path)
-{
-	strncpy(g_defw_cfg.cfg_path, path, MAX_STR_LEN);
 }
 
 char *get_defw_tmp_dir(void)

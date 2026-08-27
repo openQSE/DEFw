@@ -52,13 +52,11 @@ typedef struct connection_info_s {
 
 static defw_rc_t process_msg_unknown(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent);
-static defw_rc_t process_msg_get_num_agents(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_session_info(char *msg, defw_agent_blk_t *agent);
 static defw_rc_t process_msg_rma_ack(char *msg, defw_agent_blk_t *agent);
 
 static defw_msg_process_fn_t msg_process_tbl[EN_MSG_TYPE_MAX] = {
 	[EN_MSG_TYPE_HB] = process_msg_hb,
-	[EN_MSG_TYPE_GET_NUM_AGENTS] = process_msg_get_num_agents,
 	[EN_MSG_TYPE_PY_REQUEST] = process_msg_unknown,
 	[EN_MSG_TYPE_PY_RESPONSE] = process_msg_unknown,
 	[EN_MSG_TYPE_PY_EVENT] = process_msg_unknown,
@@ -388,21 +386,6 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	agent->last_control_activity = agent->time_stamp;
 	if (learned_runtime_id)
 		defw_agent_report_peer_ready(agent, "remote-identity-ready");
-
-	return EN_DEFW_RC_OK;
-}
-
-static defw_rc_t process_msg_get_num_agents(char *msg, defw_agent_blk_t *agent)
-{
-	defw_rc_t rc;
-	defw_msg_num_agents_query_t query;
-
-	query.num_agents = defw_get_num_connection_agents();
-	rc = sendTcpMessage(agent->iFileDesc, (char *)&query, sizeof(query));
-	if (rc) {
-		PERROR("failed to send tcp message to get num agents query");
-		return rc;
-	}
 
 	return EN_DEFW_RC_OK;
 }

@@ -32,26 +32,14 @@ typedef struct defw_config_params_s {
 	bool initialized;
 	bool safe_shutdown;
 	bool disable_dirsvc_connect;
-	bool in_daemon_mode;
 	defw_listener_info_t l_info;
 	uuid_t uuid;
 	defw_run_mode_t shell; /* run in [non]-interactive or daemon mode */
-	char cfg_path[MAX_STR_LEN]; /* path to config file */
 	char defw_path[MAX_STR_LEN]; /* path to defw */
-	char py_path[MAX_STR_LEN]; /* other python specific paths */
 	char parent_name[MAX_STR_LEN]; /* name of master. Important if I'm an agent */
 	char parent_hostname[MAX_STR_LEN]; /* hostname of master. Important if I'm an agent */
 	char hostname[MAX_STR_LEN]; /* local hostname. */
-	char suite[MAX_STR_LEN]; /* name of suite to run. Run all if not present */
-	char suite_list[MAX_STR_LEN]; /* list of suites to run. Takes precedence
-			     over single suite parameter */
-	char script[MAX_STR_LEN]; /* name of script to run. Suite must be specified */
-	char pattern[MAX_STR_LEN]; /* file match pattern */
-	char results_file[MAX_STR_LEN]; /* path to results file */
 	char tmp_dir[MAX_STR_LEN]; /* directory to put temporary files */
-	char *agents[MAX_NUM_AGENTS]; /* list of agents to wait for before
-			       * starting the test
-			       */
 	int loglevel;
 	pthread_spinlock_t log_lock;
 	FILE *out;
