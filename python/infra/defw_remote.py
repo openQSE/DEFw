@@ -1,8 +1,5 @@
-import defw_agent
-import cdefw_global
 from defw_exception import DEFwError, DEFwAgentNotFound
-from defw_common_def import load_pref
-from defw import me, get_agent, dump_all_agents
+from defw import me, get_agent
 import yaml
 import uuid, logging, time
 
@@ -90,13 +87,12 @@ class BaseRemote(object):
 
 		if not self.__agent:
 			raise DEFwAgentNotFound(f"agent not found {target}")
+		if not remote_module or not remote_class:
+			raise DEFwError(
+				"remote bindings require service_module and service_class")
 
-		self.__service_module = type(self).__module__
-		self.__service_class = type(self).__name__
-		if self.__remote_module_override:
-			self.__service_module = self.__remote_module_override
-		if self.__remote_class_override:
-			self.__service_class = self.__remote_class_override
+		self.__service_module = self.__remote_module_override
+		self.__service_class = self.__remote_class_override
 
 		# class_id is the caller-visible handle used on future RPCs.
 		# For per-connection services it identifies the remote object.

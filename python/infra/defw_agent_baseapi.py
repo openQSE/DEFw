@@ -4,7 +4,12 @@ import logging
 
 class BaseAgentAPI(BaseRemote):
 	def __init__(self, target=None, *args, **kwargs):
-		super().__init__(target=target, *args, **kwargs)
+		super().__init__(
+			target=target,
+			remote_module="defw_agent_baseapi",
+			remote_class="BaseAgentAPI",
+			*args,
+			**kwargs)
 
 	def query(self):
 		# Query each service class for its metadata advertisement.
