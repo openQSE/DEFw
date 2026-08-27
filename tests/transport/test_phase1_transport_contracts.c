@@ -161,6 +161,27 @@ static int test_peer_ready_identity_update(void)
 	return rc;
 }
 
+static int test_send_rejects_invalid_arguments(void)
+{
+	char uuid[] = "00000000-0000-0000-0000-000000000000";
+	char yaml[] = "{}";
+	int rc = 0;
+
+	rc |= expect(defw_send_req(NULL, uuid, yaml) == EN_DEFW_RC_BAD_PARAM,
+		     "request send accepted a null destination UUID");
+	rc |= expect(defw_send_req(uuid, NULL, yaml) == EN_DEFW_RC_BAD_PARAM,
+		     "request send accepted a null block UUID");
+	rc |= expect(defw_send_req(uuid, uuid, NULL) == EN_DEFW_RC_BAD_PARAM,
+		     "request send accepted a null payload");
+	rc |= expect(defw_send_rsp(NULL, uuid, yaml) == EN_DEFW_RC_BAD_PARAM,
+		     "response send accepted a null destination UUID");
+	rc |= expect(defw_send_rsp(uuid, NULL, yaml) == EN_DEFW_RC_BAD_PARAM,
+		     "response send accepted a null block UUID");
+	rc |= expect(defw_send_rsp(uuid, uuid, NULL) == EN_DEFW_RC_BAD_PARAM,
+		     "response send accepted a null payload");
+	return rc;
+}
+
 int main(void)
 {
 	defw_init_logging();
@@ -169,6 +190,8 @@ int main(void)
 	if (test_connection_table_iteration_order())
 		return 1;
 	if (test_peer_ready_identity_update())
+		return 1;
+	if (test_send_rejects_invalid_arguments())
 		return 1;
 	return 0;
 }

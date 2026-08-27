@@ -1138,7 +1138,7 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 	size_t msg_size;
 
 	if (!dst_uuid || !blk_uuid || !yaml)
-		goto fail_rpc;
+		return EN_DEFW_RC_BAD_PARAM;
 
 	msg_size = strlen(yaml) + 1;
 
