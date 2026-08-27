@@ -36,7 +36,6 @@ DEFAULT_PREF = {
 	"editor": shutil.which("vim"),
 	"py_loglevel": DEFAULT_PY_LOG_LEVEL,
 	"halt_on_exception": False,
-	"remote copy": False,
 	"RPC timeout": 300,
 	"num_intfs": 3,
 	"cmd verbosity": True,

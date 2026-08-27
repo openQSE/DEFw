@@ -3,12 +3,6 @@ import random, threading, sys, logging
 from defw_cmd import defw_exec_local_cmd
 
 reset = '\033[0m'
-bold = '\033[01m'
-disable = '\033[02m'
-underline = '\033[04m'
-reverse = '\033[07m'
-strikethrough = '\033[09m'
-invisible = '\033[08m'
 
 class fg:
 	black = '\033[30m'
@@ -27,16 +21,6 @@ class fg:
 	pink = '\033[95m'
 	lightcyan = '\033[96m'
 	bold = '\033[1m'
-
-class bg:
-	black = '\033[40m'
-	red = '\033[41m'
-	green = '\033[42m'
-	orange = '\033[43m'
-	blue = '\033[44m'
-	purple = '\033[45m'
-	cyan = '\033[46m'
-	lightgrey = '\033[47m'
 
 def get_today():
 	info = time.localtime()

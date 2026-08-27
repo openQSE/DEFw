@@ -32,18 +32,3 @@ class BaseAgentAPI(BaseRemote):
 					exc_info=True,
 				)
 		return svcs
-
-def query_service_info(ep, name=None):
-	logging.defw_core(f"Query service on endpoint {ep}")
-	client_api = BaseAgentAPI(target=ep)
-	svcs = client_api.query()
-	logging.defw_core(f"Got service infos: {svcs}")
-	if name:
-		for svc in svcs:
-			service_name = svc.get('service_name')
-			logging.defw_core(
-				f"Service metadata is {service_name} <-> {name}")
-			if name == service_name:
-				return svc
-		return []
-	return svcs

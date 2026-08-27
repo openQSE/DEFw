@@ -390,7 +390,6 @@ class Script(MethodInterceptor):
 		self.name = os.path.splitext(os.path.split(abs_path)[1])[0]
 		self.__abs_path = abs_path
 		self.__prefix = collection.get_prefix()
-		self.__callbacks = collection.get_callbacks()
 		self.__parent_suite = collection.get_suite_name().replace('suite_', '')
 		self.__collection = collection
 
@@ -551,7 +550,7 @@ class Script(MethodInterceptor):
 			print("No editor available")
 
 class Collection(MethodInterceptor):
-	def __init__(self, base, name, callbacks, skip_list,
+	def __init__(self, base, name, skip_list,
 				 expected_failures, prefix, disabled_methods):
 		super().__init__(self, disabled_methods)
 		self.__suite_name = name
@@ -560,7 +559,6 @@ class Collection(MethodInterceptor):
 		self.__max = 0
 		self.__n = 0
 		self.__abs_path = os.path.join(base, name)
-		self.__callbacks = callbacks
 		self.__skip_list = skip_list
 		self.__expected_failures = expected_failures
 		self.__disabled_methods = disabled_methods
@@ -629,9 +627,6 @@ class Collection(MethodInterceptor):
 	def get_prefix(self):
 		return self.__prefix
 
-	def get_callbacks(self):
-		return self.__callbacks
-
 	def get_suite_name(self):
 		return self.__suite_name
 
@@ -687,29 +682,11 @@ class Collection(MethodInterceptor):
 	def len(self):
 		return len(self.__test_db)
 
-class SuiteCallbacks:
-	def __init__(self, **kwargs):
-		if type(kwargs) is not dict:
-			raise DEFwError("Must specify a dictionary")
-		self.__callbacks = kwargs
-	def __contains__(self, key):
-		return key in self.__callbacks
-	def __getitem__(self, key):
-		try:
-			rc = self.__callbacks[key]
-		except:
-			raise DEFwError('no entry for ' + str(key))
-		return rc
-	def dump(self):
-		print(yaml.dump(self.__callbacks, Dumper=DEFwDumper, indent=2, sort_keys=True))
-
 class ASuite(MethodInterceptor):
 	def __init__(self, base, name, prefix, disabled_methods):
 		super().__init__(self, disabled_methods)
 		self.__base = base
 		self.__prefix = prefix
-		self.__callback_reg = False
-		self.__callbacks = None
 		self.name = name
 		self.__abs_path = os.path.join(base, name)
 		self.scripts = None
@@ -720,10 +697,8 @@ class ASuite(MethodInterceptor):
 			sys.path.append(self.__abs_path)
 		self.reload()
 
-	def __register_callbacks(self):
-		if self.__callback_reg:
-			return
-		# find callbacks module in this suite and get the callbacks
+	def __load_suite_controls(self):
+		# Load optional skip and expected-failure lists for this suite.
 		for subdir, dirs, files in os.walk(self.__abs_path):
 			break
 		for f in files:
@@ -749,9 +724,8 @@ class ASuite(MethodInterceptor):
 				del(module)
 
 	def reload(self):
-		self.__callback_reg = False
-		self.__register_callbacks()
-		self.scripts = Collection(self.__base, self.name, self.__callbacks,
+		self.__load_suite_controls()
+		self.scripts = Collection(self.__base, self.name,
 								  self.__skip_list, self.__expected_failures,
 								  self.__prefix, self.__disabled_methods)
 

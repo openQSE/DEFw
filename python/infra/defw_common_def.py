@@ -239,11 +239,6 @@ def is_singleton_alias(class_id):
 	with global_class_db_lock:
 		return class_id in global_singleton_alias_db
 
-def dump_class_db():
-	with global_class_db_lock:
-		for k, v in global_class_db.items():
-			logging.defw_core("id = %f, name = %s" % (k, type(v).__name__))
-
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
 	rpc = get_rpc_req_base()
@@ -275,7 +270,7 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 	return rpc
 
 GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'py_loglevel': 'critical',
-		   'halt_on_exception': False, 'remote copy': False,
+		   'halt_on_exception': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
 		   'cmd verbosity': True,
 		   'debug module reload': False}
@@ -324,15 +319,6 @@ def get_rpc_timeout():
 	'''
 	global global_pref
 	return global_pref['RPC timeout']
-
-def set_script_remote_cp(enable):
-	'''
-	set the remote copy feature
-	If True then scripts will be remote copied to the agent prior to execution
-	'''
-	global global_pref
-	global_pref['remote copy'] = enable
-	save_pref()
 
 def set_debug_module_reload(enable):
 	'''
