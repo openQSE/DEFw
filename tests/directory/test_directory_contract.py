@@ -19,8 +19,9 @@ def expect_raises(exc_type, func, *args, **kwargs):
 	raise AssertionError(f"{exc_type.__name__} was not raised")
 
 
-def make_record(runtime_id='runtime-1', peer_handle='peer-1'):
-	return {
+def make_record(runtime_id='runtime-1', peer_handle='peer-1',
+		properties=None):
+	record = {
 		'service_id': 'qpm-iqm-ornl',
 		'service_name': 'IQM QPM',
 		'service_type': 'qfw.qpm',
@@ -57,6 +58,9 @@ def make_record(runtime_id='runtime-1', peer_handle='peer-1'):
 			'resources': ['IQM-20q'],
 		},
 	}
+	if properties is not None:
+		record['properties'] = dict(properties)
+	return record
 
 
 def main():
@@ -80,6 +84,14 @@ def main():
 		DEFwError,
 		directory.register_service,
 		missing_bindings,
+	)
+	expect_raises(
+		DEFwError,
+		directory.register_service,
+		make_record(properties={
+			'provider': 'iqm',
+			'credential_store': '/protected/qpu-users.json',
+		}),
 	)
 	record = directory.register_service(make_record())
 	expect(record['generation'] == 1, "new service generation should start at 1")
