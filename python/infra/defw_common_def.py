@@ -1,5 +1,6 @@
 import cdefw_global
 from defw_exception import DEFwError, DEFwDumper, DEFwNotFound
+import defw_trace
 import logging, os, yaml, shutil, threading, time, sys
 from pathlib import Path
 from collections import deque
@@ -243,6 +244,9 @@ def populate_rpc_req(src, dst, req_type, module, cname,
 	rpc['rpc']['class_id'] = class_id
 	rpc['rpc']['parameters']['args'] = args
 	rpc['rpc']['parameters']['kwargs'] = kwargs
+	# Carries the caller's trace context to the remote. Empty unless something
+	# has registered propagation hooks. See defw_trace.
+	rpc['rpc'][defw_trace.CARRIER_KEY] = defw_trace.inject()
 	rpc['rpc']['statistics']['send_time'] = time.time()
 	rpc['rpc']['statistics']['recv_time'] = 0
 	return rpc
