@@ -987,7 +987,7 @@ class Myself:
 		self.defw_cfg = cy
 		listen_address = cdefw_global.get_listen_address()
 		if listen_address == "0.0.0.0":
-			listen_address = socket.gethostbyname('localhost')
+			listen_address = socket.gethostbyname(socket.gethostname())
 		self.__my_endpoint = Endpoint(listen_address,
 									cdefw_global.get_listen_port(),
 									cdefw_global.get_listen_port(),
