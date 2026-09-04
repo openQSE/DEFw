@@ -235,10 +235,8 @@ defw_rc_t python_run_cmd_line(int argc, char *argv[], char *module, char *cmd)
 			"try:\n"
 			"    runpy.run_module('%s', run_name='__main__', alter_sys=False)\n"
 			"except SystemExit as e:\n"
-			"    pass\n"
-			"except Exception as e:\n"
-			"    print(e)\n"
-			"print(f'Running module %s with args: {sys.argv}')\n", module, module);
+			"    if e.code not in (None, 0):\n"
+			"        raise\n", module);
 		RUN_PYTHON_CMD(buf);
 	} else if (cmd) {
 		RUN_PYTHON_CMD(cmd);
