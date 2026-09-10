@@ -1,6 +1,6 @@
 from defw_app_util import (
-	defw_get_resource_mgr,
-	defw_reserve_service_by_name,
+	defw_get_directory_service,
+	defw_connect_service_by_name,
 	defw_shutdown_services,
 	defw_spawn_services,
 )
@@ -15,9 +15,9 @@ def run():
 	first = None
 	second = None
 	try:
-		resmgr = defw_get_resource_mgr()
-		first = defw_reserve_service_by_name(resmgr, "TestEcho")[0]
-		second = defw_reserve_service_by_name(resmgr, "TestEcho")[0]
+		dirsvc = defw_get_directory_service()
+		first = defw_connect_service_by_name(dirsvc, "TestEcho")[0]
+		second = defw_connect_service_by_name(dirsvc, "TestEcho")[0]
 		first_id = first.get_instance_id()
 		second_id = second.get_instance_id()
 		status = PASS if first_id != second_id else FAIL

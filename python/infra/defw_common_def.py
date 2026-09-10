@@ -1,7 +1,7 @@
 import cdefw_global
 from defw_exception import DEFwError, DEFwDumper, DEFwNotFound
+import defw_trace
 import logging, os, yaml, shutil, threading, time, sys
-import cdefw_global
 from pathlib import Path
 from collections import deque
 
@@ -25,14 +25,6 @@ DEFW_LOG_LEVEL_APP_NAME =				"DEFW_APP"
 DEFW_LOG_LEVEL_RPC_NAME =				"DEFW_RPC"
 DEFW_LOG_LEVEL_STACKTRACE_NAME =		"DEFW_STACKTRACE"
 
-DEFW_STATUS_STRING = 'DEFw STATUS: '
-DEFW_STATUS_SUCCESS = 'Success'
-DEFW_STATUS_FAILURE = 'Failure'
-DEFW_STATUS_IGNORE = 'Ignore'
-DEFW_CODE_STRING = 'DEFw CODE: '
-MASTER_PORT = 8494
-MASTER_DAEMON_PORT = 8495
-AGENT_DAEMON_PORT = 8094
 DEFW_SCRIPT_PATHS = ['src/',
 		     'python/',
 		     'python/service-apis',
@@ -40,7 +32,7 @@ DEFW_SCRIPT_PATHS = ['src/',
 		     'python/services',
 		     'python/services/util',
 		     'python/infra',
-		     'python/config'
+		     'python/config',
 		     'python/experiments']
 MIN_IFS_NUM_DEFAULT = 3
 g_system_shutdown = False
@@ -210,8 +202,9 @@ def shutdown_service_instance(instance):
 	# live instance back to its singleton identity.
 	try:
 		import defw
-		if getattr(defw, 'resmgr', None):
-			defw.resmgr.deregister(defw.me.my_endpoint())
+		dirsvc = getattr(defw, 'dirsvc', None)
+		if dirsvc:
+			dirsvc.deregister(defw.me.my_endpoint())
 	except Exception as exc:
 		logging.defw_core(
 			f"Failed to deregister service {instance.__class__.__name__} "
@@ -239,11 +232,6 @@ def is_singleton_alias(class_id):
 	with global_class_db_lock:
 		return class_id in global_singleton_alias_db
 
-def dump_class_db():
-	with global_class_db_lock:
-		for k, v in global_class_db.items():
-			logging.defw_core("id = %f, name = %s" % (k, type(v).__name__))
-
 def populate_rpc_req(src, dst, req_type, module, cname,
 		     mname, class_id, *args, **kwargs):
 	rpc = get_rpc_req_base()
@@ -256,6 +244,9 @@ def populate_rpc_req(src, dst, req_type, module, cname,
 	rpc['rpc']['class_id'] = class_id
 	rpc['rpc']['parameters']['args'] = args
 	rpc['rpc']['parameters']['kwargs'] = kwargs
+	# Carries the caller's trace context to the remote. Empty unless something
+	# has registered propagation hooks. See defw_trace.
+	rpc['rpc'][defw_trace.CARRIER_KEY] = defw_trace.inject()
 	rpc['rpc']['statistics']['send_time'] = time.time()
 	rpc['rpc']['statistics']['recv_time'] = 0
 	return rpc
@@ -275,7 +266,7 @@ def populate_rpc_rsp(src, dst, rc, exception=None):
 	return rpc
 
 GLOBAL_PREF_DEF = {'editor': shutil.which('vim'), 'py_loglevel': 'critical',
-		   'halt_on_exception': False, 'remote copy': False,
+		   'halt_on_exception': False,
 		   'RPC timeout': 300, 'num_intfs': MIN_IFS_NUM_DEFAULT,
 		   'cmd verbosity': True,
 		   'debug module reload': False}
@@ -324,15 +315,6 @@ def get_rpc_timeout():
 	'''
 	global global_pref
 	return global_pref['RPC timeout']
-
-def set_script_remote_cp(enable):
-	'''
-	set the remote copy feature
-	If True then scripts will be remote copied to the agent prior to execution
-	'''
-	global global_pref
-	global_pref['remote copy'] = enable
-	save_pref()
 
 def set_debug_module_reload(enable):
 	'''
@@ -424,7 +406,7 @@ class SelectedLevelsFilter(logging.Filter):
 			return record.levelno == logging.CRITICAL
 		return record.levelno >= min(self.standard_levels)
 
-def add_logging_level(log_level, level_name, alias_names=None):
+def add_logging_level(log_level, level_name):
 	global CUSTOM_LEVELS
 	global CUSTOM_LEVEL_NAMES
 
@@ -440,10 +422,6 @@ def add_logging_level(log_level, level_name, alias_names=None):
 	CUSTOM_LEVEL_NAMES.add(log_level)
 
 	setattr(logging, func_name, custom_level_logger)
-	if alias_names:
-		for alias_name in alias_names:
-			CUSTOM_LEVELS[alias_name.upper()] = log_level
-			setattr(logging, alias_name.lower(), custom_level_logger)
 
 def add_logging_group(group_name, level_names):
 	global CUSTOM_LEVEL_GROUPS
@@ -487,26 +465,10 @@ def setup_log_file():
 	FILE_HANDLER.setFormatter(logging.Formatter(printformat))
 
 def setup_log_levels():
-	add_logging_level(
-		DEFW_LOG_LEVEL_CORE,
-		DEFW_LOG_LEVEL_CORE_NAME,
-		alias_names=["DEFW_INFRA"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_WORKER,
-		DEFW_LOG_LEVEL_WORKER_NAME,
-		alias_names=["DEFW_WORKERS"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_SERVICE,
-		DEFW_LOG_LEVEL_SERVICE_NAME,
-		alias_names=["DEFW_SERVICES"],
-	)
-	add_logging_level(
-		DEFW_LOG_LEVEL_APP,
-		DEFW_LOG_LEVEL_APP_NAME,
-		alias_names=["DEFW_EXPERIMENTS"],
-	)
+	add_logging_level(DEFW_LOG_LEVEL_CORE, DEFW_LOG_LEVEL_CORE_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_WORKER, DEFW_LOG_LEVEL_WORKER_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_SERVICE, DEFW_LOG_LEVEL_SERVICE_NAME)
+	add_logging_level(DEFW_LOG_LEVEL_APP, DEFW_LOG_LEVEL_APP_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_RPC, DEFW_LOG_LEVEL_RPC_NAME)
 	add_logging_level(DEFW_LOG_LEVEL_STACKTRACE, DEFW_LOG_LEVEL_STACKTRACE_NAME)
 	add_logging_group(
@@ -562,9 +524,6 @@ def load_pref():
 			if not global_pref:
 				global_pref = GLOBAL_PREF_DEF
 			else:
-				if 'py_loglevel' not in global_pref and 'loglevel' in global_pref:
-					global_pref['py_loglevel'] = global_pref['loglevel']
-				global_pref.pop('loglevel', None)
 				#compare with the default and fill in any entries
 				#which might not be there.
 				for k, v in GLOBAL_PREF_DEF.items():

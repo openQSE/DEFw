@@ -24,14 +24,25 @@
 static defw_rc_t tcp_send(defw_agent_blk_t *agent, defw_channel_t ch,
 			  char *buf, size_t len, defw_msg_type_t type)
 {
+	defw_rc_t rc;
 	int fd;
+	pthread_mutex_t *send_mutex;
 
 	if (!agent)
 		return EN_DEFW_RC_BAD_PARAM;
 
-	fd = (ch == EN_DEFW_CHANNEL_RPC) ? agent->iRpcFd : agent->iFileDesc;
+	if (ch == EN_DEFW_CHANNEL_RPC) {
+		send_mutex = &agent->rpc_send_mutex;
+	} else {
+		send_mutex = &agent->control_send_mutex;
+	}
 
-	return defw_send_msg(fd, buf, len, type);
+	pthread_mutex_lock(send_mutex);
+	fd = (ch == EN_DEFW_CHANNEL_RPC) ? agent->iRpcFd : agent->iFileDesc;
+	rc = defw_send_msg(fd, buf, len, type);
+	pthread_mutex_unlock(send_mutex);
+
+	return rc;
 }
 
 static defw_transport_ops_t tcp_ops = {

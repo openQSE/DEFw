@@ -2,5 +2,4 @@ pyyaml
 netifaces
 psutil
 paramiko
-scons
 rich

@@ -79,9 +79,9 @@ defw_rc_t python_collect_agent_core(char *ip);
 defw_rc_t python_handle_connect_complete(defw_rc_t status, char *uuid);
 
 /*
- * python_update_interactive_shell
- *	update the interactive shell environment
+ * python_handle_peer_event
+ *	Dispatch a C-owned peer lifecycle event into the python worker queue
  */
-void python_update_interactive_shell(void);
+defw_rc_t python_handle_peer_event(const defw_peer_event_t *event);
 
 #endif /* DEFW_PYTHON_H */

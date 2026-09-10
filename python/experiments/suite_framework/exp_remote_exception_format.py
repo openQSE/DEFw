@@ -1,6 +1,6 @@
 from defw_app_util import (
-	defw_get_resource_mgr,
-	defw_reserve_service_by_name,
+	defw_get_directory_service,
+	defw_connect_service_by_name,
 	defw_shutdown_services,
 	defw_spawn_services,
 )
@@ -14,8 +14,8 @@ def run():
 	services = defw_spawn_services('svc_test_echo')
 	echo = None
 	try:
-		resmgr = defw_get_resource_mgr()
-		echo = defw_reserve_service_by_name(resmgr, "TestEcho")[0]
+		dirsvc = defw_get_directory_service()
+		echo = defw_connect_service_by_name(dirsvc, "TestEcho")[0]
 		try:
 			echo.raise_error()
 		except Exception as exc:

@@ -18,7 +18,6 @@ typedef struct defw_agent_uuid_s {
 typedef enum {
 	EN_MSG_TYPE_HB = 0,
 	EN_MSG_TYPE_SESSION_INFO,
-	EN_MSG_TYPE_GET_NUM_AGENTS,
 	EN_MSG_TYPE_PY_REQUEST,
 	EN_MSG_TYPE_PY_RESPONSE,
 	EN_MSG_TYPE_PY_EVENT,
@@ -58,10 +57,6 @@ typedef struct defw_msg_session_s {
 	unsigned int ofi_addrlen;
 	unsigned char ofi_addr[DEFW_OFI_MAX_ADDRLEN];
 } defw_msg_session_t;
-
-typedef struct defw_msg_num_agents_query_s {
-	int num_agents;
-} defw_msg_num_agents_query_t;
 
 /* Acknowledgement that a peer has finished reading a memory region we exposed
  * for RMA, so the registration can be dropped. The handle is the registration

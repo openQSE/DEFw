@@ -8,7 +8,7 @@ modules:
   - api_test_counter
   - api_test_echo
 master:
-  agent_name: master-resmgr
+  agent_name: master-dirsvc
   listen_port: 25100
   telnet_port: 25101
   experiment_port_base: 25110

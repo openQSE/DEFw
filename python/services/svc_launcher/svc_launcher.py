@@ -1,19 +1,23 @@
-from defw_agent_info import *
-from defw_util import prformat, fg, bg
-from defw import me
-import os, subprocess, copy, yaml, logging, sys, threading, socket, psutil, traceback
+import copy
+import logging
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import threading
 from time import sleep
-from defw_exception import DEFwError, DEFwInProgress
+from defw_exception import DEFwInProgress
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
-import launcher_common as common
 from defw_cmd import defw_exec_remote_cmd
 
 class Process:
 	def __init__(self, cmd, env, path):
+		self.__cmd = shlex.split(cmd)
+		if not self.__cmd:
+			raise ValueError("process command must not be empty")
 		if path:
-			self.__cmd = os.path.join(path, proc).split()
-		else:
-			self.__cmd = cmd.split()
+			self.__cmd[0] = os.path.join(path, self.__cmd[0])
 		self.__pid = 0
 		self.__process = None
 		self.__appended_env = env
@@ -69,20 +73,21 @@ class Process:
 		return self.__pid
 
 class Launcher:
-	def __init__(self, start=False):
+	def __init__(self, start=True):
 		self.__proc_dict = {}
 		self.__dead_procs = {}
-		self.__shutdown = False
+		self.__shutdown = not start
 		self.__lock_db = threading.Lock()
-		self.__monitor_thr = threading.Thread(target=self.monitor_thr)
-		self.__monitor_thr.daemon = True
-		self.__monitor_thr.start()
+		self.__monitor_thr = None
+		if start:
+			self.__monitor_thr = threading.Thread(target=self.monitor_thr)
+			self.__monitor_thr.daemon = True
+			self.__monitor_thr.start()
 
 	def monitor_thr(self):
 		while not self.__shutdown:
 			with self.__lock_db:
 				for pid, proc in self.__proc_dict.items():
-					exists = psutil.pid_exists(pid)
 					if proc.poll() is not None:
 						logging.defw_service(f"{pid} terminated with rc {proc.returncode()}")
 						stdout, stderr, rc = proc.get_result()
@@ -131,7 +136,6 @@ class Launcher:
 			self.__proc_dict[pid] = proc
 		if not wait:
 			return pid
-		psutilproc = psutil.Process(pid)
 		output, error, rc = proc.get_result()
 		proc.kill()
 		return output, error, rc
@@ -168,39 +172,27 @@ class Launcher:
 		logging.defw_service("Launcher Service shutdown requested")
 		self.__shutdown = True
 
-	def blocking_wait(self, pid=-1):
-		while True:
-			with self.__lock_db:
-				if pid == -1:
-					if len(self.__proc_dict) == 0:
-						break;
-					rm_pid = []
-					for pid, proc in self.__proc_dict.items():
-						if proc.poll():
-							rm_pid.append(pid)
-					for pid in rm_pid:
-						del self.__proc_dict[pid]
-				else:
-					if pid in self.__proc_dict.keys() and \
-					self.__proc_dict[pid].poll():
-						self.__proc_dict[pid].terminate()
-						del self.__proc_dict[pid]
-						break
-			sleep(0.0001)
-
 	def query(self):
 		from . import svc_info
-		cap = Capability(svc_info['name'], svc_info['description'], 1)
-		svc = ServiceDescr(svc_info['name'], svc_info['description'], [cap], 1)
-		info = DEFwServiceInfo(self.__class__.__name__,
-						  self.__class__.__module__, [svc])
-		return info
+		return {
+			'service_name': svc_info['name'],
+			'service_type': 'defw.launcher',
+			'api_bindings': [{
+				'binding_name': 'default',
+				'client_module': 'api_launcher',
+				'client_class': 'Launcher',
+				'service_module': self.__class__.__module__,
+				'service_class': self.__class__.__name__,
+				'version': 1,
+			}],
+			'selector': {'resources': [svc_info['name']]},
+			'properties': {'description': svc_info['description']},
+			'capability': {
+				'type': 1,
+				'caps': 1,
+				'description': svc_info['description'],
+			},
+		}
 
 	def test(self):
 		logging.defw_service("Testing Launcher")
-
-	def reserve(self, svc, client_ep, *args, **kwargs):
-		logging.defw_service(f"{client_ep} reserved the {svc}")
-
-	def release(self, services):
-		self.runner_shutdown = True

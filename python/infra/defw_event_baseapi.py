@@ -1,9 +1,6 @@
-import defw
-from defw_remote import BaseRemote
 import defw_common_def as common
-from defw_util import prformat, fg, bg
 from defw_exception import DEFwNotFound
-import os, logging, queue, threading, uuid
+import os, threading, uuid
 
 class ConditionalLock:
 	def __init__(self, thread_safe=True):
@@ -75,11 +72,9 @@ class BaseEventAPI:
 
 	def register_external(self):
 		try:
-			c = common.get_class_from_db(self.__class_id)
+			common.get_class_from_db(self.__class_id)
 		except DEFwNotFound:
 			common.add_to_class_db(self, self.__class_id)
 
 	def unregister_external(self):
-		common.del_etnry_from_class_db(self.__class_id)
-
-
+		common.del_entry_from_class_db(self.__class_id)

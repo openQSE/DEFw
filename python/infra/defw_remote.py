@@ -1,8 +1,5 @@
-import defw_agent
-import cdefw_global
 from defw_exception import DEFwError, DEFwAgentNotFound
-from defw_common_def import load_pref
-from defw import me, get_agent, dump_all_agents
+from defw import me, get_agent
 import yaml
 import uuid, logging, time
 
@@ -68,21 +65,16 @@ class BaseRemote(object):
 	# the idea of the *args and **kwargs in the __init__ method is for subclasses
 	# to pass all their arguments to the super() class. Then the superclass can then pass
 	# that to the remote, so the remote class can be instantiated appropriately
-	def __init__(self, class_id=None, service_info=None,
-				 blocking=True, target=None, *args, **kwargs):
+	def __init__(self, class_id=None, blocking=True, target=None,
+				 remote_module=None,
+				 remote_class=None, *args, **kwargs):
 		self.__own = True
+		self.__remote_module_override = remote_module
+		self.__remote_class_override = remote_class
 		# if a target is specified other than me then we're going
 		# to execute on that target
 		self.__blocking = blocking
-		if service_info:
-			try:
-				target = service_info.get_endpoint()
-				self.__agent = get_agent(target)
-			except Exception as e:
-				print(e)
-				raise DEFwError("Unknown Agent for service_info: ", service_info)
-			self.__remote = True
-		elif target:
+		if target:
 			try:
 				self.__agent = get_agent(target)
 			except Exception as e:
@@ -95,11 +87,12 @@ class BaseRemote(object):
 
 		if not self.__agent:
 			raise DEFwAgentNotFound(f"agent not found {target}")
+		if not remote_module or not remote_class:
+			raise DEFwError(
+				"remote bindings require service_module and service_class")
 
-		if service_info:
-			self.__service_module = service_info.get_module_name()
-		elif target:
-			self.__service_module = type(self).__module__
+		self.__service_module = self.__remote_module_override
+		self.__service_class = self.__remote_class_override
 
 		# class_id is the caller-visible handle used on future RPCs.
 		# For per-connection services it identifies the remote object.
@@ -115,7 +108,7 @@ class BaseRemote(object):
 			self.__class_id = str(uuid.uuid1())
 			self.__agent.send_req('instantiate_class', me.my_endpoint(),
 					self.__service_module,
-					type(self).__name__, '__init__',
+					self.__service_class, '__init__',
 					self.__class_id, self.__blocking, *args, **kwargs)
 
 	def __copy__(self):
@@ -142,7 +135,7 @@ class BaseRemote(object):
 					result = self.__agent.send_req('method_call',
 								me.my_endpoint(),
 								self.__service_module,
-								type(self).__name__,
+								self.__service_class,
 								attr.__name__,
 								self.__class_id,
 								self.__blocking,
@@ -162,7 +155,7 @@ class BaseRemote(object):
 			# signal to the remote that the class is being destroyed
 			if self.__remote:
 				self.__agent.send_req('destroy_class', me.my_endpoint(),
-					self.__class__.__module__, type(self).__name__, '__del__',
+					self.__service_module, self.__service_class, '__del__',
 					self.__class_id)
 		except:
 			pass

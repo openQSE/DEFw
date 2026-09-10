@@ -1,0 +1,13 @@
+defw:
+  swigify:
+    - path: @CMAKE_CURRENT_SOURCE_DIR@/tests/external_swig
+      name: defw_external_swig_fixture
+      files:
+        - fixture.h
+      libs:
+        - defw_external_swig_fixture
+      include_dirs:
+        - @CMAKE_CURRENT_SOURCE_DIR@/tests/external_swig
+      library_dirs:
+        - @DEFW_BUILD_SRC_DIR@
+      ignore: []
