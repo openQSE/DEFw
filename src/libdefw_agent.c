@@ -1102,6 +1102,7 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 	defw_agent_uuid_t agent_id;
 	defw_agent_blk_t *agent_blk;
 	size_t msg_size;
+	char log_prefix[MAX_STR_LEN * 2];
 
 	if (!dst_uuid || !blk_uuid || !yaml)
 		return EN_DEFW_RC_BAD_PARAM;
@@ -1116,8 +1117,9 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 		goto fail_rpc_no_agent;
 	}
 
-	PMSG("Sending to %s:%d\n%s", agent_blk->name,
-	     agent_blk->iRpcFd, yaml);
+	snprintf(log_prefix, sizeof(log_prefix), "Sending to %s:%d\n",
+		 agent_blk->name, agent_blk->iRpcFd);
+	PMSG_PAYLOAD(log_prefix, yaml);
 
 	MUTEX_LOCK(&agent_blk->state_mutex);
 	if (!(agent_blk->state & DEFW_AGENT_RPC_CHANNEL_CONNECTED)) {
@@ -1152,7 +1154,7 @@ defw_send(char *dst_uuid, char *blk_uuid, char *yaml, defw_msg_type_t type)
 	rc = defw_transport_ops()->send(agent_blk, EN_DEFW_CHANNEL_RPC,
 			yaml, msg_size, type);
 	if (rc != EN_DEFW_RC_OK) {
-		PERROR("Failed to send rpc message: %s", yaml);
+		PERROR_PAYLOAD("Failed to send rpc message: ", yaml);
 		goto fail_rpc;
 	}
 

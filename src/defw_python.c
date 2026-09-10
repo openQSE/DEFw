@@ -587,12 +587,16 @@ python_handle_op(char *msg, defw_rc_t status, char *uuid, python_callbacks_t cb)
 	PyObject *py_handler, *defw, *pystatus, *pymsg, *pyuuid,
 		 *str, *args = NULL, *result;
 	char *func = python_callback_str[cb];
+	char log_prefix[MAX_STR_LEN * 2];
 
 	if (!g_defw_cfg.initialized)
 		return EN_DEFW_RC_PY_SCRIPT_FAIL;
 
-	if (msg && uuid)
-		PMSG("Handling %s from %s\n%s", func, uuid, msg);
+	if (msg && uuid) {
+		snprintf(log_prefix, sizeof(log_prefix), "Handling %s from %s\n",
+			 func, uuid);
+		PMSG_PAYLOAD(log_prefix, msg);
+	}
 
 	gstate = python_gil_ensure();
 
