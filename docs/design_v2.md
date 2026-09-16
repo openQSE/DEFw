@@ -1178,7 +1178,10 @@ The QFw-SLURM-Cluster image builds libfabric from source into
 `/opt/qfw/libfabric`. v2 adds the Mochi stack the same way into
 `/opt/qfw/mochi`, pinned to the versions in Appendix B, with Mercury
 configured for the OFI and shared-memory plugins and the bundled Boost
-preprocessor headers. Sites with Spack use the `mochi-margo` package instead.
+preprocessor headers. Mercury's `hg_rate`, `hg_bw_read` and `hg_bw_write`
+benchmarks are installed with it, since the success criteria compare against
+them. `module load libfabric mochi` puts the stack on the compiler, pkg-config
+and CMake paths. Sites with Spack use the `mochi-margo` package instead.
 `pkg-config` finds either.
 
 ## Coexistence and Migration
@@ -1337,10 +1340,10 @@ import DEFw infrastructure.
 
 | Component | Pinned version | License | Notes |
 | --- | --- | --- | --- |
-| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. |
+| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. The oldest release that Spack allows with libfabric 2.x. |
 | Margo | 0.24.2 | Argonne open source license | BSD-3-style with a DOE contract notice. |
-| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. |
-| json-c | 0.19 | MIT | Margo dependency. |
+| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. The 1.2 release reports its version as 1.2rc1. |
+| json-c | 0.18, from the distribution | MIT | Margo dependency. Margo accepts any version, and Slurm in the container already links the distribution package. |
 | libfabric | 2.3.1 in the container, 2.6.0 upstream | BSD-2 or GPLv2 at the user's choice | Already a DEFw dependency. BSD is chosen. |
 | tinycbor | current | MIT | Document tier, C side. |
 | cbor2 | current | MIT | Document tier, Python side. |
