@@ -1,0 +1,19 @@
+# CMake build tree. build.sh uses build/ unless DEFW_BUILD_DIR points elsewhere.
+/build/
+
+# Python bytecode from running the runtime straight from the source tree.
+__pycache__/
+*.py[cod]
+
+# Outputs of the in-tree SCons build that CMake replaced in 484abc0. Checkouts
+# from before that commit still carry them. CMake writes its outputs under the
+# build tree instead.
+/.sconsign.dblite
+/src/*.so
+/src/*_wrap.c
+/src/cdefw_agent.py
+/src/cdefw_global.py
+/src/defw_agent.i
+/src/defw_global.i
+/src/defwp
+/src/defwp-wrapper
