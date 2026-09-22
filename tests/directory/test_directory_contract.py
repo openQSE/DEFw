@@ -250,13 +250,15 @@ def main():
 		directory.register_service,
 		missing_bindings,
 	)
-	expect_raises(
-		DEFwError,
-		directory.register_service,
+	passthrough = directory.register_service(
 		make_record(properties={
 			'provider': 'iqm',
-			'credential_store': '/protected/qpu-users.json',
+			'circuit_formats': 'qpy,openqasm2',
 		}),
+	)
+	expect(
+		passthrough['properties']['circuit_formats'] == 'qpy,openqasm2',
+		"directory should carry properties it does not define",
 	)
 	record = directory.register_service(make_record())
 	expect(record['generation'] == 1, "new service generation should start at 1")
