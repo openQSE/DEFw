@@ -46,6 +46,27 @@ static char *read_file(const struct defw2_rt *rt, const char *path)
 }
 
 /*
+ * A server always gets at least one handler execution stream.
+ *
+ * Margo runs handlers in the primary pool when it is asked for no handler
+ * threads, which means a server only serves while its main thread is donated
+ * to Margo. v2 cannot promise that thread: a Python service holds it, and so
+ * does anything embedding the runtime. So this is a rule rather than a
+ * setting, the same way the progress loop always gets its own stream.
+ */
+static int handler_threads(const struct defw2_rt *rt,
+			   const defw2_config_t *cfg)
+{
+	if (cfg->role != DEFW2_ROLE_SERVER || cfg->rpc_thread_count >= 1)
+		return cfg->rpc_thread_count;
+
+	defw2_log(rt, DEFW2_LOG_DEBUG,
+		  "a server needs handler streams, raising %d to %d",
+		  cfg->rpc_thread_count, DEFW2_DEFAULT_RPC_THREADS);
+	return DEFW2_DEFAULT_RPC_THREADS;
+}
+
+/*
  * The built-in configuration. A deployment that needs more than this, such
  * as pinned execution streams, supplies its own through DEFW2_MARGO_CONFIG.
  */
@@ -64,7 +85,7 @@ static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg)
 		 "\"rpc_thread_count\":%d,"
 		 "\"enable_profiling\":%s,"
 		 "\"enable_diagnostics\":%s}",
-		 cfg->rpc_thread_count,
+		 handler_threads(rt, cfg),
 		 cfg->profile ? "true" : "false",
 		 cfg->profile ? "true" : "false");
 	return json;
@@ -134,6 +155,7 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 	if (rt == NULL)
 		return DEFW2_ERR_NOMEM;
 	pthread_mutex_init(&rt->log_lock, NULL);
+	pthread_mutex_init(&rt->rpc_lock, NULL);
 	rt->role = cfg->role;
 	rt->log_level = cfg->log_level;
 	rt->profile = cfg->profile;
@@ -187,9 +209,26 @@ fail_margo:
 fail:
 	free(rt->address);
 	defw2_log_close(rt);
+	pthread_mutex_destroy(&rt->rpc_lock);
 	pthread_mutex_destroy(&rt->log_lock);
 	free(rt);
 	return rc;
+}
+
+/*
+ * margo_finalize waits for handlers that are already running and must not
+ * run twice, so the first caller wins and the rest return.
+ */
+void defw2_runtime_stop(struct defw2_rt *rt)
+{
+	int idle = 0;
+
+	if (rt == NULL || rt->mid == MARGO_INSTANCE_NULL)
+		return;
+	if (!__atomic_compare_exchange_n(&rt->stopping, &idle, 1, false,
+					 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+		return;
+	margo_finalize(rt->mid);
 }
 
 void defw2_finalize(defw2_rt_t *rt)
@@ -199,11 +238,11 @@ void defw2_finalize(defw2_rt_t *rt)
 
 	defw2_log(rt, DEFW2_LOG_MESSAGE, "defw2 down, runtime %s",
 		  rt->runtime_id);
-	if (rt->mid != MARGO_INSTANCE_NULL)
-		margo_finalize(rt->mid);
+	defw2_runtime_stop(rt);
 	free(rt->address);
 	free(rt->dirsvc);
 	defw2_log_close(rt);
+	pthread_mutex_destroy(&rt->rpc_lock);
 	pthread_mutex_destroy(&rt->log_lock);
 	free(rt);
 }

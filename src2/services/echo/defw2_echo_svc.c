@@ -1,0 +1,263 @@
+/*
+ * The qfw.echo service.
+ *
+ * Echo is the reference service and the benchmarks' subject. Its own work is
+ * nothing, so what W1, W2 and W3 measure is the framework: decode, dispatch,
+ * the bulk path and encode. The handlers are also the worked example of what
+ * a typed handler looks like, which is why they check the header version and
+ * the payload bounds before they touch anything.
+ */
+#include <stdlib.h>
+#include <string.h>
+
+#include <defw2/defw2_echo.h>
+
+#include "defw2_host.h"
+#include "defw2_wire.h"
+
+struct defw2_echo_binding {
+	defw2_service_t		*svc;
+	defw2_echo_ops_t	ops;
+};
+
+static struct defw2_echo_binding *bound_for(hg_handle_t handle,
+					    margo_instance_id mid)
+{
+	const struct hg_info *info = margo_get_info(handle);
+
+	if (info == NULL)
+		return NULL;
+	return (struct defw2_echo_binding *)margo_registered_data(mid,
+								  info->id);
+}
+
+static void defw2_echo_ult(hg_handle_t handle)
+{
+	margo_instance_id mid = margo_hg_handle_get_instance(handle);
+	struct defw2_echo_binding *bound = bound_for(handle, mid);
+	void *reply = NULL;
+	size_t reply_len = 0;
+	defw2_echo_in_t in;
+	defw2_echo_out_t out;
+	hg_return_t hret;
+
+	memset(&out, 0, sizeof(out));
+	defw2_wire_status_ok(&out.status);
+
+	hret = margo_get_input(handle, &in);
+	if (hret != HG_SUCCESS) {
+		/* Nothing decoded, so a status is the whole answer. */
+		defw2_wire_status_set(&out.status, DEFW2_ERR_INVALID,
+				      DEFW2_CAT_INVALID_ARGUMENT,
+				      "cannot decode request");
+		margo_respond(handle, &out);
+		margo_destroy(handle);
+		return;
+	}
+
+	if (bound == NULL) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_NOT_FOUND,
+				      DEFW2_CAT_NOT_FOUND,
+				      "no echo service on this provider");
+	} else if (!defw2_hdr_compatible(&in.hdr)) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_VERSION,
+				      DEFW2_CAT_VERSION_MISMATCH,
+				      "unsupported api version");
+	} else if (bound->ops.echo != NULL) {
+		defw2_rc_t rc = bound->ops.echo(bound->ops.ctx,
+						in.payload.data,
+						in.payload.len, &reply,
+						&reply_len);
+
+		/* A reply too large to carry is the service's mistake, so
+		 * it is reported as one rather than truncated. */
+		if (rc == DEFW2_OK && reply_len > DEFW2_EAGER_MAX)
+			rc = DEFW2_ERR_INVALID;
+		if (rc != DEFW2_OK) {
+			free(reply);
+			reply = NULL;
+			defw2_wire_status_set(&out.status, rc,
+					      DEFW2_CAT_PROVIDER_FAILURE,
+					      defw2_strerror(rc));
+		} else {
+			out.payload.data = (char *)reply;
+			out.payload.len = reply_len;
+		}
+	} else {
+		/*
+		 * The built-in echo answers out of Mercury's own decode
+		 * buffer, so the reference service copies nothing.
+		 */
+		out.payload.data = in.payload.data;
+		out.payload.len = in.payload.len;
+	}
+
+	hret = margo_respond(handle, &out);
+	if (hret != HG_SUCCESS && bound != NULL)
+		defw2_log(bound->svc->rt, DEFW2_LOG_ERROR, "echo respond: %s",
+			  HG_Error_to_string(hret));
+
+	free(reply);
+	margo_free_input(handle, &in);
+	margo_destroy(handle);
+}
+DEFINE_MARGO_RPC_HANDLER(defw2_echo_ult)
+
+static void defw2_echo_bulk_ult(hg_handle_t handle)
+{
+	margo_instance_id mid = margo_hg_handle_get_instance(handle);
+	struct defw2_echo_binding *bound = bound_for(handle, mid);
+	const struct hg_info *info = margo_get_info(handle);
+	hg_bulk_t local = HG_BULK_NULL;
+	void *buffer = NULL;
+	defw2_echo_bulk_in_t in;
+	defw2_echo_bulk_out_t out;
+	hg_return_t hret;
+	hg_size_t size;
+
+	memset(&out, 0, sizeof(out));
+	defw2_wire_status_ok(&out.status);
+
+	hret = margo_get_input(handle, &in);
+	if (hret != HG_SUCCESS) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_INVALID,
+				      DEFW2_CAT_INVALID_ARGUMENT,
+				      "cannot decode request");
+		margo_respond(handle, &out);
+		margo_destroy(handle);
+		return;
+	}
+
+	if (bound == NULL) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_NOT_FOUND,
+				      DEFW2_CAT_NOT_FOUND,
+				      "no echo service on this provider");
+		goto respond;
+	}
+	if (!defw2_hdr_compatible(&in.hdr)) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_VERSION,
+				      DEFW2_CAT_VERSION_MISMATCH,
+				      "unsupported api version");
+		goto respond;
+	}
+	/*
+	 * The caller names the size, so the handler is what stands between a
+	 * wrong number and an allocation the size of the machine.
+	 */
+	if (in.nbytes == 0 || in.nbytes > DEFW2_BULK_MAX ||
+	    in.source == HG_BULK_NULL || in.sink == HG_BULK_NULL) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_INVALID,
+				      DEFW2_CAT_INVALID_ARGUMENT,
+				      "bulk size or handle out of range");
+		goto respond;
+	}
+
+	size = in.nbytes;
+	buffer = malloc(size);
+	if (buffer == NULL) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_NOMEM,
+				      DEFW2_CAT_PROVIDER_FAILURE,
+				      "no memory for the bulk buffer");
+		goto respond;
+	}
+	hret = margo_bulk_create(mid, 1, &buffer, &size, HG_BULK_READWRITE,
+				 &local);
+	if (hret != HG_SUCCESS) {
+		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
+				      DEFW2_CAT_TRANSPORT,
+				      "cannot register the bulk buffer");
+		goto respond;
+	}
+
+	hret = margo_bulk_transfer(mid, HG_BULK_PULL, info->addr, in.source, 0,
+				   local, 0, size);
+	if (hret != HG_SUCCESS) {
+		defw2_wire_status_set(&out.status,
+				      defw2_rc_from_hg(hret, NULL),
+				      DEFW2_CAT_TRANSPORT, "bulk pull failed");
+		goto respond;
+	}
+	out.pulled = size;
+
+	if (bound->ops.transform != NULL) {
+		defw2_rc_t rc = bound->ops.transform(bound->ops.ctx, buffer,
+						     size);
+
+		if (rc != DEFW2_OK) {
+			defw2_wire_status_set(&out.status, rc,
+					      DEFW2_CAT_PROVIDER_FAILURE,
+					      defw2_strerror(rc));
+			goto respond;
+		}
+	}
+
+	hret = margo_bulk_transfer(mid, HG_BULK_PUSH, info->addr, in.sink, 0,
+				   local, 0, size);
+	if (hret != HG_SUCCESS) {
+		defw2_wire_status_set(&out.status,
+				      defw2_rc_from_hg(hret, NULL),
+				      DEFW2_CAT_TRANSPORT, "bulk push failed");
+		goto respond;
+	}
+	out.pushed = size;
+
+respond:
+	hret = margo_respond(handle, &out);
+	if (hret != HG_SUCCESS && bound != NULL)
+		defw2_log(bound->svc->rt, DEFW2_LOG_ERROR,
+			  "echo_bulk respond: %s", HG_Error_to_string(hret));
+
+	if (local != HG_BULK_NULL)
+		margo_bulk_free(local);
+	free(buffer);
+	margo_free_input(handle, &in);
+	margo_destroy(handle);
+}
+DEFINE_MARGO_RPC_HANDLER(defw2_echo_bulk_ult)
+
+defw2_rc_t defw2_echo_bind(defw2_service_t *svc, const defw2_echo_ops_t *ops)
+{
+	struct defw2_echo_binding *bound;
+	hg_id_t bulk_id;
+	hg_id_t id;
+
+	if (svc == NULL)
+		return DEFW2_ERR_INVALID;
+
+	bound = calloc(1, sizeof(*bound));
+	if (bound == NULL)
+		return DEFW2_ERR_NOMEM;
+	bound->svc = svc;
+	if (ops != NULL)
+		bound->ops = *ops;
+
+	id = MARGO_REGISTER_PROVIDER(svc->rt->mid, DEFW2_RPC_ECHO,
+				     defw2_echo_in_t, defw2_echo_out_t,
+				     defw2_echo_ult, svc->provider_id,
+				     ABT_POOL_NULL);
+	bulk_id = MARGO_REGISTER_PROVIDER(svc->rt->mid, DEFW2_RPC_ECHO_BULK,
+					  defw2_echo_bulk_in_t,
+					  defw2_echo_bulk_out_t,
+					  defw2_echo_bulk_ult,
+					  svc->provider_id, ABT_POOL_NULL);
+	if (id == 0 || bulk_id == 0) {
+		defw2_log(svc->rt, DEFW2_LOG_ERROR,
+			  "cannot register %s on provider %u", DEFW2_API_ECHO,
+			  svc->provider_id);
+		free(bound);
+		return DEFW2_ERR_INTERNAL;
+	}
+
+	/*
+	 * One owner for the operations table. Margo releases it when the
+	 * runtime finalizes, which is why the second registration attaches
+	 * the same pointer with no free callback, and why destroying the
+	 * service while a call is in flight is safe.
+	 */
+	margo_register_data(svc->rt->mid, id, bound, free);
+	margo_register_data(svc->rt->mid, bulk_id, bound, NULL);
+
+	defw2_log(svc->rt, DEFW2_LOG_MESSAGE, "%s bound on provider %u of %s",
+		  DEFW2_API_ECHO, svc->provider_id, svc->service_id);
+	return DEFW2_OK;
+}

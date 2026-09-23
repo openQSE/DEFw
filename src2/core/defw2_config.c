@@ -11,9 +11,6 @@
 
 #include "defw2_internal.h"
 
-#define DEFW2_DEFAULT_ADDRESS		"ofi+tcp://"
-#define DEFW2_DEFAULT_RPC_THREADS	2
-
 /*
  * Composed strings live here rather than in the caller's struct, so that a
  * config stays a set of pointers. defw2_config_from_env is a startup call
