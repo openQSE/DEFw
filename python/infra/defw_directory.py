@@ -11,7 +11,6 @@ STATE_DOWN = 'DOWN'
 STATE_TIMED_OUT = 'TIMED_OUT'
 STATE_DEREGISTERED = 'DEREGISTERED'
 DEFAULT_RETENTION_SECONDS = 300
-QPM_SERVICE_TYPE = 'qfw.qpm'
 SERVICE_CONNECTED = 'SERVICE_CONNECTED'
 SERVICE_DISCONNECTED = 'SERVICE_DISCONNECTED'
 SERVICE_EVENT_TYPES = frozenset({
@@ -21,21 +20,6 @@ SERVICE_EVENT_TYPES = frozenset({
 SERVICE_EVENT_FILTERS = frozenset({
 	'service_id',
 	'service_type',
-})
-QPM_CATALOG_PROPERTIES = frozenset({
-	'backend',
-	'controller_target_id',
-	'device_id',
-	'hardware',
-	'max_shots',
-	'num_qubits',
-	'provider',
-	'qpm_capabilities',
-	'qpm_type',
-	'service_id',
-	'service_type',
-	'simulator',
-	'target_id',
 })
 
 
@@ -56,18 +40,6 @@ def _normalize_bindings(record):
 	if not bindings:
 		raise DEFwError("Directory registration missing api_bindings")
 	return [dict(binding) for binding in bindings]
-
-
-def _catalog_properties(record):
-	properties = dict(record.get('properties') or {})
-	if record.get('service_type') != QPM_SERVICE_TYPE:
-		return properties
-	unsupported = sorted(set(properties) - QPM_CATALOG_PROPERTIES)
-	if unsupported:
-		raise DEFwError(
-			"QPM directory registration contains non-catalog properties: "
-			f"{', '.join(unsupported)}")
-	return properties
 
 
 def _record_value(record, *names):
@@ -202,7 +174,7 @@ class Directory:
 					else:
 						generation = 1
 
-				properties = _catalog_properties(record)
+				properties = dict(record.get('properties') or {})
 				qpm_type = _record_value(record, 'qpm_type')
 				qpm_capabilities = _record_value(
 					record, 'qpm_capabilities')
