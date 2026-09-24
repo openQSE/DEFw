@@ -18,6 +18,8 @@ add_library(defw2 SHARED
 	rpc/defw2_wire.c
 	rpc/defw2_binding.c
 	rpc/defw2_echo_client.c
+	telemetry/defw2_otlp.c
+	telemetry/defw2_trace.c
 	host/defw2_service.c
 	services/echo/defw2_echo_svc.c)
 
@@ -28,6 +30,7 @@ target_include_directories(defw2
 	PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/core
 		${CMAKE_CURRENT_SOURCE_DIR}/rpc
+		${CMAKE_CURRENT_SOURCE_DIR}/telemetry
 		${CMAKE_CURRENT_SOURCE_DIR}/host)
 
 target_compile_options(defw2
@@ -73,9 +76,36 @@ if(BUILD_TESTING)
 	target_link_libraries(defw2_echo_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_echo_smoke COMMAND defw2_echo_smoke)
 
+	# The telemetry test leaves its files behind for the checker below.
+	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")
+	file(MAKE_DIRECTORY "${DEFW2_TELEMETRY_DIR}")
+	add_executable(defw2_telemetry_smoke tests/defw2_telemetry_smoke.c)
+	target_link_libraries(defw2_telemetry_smoke PRIVATE defw2)
+	add_test(NAME defw2_telemetry_smoke
+		COMMAND defw2_telemetry_smoke "${DEFW2_TELEMETRY_DIR}")
+	set_tests_properties(defw2_telemetry_smoke
+		PROPERTIES
+			FIXTURES_SETUP defw2_otlp_files)
+
 	# Shared memory needs no network and no port, so the tests say
 	# nothing about the machine they run on.
 	set_tests_properties(defw2_runtime_smoke defw2_echo_smoke
+			     defw2_telemetry_smoke
 		PROPERTIES
 			ENVIRONMENT "DEFW2_ADDRESS=na+sm://")
+
+	# The C test counts what it reads. This one parses it the way the
+	# report tooling will, which is the check that matters.
+	find_package(Python3 QUIET COMPONENTS Interpreter)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME defw2_otlp_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_otlp_check.py"
+				"${DEFW2_TELEMETRY_DIR}")
+		set_tests_properties(defw2_otlp_check
+			PROPERTIES
+				FIXTURES_REQUIRED defw2_otlp_files)
+	else()
+		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
+	endif()
 endif()

@@ -1,15 +1,16 @@
 /*
  * The qfw.echo client stubs.
  *
- * These are what every typed stub will look like: fill the header, create a
- * handle on the binding's address, forward with a timeout, copy the output
- * out of Mercury's buffers and free them. The one place a profiling span
- * will be taken is around the forward.
+ * These are what every typed stub will look like: start the span, fill the
+ * header, create a handle on the binding's address, forward with a timeout,
+ * copy the output out of Mercury's buffers and free them. The span is one
+ * boolean test when profiling is off.
  */
 #include <stdint.h>
 
 #include <defw2/defw2_echo.h>
 
+#include "defw2_trace.h"
 #include "defw2_wire.h"
 
 static hg_id_t echo_id(struct defw2_rt *rt)
@@ -41,8 +42,11 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 {
 	defw2_echo_in_t in;
 	defw2_echo_out_t out;
+	struct defw2_trace trace;
 	hg_handle_t handle = HG_HANDLE_NULL;
+	uint32_t category = DEFW2_CAT_OK;
 	struct defw2_rt *rt;
+	int32_t code = 0;
 	hg_return_t hret;
 	defw2_rc_t rc;
 
@@ -59,7 +63,11 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	if (hret != HG_SUCCESS)
 		return defw2_rc_from_hg(hret, NULL);
 
-	defw2_hdr_fill(rt, &in.hdr, trace_of(opts));
+	defw2_trace_begin(rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
+	/* The service's span becomes a child of this one, which is what the
+	 * traceparent this call carries is for. */
+	defw2_hdr_fill(rt, &in.hdr,
+		       trace.recording ? trace.traceparent : trace_of(opts));
 	in.payload.len = len;
 	/* The encoder only reads the payload, so a caller's const buffer is
 	 * safe to hand to Mercury. */
@@ -68,7 +76,8 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	hret = margo_provider_forward_timed(binding->provider_id, handle, &in,
 					    timeout_of(opts));
 	if (hret != HG_SUCCESS) {
-		rc = defw2_rc_from_hg(hret, NULL);
+		rc = defw2_rc_from_hg(hret, &category);
+		code = rc;
 		defw2_log(rt, DEFW2_LOG_ERROR, "echo to %s: %s",
 			  binding->address, HG_Error_to_string(hret));
 		goto out;
@@ -76,10 +85,13 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
-		rc = defw2_rc_from_hg(hret, NULL);
+		rc = defw2_rc_from_hg(hret, &category);
+		code = rc;
 		goto out;
 	}
 
+	category = out.status.category;
+	code = out.status.code;
 	defw2_status_from_wire(status, &out.status);
 	if (out.payload.len > 0) {
 		reply->data = malloc(out.payload.len);
@@ -94,6 +106,16 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	margo_free_output(handle, &out);
 	rc = DEFW2_OK;
 out:
+	if (trace.recording) {
+		trace.span.api = DEFW2_API_ECHO;
+		trace.span.method = "echo";
+		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.request_bytes = len;
+		trace.span.response_bytes = reply->len;
+		trace.span.category = category;
+		trace.span.code = code;
+		defw2_trace_end(rt, &trace);
+	}
 	margo_destroy(handle);
 	return rc;
 }
@@ -105,12 +127,16 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 {
 	defw2_echo_bulk_in_t in;
 	defw2_echo_bulk_out_t out;
+	struct defw2_trace trace = { 0 };
 	hg_handle_t handle = HG_HANDLE_NULL;
 	hg_bulk_t source_bulk = HG_BULK_NULL;
 	hg_bulk_t sink_bulk = HG_BULK_NULL;
 	bool shared = (source == sink);
+	uint32_t category = DEFW2_CAT_OK;
+	uint64_t moved = 0;
 	struct defw2_rt *rt;
 	hg_size_t size = len;
+	int32_t code = 0;
 	hg_return_t hret;
 	defw2_rc_t rc;
 	void *buffer;
@@ -148,11 +174,14 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 
 	hret = margo_create(rt->mid, binding->addr, echo_bulk_id(rt), &handle);
 	if (hret != HG_SUCCESS) {
-		rc = defw2_rc_from_hg(hret, NULL);
+		rc = defw2_rc_from_hg(hret, &category);
+		code = rc;
 		goto out;
 	}
 
-	defw2_hdr_fill(rt, &in.hdr, trace_of(opts));
+	defw2_trace_begin(rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
+	defw2_hdr_fill(rt, &in.hdr,
+		       trace.recording ? trace.traceparent : trace_of(opts));
 	in.nbytes = len;
 	in.source = source_bulk;
 	in.sink = sink_bulk;
@@ -160,7 +189,8 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 	hret = margo_provider_forward_timed(binding->provider_id, handle, &in,
 					    timeout_of(opts));
 	if (hret != HG_SUCCESS) {
-		rc = defw2_rc_from_hg(hret, NULL);
+		rc = defw2_rc_from_hg(hret, &category);
+		code = rc;
 		defw2_log(rt, DEFW2_LOG_ERROR, "echo_bulk to %s: %s",
 			  binding->address, HG_Error_to_string(hret));
 		goto out;
@@ -168,15 +198,28 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
-		rc = defw2_rc_from_hg(hret, NULL);
+		rc = defw2_rc_from_hg(hret, &category);
+		code = rc;
 		goto out;
 	}
+	category = out.status.category;
+	code = out.status.code;
+	moved = out.pulled + out.pushed;
 	defw2_status_from_wire(status, &out.status);
 	if (bytes_moved != NULL)
-		*bytes_moved = out.pulled + out.pushed;
+		*bytes_moved = moved;
 	margo_free_output(handle, &out);
 	rc = DEFW2_OK;
 out:
+	if (trace.recording) {
+		trace.span.api = DEFW2_API_ECHO;
+		trace.span.method = "echo_bulk";
+		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.bulk_bytes = moved;
+		trace.span.category = category;
+		trace.span.code = code;
+		defw2_trace_end(rt, &trace);
+	}
 	if (handle != HG_HANDLE_NULL)
 		margo_destroy(handle);
 	if (!shared)

@@ -16,6 +16,7 @@
 #include <uuid/uuid.h>
 
 #include "defw2_internal.h"
+#include "defw2_trace.h"
 
 #define DEFW2_JSON_MAX	4096
 
@@ -70,7 +71,8 @@ static int handler_threads(const struct defw2_rt *rt,
  * The built-in configuration. A deployment that needs more than this, such
  * as pinned execution streams, supplies its own through DEFW2_MARGO_CONFIG.
  */
-static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg)
+static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg,
+			const char *dir)
 {
 	char *json;
 
@@ -80,14 +82,26 @@ static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg)
 	json = malloc(DEFW2_JSON_MAX);
 	if (json == NULL)
 		return NULL;
-	snprintf(json, DEFW2_JSON_MAX,
-		 "{\"use_progress_thread\":true,"
-		 "\"rpc_thread_count\":%d,"
-		 "\"enable_profiling\":%s,"
-		 "\"enable_diagnostics\":%s}",
-		 handler_threads(rt, cfg),
-		 cfg->profile ? "true" : "false",
-		 cfg->profile ? "true" : "false");
+	/*
+	 * Margo's own view of every RPC comes from its monitor, which writes
+	 * its statistics beside our spans. Margo 0.24 replaced the
+	 * breadcrumb profiler the design's telemetry table names, so
+	 * enable_profiling alone produces nothing.
+	 */
+	if (cfg->profile && dir != NULL)
+		snprintf(json, DEFW2_JSON_MAX,
+			 "{\"use_progress_thread\":true,"
+			 "\"rpc_thread_count\":%d,"
+			 "\"monitoring\":{\"config\":"
+			 "{\"filename_prefix\":\"%.300s/margo-%.150s\","
+			 "\"enable_statistics\":true,"
+			 "\"pretty_json\":true}}}",
+			 handler_threads(rt, cfg), dir, rt->node_name);
+	else
+		snprintf(json, DEFW2_JSON_MAX,
+			 "{\"use_progress_thread\":true,"
+			 "\"rpc_thread_count\":%d}",
+			 handler_threads(rt, cfg));
 	return json;
 }
 
@@ -162,12 +176,14 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 	defw2_log_open(rt, cfg->log_dir);
 	record_identity(rt, cfg);
 
-	json = margo_json(rt, cfg);
+	json = margo_json(rt, cfg, defw2_telemetry_dir(cfg));
 	if (json == NULL) {
 		rc = cfg->margo_config ? DEFW2_ERR_CONFIG : DEFW2_ERR_NOMEM;
 		goto fail;
 	}
 	args.json_config = json;
+	if (cfg->profile)
+		args.monitor = margo_default_monitor;
 
 	/* Server mode listens, which is what a process serving RPCs or
 	 * receiving events needs. A pure client does not. */
@@ -197,6 +213,10 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 		}
 	}
 
+	rc = defw2_telemetry_open(rt, cfg);
+	if (rc != DEFW2_OK)
+		goto fail_margo;
+
 	defw2_log(rt, DEFW2_LOG_MESSAGE,
 		  "defw2 %s up as %s at %s, runtime %s, role %s",
 		  defw2_version(), rt->node_name, rt->address, rt->runtime_id,
@@ -205,6 +225,7 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 	return DEFW2_OK;
 
 fail_margo:
+	defw2_telemetry_close(rt);
 	margo_finalize(rt->mid);
 fail:
 	free(rt->address);
@@ -238,6 +259,9 @@ void defw2_finalize(defw2_rt_t *rt)
 
 	defw2_log(rt, DEFW2_LOG_MESSAGE, "defw2 down, runtime %s",
 		  rt->runtime_id);
+	/* Written before the network goes away, so a run that then hangs in
+	 * margo_finalize still leaves its measurements behind. */
+	defw2_telemetry_close(rt);
 	defw2_runtime_stop(rt);
 	free(rt->address);
 	free(rt->dirsvc);

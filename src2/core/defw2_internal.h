@@ -32,6 +32,8 @@ struct defw2_rpc_entry {
 	hg_id_t		id;
 };
 
+struct defw2_telemetry;
+
 struct defw2_rt {
 	margo_instance_id	mid;
 	char			runtime_id[DEFW2_UUID_STR_LEN];
@@ -56,6 +58,7 @@ struct defw2_rt {
 	struct defw2_rpc_entry	rpc_cache[DEFW2_RPC_CACHE_MAX];
 	int			rpc_cached;
 	pthread_mutex_t		rpc_lock;
+	struct defw2_telemetry	*telemetry;	/* NULL when nothing records */
 };
 
 /*
@@ -64,6 +67,9 @@ struct defw2_rt {
  * here, so neither has to know whether the other ran first.
  */
 void defw2_runtime_stop(struct defw2_rt *rt);
+
+/* The wall clock, which is what a cross-process timestamp has to use. */
+uint64_t defw2_wall_ns(void);
 
 defw2_rc_t defw2_log_open(struct defw2_rt *rt, const char *log_dir);
 void defw2_log_close(struct defw2_rt *rt);

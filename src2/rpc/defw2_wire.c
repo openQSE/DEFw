@@ -2,8 +2,6 @@
  * The pieces of the wire that are not generated: header, status and the
  * mapping from Mercury's outcomes onto DEFw's.
  */
-#include <time.h>
-
 #include "defw2_wire.h"
 
 void defw2_hdr_fill(struct defw2_rt *rt, defw2_hdr_t *hdr,
@@ -89,15 +87,6 @@ defw2_rc_t defw2_rc_from_hg(hg_return_t hret, uint32_t *category)
 	if (category != NULL)
 		*category = cat;
 	return rc;
-}
-
-uint64_t defw2_wall_ns(void)
-{
-	struct timespec now;
-
-	if (clock_gettime(CLOCK_REALTIME, &now) != 0)
-		return 0;
-	return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
 }
 
 hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,

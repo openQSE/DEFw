@@ -152,9 +152,6 @@ void defw2_wire_status_set(defw2_wire_status_t *wire, defw2_rc_t code,
 /* Map a Mercury outcome onto a DEFw code, and onto a category when asked. */
 defw2_rc_t defw2_rc_from_hg(hg_return_t hret, uint32_t *category);
 
-/* The wall clock, which is what a cross-process timestamp has to use. */
-uint64_t defw2_wall_ns(void);
-
 /*
  * The identifier this runtime calls an RPC by, registering it the first time
  * it is asked for. Mercury cannot look a registration up by name once Margo

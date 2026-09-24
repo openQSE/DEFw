@@ -13,6 +13,7 @@
 #include <defw2/defw2_echo.h>
 
 #include "defw2_host.h"
+#include "defw2_trace.h"
 #include "defw2_wire.h"
 
 struct defw2_echo_binding {
@@ -35,12 +36,19 @@ static void defw2_echo_ult(hg_handle_t handle)
 {
 	margo_instance_id mid = margo_hg_handle_get_instance(handle);
 	struct defw2_echo_binding *bound = bound_for(handle, mid);
+	struct defw2_rt *rt = bound ? bound->svc->rt : NULL;
+	uint64_t arrived_wall = 0, arrived_mono = 0, mark = 0;
+	struct defw2_trace trace = { 0 };
 	void *reply = NULL;
 	size_t reply_len = 0;
 	defw2_echo_in_t in;
 	defw2_echo_out_t out;
 	hg_return_t hret;
 
+	if (defw2_profiling(rt)) {
+		arrived_wall = defw2_wall_ns();
+		arrived_mono = defw2_mono_ns();
+	}
 	memset(&out, 0, sizeof(out));
 	defw2_wire_status_ok(&out.status);
 
@@ -53,6 +61,19 @@ static void defw2_echo_ult(hg_handle_t handle)
 		margo_respond(handle, &out);
 		margo_destroy(handle);
 		return;
+	}
+
+	/*
+	 * The span joins the caller's trace, and starts where the work did
+	 * rather than where the traceparent could first be read.
+	 */
+	if (arrived_mono != 0) {
+		defw2_trace_begin(rt, &trace, DEFW2_SPAN_SERVER,
+				  in.hdr.traceparent);
+		defw2_trace_backdate(&trace, arrived_wall, arrived_mono);
+		mark = defw2_mono_ns();
+		trace.span.decode_ns = mark - arrived_mono;
+		trace.span.request_bytes = in.payload.len;
 	}
 
 	if (bound == NULL) {
@@ -92,10 +113,26 @@ static void defw2_echo_ult(hg_handle_t handle)
 		out.payload.len = in.payload.len;
 	}
 
+	if (trace.recording) {
+		trace.span.handler_ns = defw2_mono_ns() - mark;
+		mark = defw2_mono_ns();
+	}
+
 	hret = margo_respond(handle, &out);
-	if (hret != HG_SUCCESS && bound != NULL)
-		defw2_log(bound->svc->rt, DEFW2_LOG_ERROR, "echo respond: %s",
+	if (hret != HG_SUCCESS && rt != NULL)
+		defw2_log(rt, DEFW2_LOG_ERROR, "echo respond: %s",
 			  HG_Error_to_string(hret));
+
+	if (trace.recording) {
+		trace.span.encode_ns = defw2_mono_ns() - mark;
+		trace.span.response_bytes = out.payload.len;
+		trace.span.api = DEFW2_API_ECHO;
+		trace.span.method = "echo";
+		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.category = out.status.category;
+		trace.span.code = out.status.code;
+		defw2_trace_end(rt, &trace);
+	}
 
 	free(reply);
 	margo_free_input(handle, &in);
@@ -108,6 +145,9 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 	margo_instance_id mid = margo_hg_handle_get_instance(handle);
 	struct defw2_echo_binding *bound = bound_for(handle, mid);
 	const struct hg_info *info = margo_get_info(handle);
+	struct defw2_rt *rt = bound ? bound->svc->rt : NULL;
+	uint64_t arrived_wall = 0, arrived_mono = 0, mark = 0;
+	struct defw2_trace trace = { 0 };
 	hg_bulk_t local = HG_BULK_NULL;
 	void *buffer = NULL;
 	defw2_echo_bulk_in_t in;
@@ -115,6 +155,10 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 	hg_return_t hret;
 	hg_size_t size;
 
+	if (defw2_profiling(rt)) {
+		arrived_wall = defw2_wall_ns();
+		arrived_mono = defw2_mono_ns();
+	}
 	memset(&out, 0, sizeof(out));
 	defw2_wire_status_ok(&out.status);
 
@@ -126,6 +170,14 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 		margo_respond(handle, &out);
 		margo_destroy(handle);
 		return;
+	}
+
+	if (arrived_mono != 0) {
+		defw2_trace_begin(rt, &trace, DEFW2_SPAN_SERVER,
+				  in.hdr.traceparent);
+		defw2_trace_backdate(&trace, arrived_wall, arrived_mono);
+		mark = defw2_mono_ns();
+		trace.span.decode_ns = mark - arrived_mono;
 	}
 
 	if (bound == NULL) {
@@ -202,10 +254,27 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 	out.pushed = size;
 
 respond:
+	if (trace.recording) {
+		/* Pull, transform and push are the handler's work here. */
+		trace.span.handler_ns = defw2_mono_ns() - mark;
+		mark = defw2_mono_ns();
+	}
+
 	hret = margo_respond(handle, &out);
-	if (hret != HG_SUCCESS && bound != NULL)
-		defw2_log(bound->svc->rt, DEFW2_LOG_ERROR,
+	if (hret != HG_SUCCESS && rt != NULL)
+		defw2_log(rt, DEFW2_LOG_ERROR,
 			  "echo_bulk respond: %s", HG_Error_to_string(hret));
+
+	if (trace.recording) {
+		trace.span.encode_ns = defw2_mono_ns() - mark;
+		trace.span.bulk_bytes = out.pulled + out.pushed;
+		trace.span.api = DEFW2_API_ECHO;
+		trace.span.method = "echo_bulk";
+		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.category = out.status.category;
+		trace.span.code = out.status.code;
+		defw2_trace_end(rt, &trace);
+	}
 
 	if (local != HG_BULK_NULL)
 		margo_bulk_free(local);
