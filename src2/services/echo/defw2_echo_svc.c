@@ -3,7 +3,10 @@
  *
  * Echo is the reference service and the benchmarks' subject. Its own work is
  * nothing, so what W1, W2 and W3 measure is the framework: decode, dispatch,
- * the bulk path and encode. The handlers are also the worked example of what
+ * the bulk path and encode. When the service is queued, echo is answered by
+ * whatever language is draining the queue, and echo_bulk stays in C, since
+ * handing a quarter of a gigabyte to an interpreter measures the
+ * interpreter. The handlers are also the worked example of what
  * a typed handler looks like, which is why they check the header version and
  * the payload bounds before they touch anything.
  */
@@ -39,6 +42,8 @@ static void defw2_echo_ult(hg_handle_t handle)
 	struct defw2_rt *rt = bound ? bound->svc->rt : NULL;
 	uint64_t arrived_wall = 0, arrived_mono = 0, mark = 0;
 	struct defw2_trace trace = { 0 };
+	defw2_status_t answer = { 0 };
+	uint64_t waited = 0;
 	void *reply = NULL;
 	size_t reply_len = 0;
 	defw2_echo_in_t in;
@@ -84,6 +89,34 @@ static void defw2_echo_ult(hg_handle_t handle)
 		defw2_wire_status_set(&out.status, DEFW2_ERR_VERSION,
 				      DEFW2_CAT_VERSION_MISMATCH,
 				      "unsupported api version");
+	} else if (defw2_service_queued(bound->svc)) {
+		/*
+		 * A service in another language answers from the queue.
+		 * This ULT parks until it does, which costs a hand-off and
+		 * leaves the execution stream free for other calls.
+		 */
+		defw2_rc_t rc = defw2_service_dispatch(bound->svc,
+						       DEFW2_API_ECHO, "echo",
+						       in.payload.data,
+						       in.payload.len, &reply,
+						       &reply_len, &answer,
+						       &waited);
+
+		if (rc == DEFW2_ERR_TIMEOUT)
+			defw2_wire_status_set(&out.status, rc,
+					      DEFW2_CAT_PENDING_CAPACITY,
+					      "the service is at capacity");
+		else if (rc != DEFW2_OK)
+			defw2_wire_status_set(&out.status, rc,
+					      DEFW2_CAT_NOT_FOUND,
+					      "the service is not serving");
+		else if (answer.code != DEFW2_OK)
+			defw2_wire_status_set(&out.status, answer.code,
+					      answer.category, answer.message);
+		else {
+			out.payload.data = (char *)reply;
+			out.payload.len = reply_len;
+		}
 	} else if (bound->ops.echo != NULL) {
 		defw2_rc_t rc = bound->ops.echo(bound->ops.ctx,
 						in.payload.data,
@@ -115,6 +148,12 @@ static void defw2_echo_ult(hg_handle_t handle)
 
 	if (trace.recording) {
 		trace.span.handler_ns = defw2_mono_ns() - mark;
+		/* The wait for a consumer is not the service's own time, so
+		 * the two are reported apart. */
+		if (waited > 0 && waited < trace.span.handler_ns) {
+			trace.span.queue_ns = waited;
+			trace.span.handler_ns -= waited;
+		}
 		mark = defw2_mono_ns();
 	}
 
@@ -135,6 +174,9 @@ static void defw2_echo_ult(hg_handle_t handle)
 	}
 
 	free(reply);
+	/* Freed after the respond, because the status message was borrowed
+	 * for it. */
+	defw2_status_free(&answer);
 	margo_free_input(handle, &in);
 	margo_destroy(handle);
 }

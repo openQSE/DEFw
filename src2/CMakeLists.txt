@@ -67,6 +67,38 @@ install(TARGETS defw2 defw2-echo
 install(DIRECTORY include/defw2
 	DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
+# The Python binding, built when cffi is there to build it. Everything
+# below is skipped without it, so a C-only build needs no Python at all.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+set(DEFW2_PYTHON_DIR "${CMAKE_CURRENT_BINARY_DIR}/python")
+set(DEFW2_HAVE_CFFI FALSE)
+if(Python3_Interpreter_FOUND)
+	execute_process(
+		COMMAND "${Python3_EXECUTABLE}" -c "import cffi"
+		RESULT_VARIABLE DEFW2_CFFI_MISSING
+		OUTPUT_QUIET ERROR_QUIET)
+	if(DEFW2_CFFI_MISSING EQUAL 0)
+		set(DEFW2_HAVE_CFFI TRUE)
+	endif()
+endif()
+
+if(DEFW2_HAVE_CFFI)
+	message(STATUS "DEFw v2: building the Python binding with cffi")
+	add_custom_target(defw2-python ALL
+		COMMAND "${CMAKE_COMMAND}" -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2"
+			"${DEFW2_PYTHON_DIR}/defw2"
+		COMMAND "${Python3_EXECUTABLE}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/cffi_build.py"
+			--include "${CMAKE_CURRENT_SOURCE_DIR}/include"
+			--library "$<TARGET_FILE_DIR:defw2>"
+			--out "${DEFW2_PYTHON_DIR}"
+		DEPENDS defw2
+		COMMENT "Building the defw2 Python binding")
+else()
+	message(STATUS "DEFw v2: no cffi, skipping the Python binding")
+endif()
+
 if(BUILD_TESTING)
 	add_executable(defw2_runtime_smoke tests/defw2_runtime_smoke.c)
 	target_link_libraries(defw2_runtime_smoke PRIVATE defw2)
@@ -75,6 +107,10 @@ if(BUILD_TESTING)
 	add_executable(defw2_echo_smoke tests/defw2_echo_smoke.c)
 	target_link_libraries(defw2_echo_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_echo_smoke COMMAND defw2_echo_smoke)
+
+	add_executable(defw2_queue_smoke tests/defw2_queue_smoke.c)
+	target_link_libraries(defw2_queue_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_queue_smoke COMMAND defw2_queue_smoke)
 
 	# The telemetry test leaves its files behind for the checker below.
 	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")
@@ -90,13 +126,12 @@ if(BUILD_TESTING)
 	# Shared memory needs no network and no port, so the tests say
 	# nothing about the machine they run on.
 	set_tests_properties(defw2_runtime_smoke defw2_echo_smoke
-			     defw2_telemetry_smoke
+			     defw2_queue_smoke defw2_telemetry_smoke
 		PROPERTIES
 			ENVIRONMENT "DEFW2_ADDRESS=na+sm://")
 
 	# The C test counts what it reads. This one parses it the way the
 	# report tooling will, which is the check that matters.
-	find_package(Python3 QUIET COMPONENTS Interpreter)
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME defw2_otlp_check
 			COMMAND "${Python3_EXECUTABLE}"
@@ -107,5 +142,17 @@ if(BUILD_TESTING)
 				FIXTURES_REQUIRED defw2_otlp_files)
 	else()
 		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
+	endif()
+
+	# The binding's own test: a Python service, a Python client, and the
+	# check that a blocking call does not hold the interpreter lock.
+	if(DEFW2_HAVE_CFFI)
+		add_test(NAME defw2_python_smoke
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_python_smoke.py")
+		set_tests_properties(defw2_python_smoke
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
 	endif()
 endif()

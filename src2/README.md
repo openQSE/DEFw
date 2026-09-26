@@ -4,13 +4,14 @@ v2 is built on Mercury and Margo and lives here, beside v1 in `src/`, which
 it does not touch. `docs/design_v2.md` is the design. This directory is the
 prototype that the go or no-go decision is made on.
 
-What exists so far is the runtime core, the typed RPC tier and the
-telemetry: configuration from the environment, `defw2_init` and
-`defw2_finalize`, identity, the status model, the logging sink, bindings and
-typed stubs, the service host, `qfw.echo` as the reference service with its
-eager and bulk methods, and the spans, histograms and process totals the
-comparison reads. The directory client, the document tier, events, the
-Python binding and `defw2-bench` are still to come.
+What exists so far is the runtime core, the typed RPC tier, the telemetry
+and the Python binding: configuration from the environment, `defw2_init`
+and `defw2_finalize`, identity, the status model, the logging sink,
+bindings and typed stubs, the service host with its call queue, `qfw.echo`
+as the reference service with its eager and bulk methods, the spans and
+histograms a comparison reads, and a `defw2` Python package that both
+calls and serves. The benchmarks that use all of it are a separate change.
+The directory client, the document tier and events are still to come.
 
 ## Building
 
@@ -55,8 +56,8 @@ comparison reads is `defw2-bench`, which is separate and still to come.
 | `telemetry/` | Spans, histograms and the OTLP JSON writer |
 | `host/` | The service host: identity, provider registration and the run loop |
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
+| `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
-| `bench/` | The v1 side of the comparison, which runs against DEFw v1 |
 
 ## Calling and serving
 
@@ -140,6 +141,26 @@ and the address sanitizer names it. Filed upstream as
 Margo. `DEFW2_MARGO_MONITOR=1` turns it on for a single-client run where its
 call paths are worth having. Our own spans cover the same ground and are on
 by default, so nothing else is lost.
+
+## Serving from another language
+
+A service that must not run on a Margo thread is served from the host's
+call queue. The C handler decodes the request, puts it on the queue and
+parks on an Argobots eventual; a thread the runtime knows nothing about
+takes the call, answers it, and that wakes the handler to encode the reply.
+
+```c
+defw2_service_queue_open(svc, 0);
+while (defw2_service_next_call(svc, 1000, &call) == DEFW2_OK) {
+	request = defw2_call_request(call, &len);
+	defw2_service_respond(call, reply, reply_len);
+}
+```
+
+The hand-off costs about 35 microseconds per call against the C service on
+`na+sm`, and the server's span reports it separately from the service's own
+time. `bindings/python/` is the first consumer of this, and
+`tests/defw2_queue_smoke.c` proves the mechanism without one.
 
 ## Environment
 

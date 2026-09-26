@@ -62,6 +62,64 @@ void defw2_service_run(defw2_service_t *svc);
  */
 void defw2_service_shutdown(defw2_service_t *svc);
 
+/*
+ * Serving from a foreign runtime.
+ *
+ * A Python service cannot run on a Margo thread, so it does not. The C
+ * handler decodes the request, puts it on this queue and parks on an
+ * Argobots eventual. A thread the runtime knows nothing about blocks in
+ * defw2_service_next_call, answers with defw2_service_respond, and that
+ * wakes the handler to encode the reply. Python runs on Python threads,
+ * Margo runs on Margo threads, and the queue is the only thing they share.
+ *
+ *	defw2_service_queue_open(svc, 0);
+ *	while (defw2_service_next_call(svc, 1000, &call) == DEFW2_OK) {
+ *		request = defw2_call_request(call, &len);
+ *		defw2_service_respond(call, reply, reply_len);
+ *	}
+ *
+ * A call handle belongs to the parked handler, not to the caller of
+ * next_call, and it is spent the moment it is answered. Nothing may touch
+ * it after that.
+ */
+typedef struct defw2_call defw2_call_t;
+
+/*
+ * Route this service's methods to the queue instead of to their operations
+ * tables. depth is the most calls that may wait at once, or 0 for as many
+ * as arrive. A caller that finds the queue full is told the service is at
+ * capacity rather than made to wait.
+ */
+defw2_rc_t defw2_service_queue_open(defw2_service_t *svc, unsigned depth);
+
+/*
+ * Stop queueing. Calls that are waiting are failed, and consumers blocked
+ * in next_call return. A call already taken by a consumer is that
+ * consumer's to answer, and its handler stays parked until it does.
+ */
+void defw2_service_queue_close(defw2_service_t *svc);
+bool defw2_service_queued(const defw2_service_t *svc);
+
+/*
+ * Wait for the next call. Returns DEFW2_ERR_TIMEOUT when nothing arrived in
+ * time and DEFW2_ERR_NOT_FOUND once the queue is closed, which is how a
+ * serving loop learns to stop. It holds no lock while it waits, so a
+ * binding may release its interpreter lock around it.
+ */
+defw2_rc_t defw2_service_next_call(defw2_service_t *svc, uint32_t timeout_ms,
+				   defw2_call_t **call);
+
+/* What the call is. The request bytes last until the call is answered. */
+const char *defw2_call_api(const defw2_call_t *call);
+const char *defw2_call_method(const defw2_call_t *call);
+const void *defw2_call_request(const defw2_call_t *call, size_t *len);
+
+/* Answer it. reply is copied, so the caller keeps nothing. */
+defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
+				 size_t len);
+defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
+			      uint32_t category, const char *message);
+
 const char *defw2_service_id(const defw2_service_t *svc);
 const char *defw2_service_type(const defw2_service_t *svc);
 const char *defw2_service_address(const defw2_service_t *svc);
