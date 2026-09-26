@@ -1,17 +1,20 @@
 # DEFw benchmark harnesses
 
 These harnesses measure DEFw v1 and DEFw v2 on the same workloads, as
-described in "Profiling and the v1 Comparison" in `docs/design_v2.md`. Only
-the v1 harness exists so far.
+described in "Profiling and the v1 Comparison" in `docs/design_v2.md`. Both
+write the same report, `defw-bench-summary/1`, so a v1 run and a v2 run
+compare field by field.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `defw_bench_common.py` | Workload table, payloads, statistics and the OTLP/JSON writer. It imports nothing from DEFw, so a v2 harness can share it. |
-| `v1/defw1_bench.py` | Launcher. It prepares a run and starts a v1 directory service with `defwp`. |
+| `defw_bench_common.py` | Workload table, payloads, statistics and the OTLP/JSON writer. It imports nothing from DEFw, so both harnesses share it. |
+| `v1/defw1_bench.py` | v1 launcher. It prepares a run and starts a v1 directory service with `defwp`. |
 | `v1/defw1_bench_driver.py` | Runs inside that directory service. It spawns the echo service and the clients, then writes the report. |
 | `v1/defw1_bench_client.py` | Runs inside each client process. It connects, warms up and measures. |
+| `v2/defw2_bench.py` | v2 launcher. It starts `defw2-echo`, runs the clients and writes the report. |
+| `v2/defw2_bench.c` | The measured v2 client, built as `defw2-bench`. It knows nothing about workloads or reports. |
 
 ## Running the v1 harness
 
@@ -47,7 +50,54 @@ The workload defaults are:
 | W2 | 4 KiB | 10,000 | 100 |
 | W3 | 1 MiB | 1600 MiB divided by the payload size, between 5 and 100 | 2 |
 
-## What a run does
+## Running the v2 harness
+
+The v2 harness needs a `DEFW_BUILD_V2=ON` build and the Mochi stack on the
+library path. Nothing else: no directory service, no Python runtime in the
+measured path.
+
+```bash
+module load libfabric mochi
+export LD_LIBRARY_PATH=<build>/runtime/src:$LD_LIBRARY_PATH
+export DEFW2_BIN_DIR=<build>/runtime/src
+python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `W1`, `W2`, `W3` | | Workload from the design's Workloads table |
+| `--payload` | per workload | Payload size, such as `64`, `4KiB` or `16MiB` |
+| `--calls` | per workload | Measured calls per client |
+| `--warmup` | per workload | Unmeasured calls per client before measuring |
+| `--clients` | `1` | Concurrent client processes |
+| `--transport` | `ofi+tcp` | Margo provider, such as `ofi+tcp`, `na+sm` or `ofi+cxi` |
+| `--rpc-threads` | runtime default | Handler execution streams in the service |
+| `--bin-dir` | `$DEFW2_BIN_DIR` | Where `defw2-echo` and `defw2-bench` are |
+| `--no-spans` | off | Leave profiling off and write only the summary |
+| `--out` | `/tmp/defw-bench` | Parent of the run directories |
+
+W3, and any payload too large to ride inside a message, goes through the
+bulk path with `defw2_echo_bulk`. Everything else uses `defw2_echo`.
+
+## What a v2 run does
+
+1. The launcher writes `config.json` and starts `defw2-echo serve`, which
+   prints its address and nothing else.
+2. It starts one `defw2-bench` process per client, each with the run's
+   traceparent.
+3. Each client makes one checked call, warms up, and signals that it is
+   ready. Neither the check nor the warmup carries the run's trace context,
+   so one run is one trace holding exactly the measured calls.
+4. Once every client is ready, the launcher releases them together.
+5. Each client times its calls and writes its timings.
+6. The launcher reads the service's CPU time and peak memory from `/proc`,
+   stops it, and writes the report and the `qfw.bench.run` span.
+
+The per-call spans are libdefw2's own, written by the client and the service
+processes themselves. The launcher writes only the run span they hang
+beneath.
+
+## What a v1 run does
 
 1. The launcher writes `config.json` and starts `defwp` as a directory
    service, with the driver running inside it.
@@ -79,7 +129,7 @@ Wire bytes per call are not measured yet.
 ## Output
 
 Each run gets a directory named
-`<UTC time>-v1-<workload>-<transport>-c<clients>-<trace id prefix>`.
+`<UTC time>-v<major>-<workload>-<transport>-c<clients>-<trace id prefix>`.
 
 | Path | Contents |
 | --- | --- |
@@ -88,7 +138,20 @@ Each run gets a directory named
 | `config.json` | The run's parameters |
 | `results/client-N.json` | Raw per-call timings from client N |
 | `driver.log` | The driver's output |
-| `dirsvc/`, `client-N/` | DEFw logs of the directory service, of the echo service under `dirsvc/`, and of each client |
+| `dirsvc/`, `client-N/` | v1 only: DEFw logs of the directory service, of the echo service under `dirsvc/`, and of each client |
+| `logs/` | v2 only: the output of the echo service and of each client |
+
+A v2 run's `otlp/` holds more, because the processes record themselves:
+
+| Path | Contents |
+| --- | --- |
+| `otlp/spans-run.jsonl` | The `qfw.bench.run` span, written by the launcher |
+| `otlp/spans-<agent>.jsonl` | One `qfw.transport.rpc` span per call, from each client and from the service |
+| `otlp/metrics-<agent>.jsonl` | The duration and byte histograms, and each process's CPU and peak memory |
+| `otlp/margo-<agent>.*.json` | Margo's own per-RPC counts, times and call paths, only under `DEFW2_MARGO_MONITOR=1`, which is unsafe above one client, see [mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322) |
+
+`src2/tests/defw2_otlp_check.py <run>/otlp` validates the lot, including
+that every service span is a child of the call that produced it.
 
 A run is one trace. Its root span is `qfw.bench.run`, and each measured call is
 a `qfw.transport.rpc` span beneath it. The spans and files follow the file

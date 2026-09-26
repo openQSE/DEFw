@@ -44,7 +44,7 @@ DEFW2_ADDRESS=ofi+tcp:// defw2-echo ping ofi+tcp://10.0.0.5:45817 -b 16777216
 path, `-n` is the call count, `-p` the provider and `-t` the timeout in
 milliseconds. It is a development tool and reports nothing but latency and
 rate. The benchmark client that records spans and writes the OTLP files the
-comparison reads is `defw2-bench`, which is separate and still to come.
+comparison reads is `defw2-bench`, under `bench/`.
 
 ## Layout
 
@@ -58,6 +58,7 @@ comparison reads is `defw2-bench`, which is separate and still to come.
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
+| `bench/` | The benchmarks, and the v1 side of the comparison |
 
 ## Calling and serving
 
