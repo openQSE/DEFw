@@ -107,7 +107,7 @@ the host and the process identifier.
 | --- | --- |
 | `spans-<agent>.jsonl` | One `qfw.transport.rpc` span per call on each side. The client's carries the round trip, the service's carries `decode`, `handler` and `encode` as events |
 | `metrics-<agent>.jsonl` | The `qfw.transport.rpc.duration` and `qfw.transport.rpc.bytes` histograms, and the process CPU and peak resident set |
-| `margo-<agent>.*.stats.json` | Margo's own per-RPC counts, times and call paths |
+| `margo-<agent>.*.stats.json` | Margo's own per-RPC counts, times and call paths, only with `DEFW2_MARGO_MONITOR=1` |
 
 Every request carries the caller's W3C `traceparent`, so a service's span is
 a child of the call that produced it and one trace crosses the processes.
@@ -129,7 +129,17 @@ the service, so a ten thousand call workload leaves about 16 MiB behind.
 Margo 0.24 replaced the breadcrumb profiler that the design's telemetry
 table names, so `enable_profiling` on its own produces nothing. What
 produces Margo's own statistics is its monitor, which `defw2_init` installs
-and points at the same directory when profiling is on.
+and points at the same directory.
+
+**The monitor is opt-in, and it is not safe to leave on.** The default
+monitor in Margo 0.24.2 reads freed memory in
+`__margo_default_monitor_on_respond_cb` and takes a service down under
+concurrent load. Eight clients against one service reproduce it in seconds,
+and the address sanitizer names it. Filed upstream as
+[mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322), with a reproducer that needs nothing but
+Margo. `DEFW2_MARGO_MONITOR=1` turns it on for a single-client run where its
+call paths are worth having. Our own spans cover the same ground and are on
+by default, so nothing else is lost.
 
 ## Environment
 
@@ -144,6 +154,7 @@ section. The names v2 adds:
 | `DEFW2_PROFILE` | off | Turns on Margo profiling and diagnostics |
 | `DEFW2_RPC_THREADS` | 2 for a server, 0 for a client | Handler execution streams |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
+| `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
 
 It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,
 `DEFW_AGENT_TYPE` (`service` and `dirsvc` are servers), `DEFW_LOG_DIR`,

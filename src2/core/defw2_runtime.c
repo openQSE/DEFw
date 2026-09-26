@@ -11,6 +11,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>	/* strcasecmp */
 #include <unistd.h>
 
 #include <uuid/uuid.h>
@@ -44,6 +45,27 @@ static char *read_file(const struct defw2_rt *rt, const char *path)
 	}
 	fclose(stream);
 	return text;
+}
+
+/*
+ * Margo's own monitor is opt-in.
+ *
+ * It is the only source of Margo's per-RPC counts and call paths, so the
+ * design wants it, but the default monitor in Margo 0.24.2 reads freed
+ * memory in __margo_default_monitor_on_respond_cb and takes a service down
+ * under concurrent load. Our own spans cover the same ground, so the
+ * monitor waits behind DEFW2_MARGO_MONITOR until that is fixed upstream.
+ * Filed as mochi-hpc/mochi-margo issue 322:
+ * https://github.com/mochi-hpc/mochi-margo/issues/322
+ */
+static bool want_margo_monitor(const defw2_config_t *cfg)
+{
+	const char *value = getenv("DEFW2_MARGO_MONITOR");
+
+	if (!cfg->profile || value == NULL)
+		return false;
+	return strcmp(value, "0") != 0 && strcasecmp(value, "false") != 0 &&
+	       value[0] != '\0';
 }
 
 /*
@@ -88,7 +110,7 @@ static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg,
 	 * breadcrumb profiler the design's telemetry table names, so
 	 * enable_profiling alone produces nothing.
 	 */
-	if (cfg->profile && dir != NULL)
+	if (want_margo_monitor(cfg) && dir != NULL)
 		snprintf(json, DEFW2_JSON_MAX,
 			 "{\"use_progress_thread\":true,"
 			 "\"rpc_thread_count\":%d,"
@@ -182,7 +204,7 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 		goto fail;
 	}
 	args.json_config = json;
-	if (cfg->profile)
+	if (want_margo_monitor(cfg))
 		args.monitor = margo_default_monitor;
 
 	/* Server mode listens, which is what a process serving RPCs or

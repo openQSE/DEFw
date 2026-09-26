@@ -20,6 +20,10 @@
  *	spans-<agent>.jsonl	the spans, when profiling is on
  *	metrics-<agent>.jsonl	the histograms, and the process totals
  *
+ * Margo's own statistics join them under DEFW2_MARGO_MONITOR, which is off
+ * by default because the default monitor in Margo 0.24.2 crashes a service
+ * under concurrent load.
+ *
  * Two runtimes sharing a directory and an agent name would overwrite each
  * other's files, the same way they would share a v1 log file. With no
  * directory to write to there is nothing to record.

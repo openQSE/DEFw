@@ -73,8 +73,10 @@ def check_spans(path, problems, seen):
 			problems.check('qfw.transport.kind' in keys,
 				       where + ' has no transport on the resource')
 			for scope in resource['scopeSpans']:
-				problems.check(scope['scope']['name'] == 'defw2',
-					       where + ' has a foreign scope')
+				# The scope names the producer, and a run has
+				# more than one: libdefw2 and the harness.
+				problems.check(scope['scope'].get('name'),
+					       where + ' has an unnamed scope')
 				for span in scope['spans']:
 					count += check_span(where, span,
 							    problems, seen)
