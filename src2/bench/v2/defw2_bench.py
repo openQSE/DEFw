@@ -22,7 +22,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
-BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+V2_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCH_DIR = os.path.dirname(V2_DIR)
 sys.path.insert(0, BENCH_DIR)
 
 import defw_bench_common as common  # noqa: E402
@@ -60,6 +61,15 @@ def parse_args(argv):
 		'--rpc-threads', type=int,
 		help='handler execution streams in the service '
 		'(default: the runtime default)')
+	parser.add_argument(
+		'--client', choices=('c', 'python'), default='c',
+		help='which echo client to measure (default: c)')
+	parser.add_argument(
+		'--service', choices=('c', 'python'), default='c',
+		help='which echo service to measure against (default: c)')
+	parser.add_argument(
+		'--service-workers', type=int, default=2,
+		help='queue workers in the python service (default: 2)')
 	parser.add_argument(
 		'--label', help='run label (default: built from the parameters)')
 	parser.add_argument(
@@ -181,9 +191,21 @@ def proc_peak_rss_kib(pid):
 	return None
 
 
+def _flavour(args):
+	"""What a run's name says about which halves were Python."""
+	if args.client == 'python' and args.service == 'python':
+		return 'pypy'
+	if args.service == 'python':
+		return 'pysvc'
+	if args.client == 'python':
+		return 'pycli'
+	return ''
+
+
 def make_run_dir(args, trace_id):
 	stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-	name = ('{}-v2-{}-{}-c{}-{}'.format(stamp, args.workload,
+	name = ('{}-v2{}-{}-{}-c{}-{}'.format(stamp, _flavour(args),
+					    args.workload,
 					    args.transport.replace('+', ''),
 					    args.clients, trace_id[:8]))
 	run_dir = os.path.join(os.path.abspath(args.out), name)
@@ -193,7 +215,8 @@ def make_run_dir(args, trace_id):
 
 
 def write_config(args, run_dir, trace_id, root_span_id, binaries):
-	label = args.label or 'v2-{}-{}-{}-c{}'.format(
+	label = args.label or 'v2{}-{}-{}-{}-c{}'.format(
+		_flavour(args),
 		args.workload, args.transport,
 		common.format_size(args.payload_bytes).replace(' ', ''),
 		args.clients)
@@ -242,6 +265,15 @@ def process_env(args, run_dir, agent):
 	return env
 
 
+def service_command(args, binaries):
+	"""The C service, or the same service written in Python."""
+	if args.service == 'c':
+		return [binaries['defw2-echo'], 'serve']
+	return [sys.executable, os.path.join(V2_DIR, 'defw2_echo_service.py'),
+		'--workers', str(args.service_workers),
+		'--service-id', 'bench-echo']
+
+
 def start_service(args, config, binaries):
 	"""Start the echo service and read back the address it prints."""
 	run_dir = config['run_dir']
@@ -250,7 +282,7 @@ def start_service(args, config, binaries):
 		env['DEFW2_RPC_THREADS'] = str(args.rpc_threads)
 	log = open(os.path.join(run_dir, 'logs', 'echo.log'), 'w',
 		   encoding='utf-8')
-	service = subprocess.Popen([binaries['defw2-echo'], 'serve'],
+	service = subprocess.Popen(service_command(args, binaries),
 				   stdout=subprocess.PIPE, stderr=log,
 				   env=env, text=True)
 	address = service.stdout.readline().strip()
@@ -266,8 +298,12 @@ def start_clients(args, config, binaries, address):
 					   config['root_span_id'])
 	clients = []
 	for index in range(args.clients):
-		command = [
-			binaries['defw2-bench'],
+		if args.client == 'python':
+			command = [sys.executable,
+				   os.path.join(V2_DIR, 'defw2_bench_client.py')]
+		else:
+			command = [binaries['defw2-bench']]
+		command += [
 			'--address', address,
 			'--index', str(index),
 			'--calls', str(args.calls),
@@ -389,6 +425,10 @@ def environment(args, config):
 		'slurm_nodelist': os.environ.get('SLURM_JOB_NODELIST'),
 		'defw_log_level': args.log_level,
 		'profiling': not args.no_spans,
+		'client_language': args.client,
+		'service_language': args.service,
+		'service_workers': (args.service_workers
+				    if args.service == 'python' else None),
 	}
 
 

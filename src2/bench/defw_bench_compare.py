@@ -65,10 +65,23 @@ def group_key(report):
 	return (workload['id'], workload['payload_bytes'], workload['clients'])
 
 
+# Which halves of a v2 run were Python. A report from before the binding
+# existed names neither, and both were C.
+FLAVOURS = {
+	('c', 'c'): 'v2',
+	('python', 'c'): 'v2 py-client',
+	('c', 'python'): 'v2 py-service',
+	('python', 'python'): 'v2 py-both',
+}
+
+
 def describe(report):
-	return '{} {}'.format(
-		'v1' if report['run']['defw_major'] == 1 else 'v2',
-		report['transport']['kind'])
+	if report['run']['defw_major'] == 1:
+		return 'v1 ' + report['transport']['kind']
+	environment = report.get('environment', {})
+	flavour = FLAVOURS[(environment.get('client_language', 'c'),
+			    environment.get('service_language', 'c'))]
+	return '{} {}'.format(flavour, report['transport']['kind'])
 
 
 def ratio(value, baseline, better):

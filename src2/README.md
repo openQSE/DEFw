@@ -9,9 +9,9 @@ and the Python binding: configuration from the environment, `defw2_init`
 and `defw2_finalize`, identity, the status model, the logging sink,
 bindings and typed stubs, the service host with its call queue, `qfw.echo`
 as the reference service with its eager and bulk methods, the spans and
-histograms a comparison reads, and a `defw2` Python package that both
-calls and serves. The benchmarks that use all of it are a separate change.
-The directory client, the document tier and events are still to come.
+histograms the comparison reads, a `defw2` Python package that both calls
+and serves, and the benchmarks that measure the lot against v1. The
+directory client, the document tier and events are still to come.
 
 ## Building
 

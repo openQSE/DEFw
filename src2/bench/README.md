@@ -15,6 +15,9 @@ compare field by field.
 | `v1/defw1_bench_client.py` | Runs inside each client process. It connects, warms up and measures. |
 | `v2/defw2_bench.py` | v2 launcher. It starts `defw2-echo`, runs the clients and writes the report. |
 | `v2/defw2_bench.c` | The measured v2 client, built as `defw2-bench`. It knows nothing about workloads or reports. |
+| `v2/defw2_bench_client.py` | The same measurement through the Python binding, with the same arguments and the same result file. |
+| `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
+| `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. |
 
 ## Running the v1 harness
 
@@ -72,12 +75,22 @@ python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
 | `--clients` | `1` | Concurrent client processes |
 | `--transport` | `ofi+tcp` | Margo provider, such as `ofi+tcp`, `na+sm` or `ofi+cxi` |
 | `--rpc-threads` | runtime default | Handler execution streams in the service |
+| `--client` | `c` | Measure the C client or the Python one |
+| `--service` | `c` | Measure against the C service or the Python one |
+| `--service-workers` | `2` | Queue workers in the Python service |
 | `--bin-dir` | `$DEFW2_BIN_DIR` | Where `defw2-echo` and `defw2-bench` are |
 | `--no-spans` | off | Leave profiling off and write only the summary |
 | `--out` | `/tmp/defw-bench` | Parent of the run directories |
 
 W3, and any payload too large to ride inside a message, goes through the
 bulk path with `defw2_echo_bulk`. Everything else uses `defw2_echo`.
+
+`--client` and `--service` pick which halves are Python, and the run's name
+says which pair it was: no suffix for C to C, then `pycli`, `pysvc` or
+`pypy`. The Python halves need the binding on `PYTHONPATH`. Measured on
+`na+sm` with one client, a 64 byte round trip is 0.067 ms C to C, 0.065 ms
+from the Python client, 0.102 ms to the Python service and 0.087 ms for
+both, against v1's 4.591 ms.
 
 ## What a v2 run does
 
