@@ -1212,10 +1212,11 @@ int defw_rma_available(char *blk_uuid)
 	if (!agent)
 		return 0;
 
-	/* the peer has to be reachable on the fabric: it advertised an OFI
-	 * address in the handshake and we inserted it (phase 1b)
+	/* the peer reads the region from us, so it needs our OFI address and
+	 * has to be able to name us, which is what DEFW_AGENT_OFI_READY says.
+	 * Our having its address is not enough on its own.
 	 */
-	available = (agent->state & DEFW_AGENT_OFI_ADDR_VALID) ? 1 : 0;
+	available = (agent->state & DEFW_AGENT_OFI_READY) ? 1 : 0;
 	defw_release_agent_blk(agent, false);
 
 	return available;

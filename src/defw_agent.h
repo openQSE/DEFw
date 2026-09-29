@@ -21,13 +21,20 @@
 #define DEFW_AGENT_WORK_IN_PROGRESS (1 << 3)
 #define DEFW_AGENT_STATE_DEAD (1 << 4)
 #define DEFW_AGENT_STATE_NEW (1 << 5)
-/* set once the peer's OFI address has been inserted into the address vector
- * and cached in ofi_addr below
- */
 #define DEFW_AGENT_PEER_READY_REPORTED (1 << 6)
 #define DEFW_AGENT_PEER_LOST_REPORTED (1 << 7)
 #define DEFW_AGENT_PEER_REMOVED_REPORTED (1 << 8)
+/* set once the peer's OFI address has been inserted into the address vector
+ * and cached in ofi_addr below
+ */
 #define DEFW_AGENT_OFI_ADDR_VALID (1 << 9)
+/* set once the peer has also sent us a heartbeat, which means it knows who we
+ * are and where we are on the fabric. A fabric message names its sender only
+ * by uuid, so a peer that has not learned ours yet cannot tell who sent it
+ * and drops it. Messages and RMA descriptors go over the fabric only after
+ * this is set.
+ */
+#define DEFW_AGENT_OFI_READY (1 << 10)
 
 #define DEFW_PEER_UUID_STR_LEN 37
 

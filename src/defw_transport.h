@@ -108,6 +108,11 @@ void defw_transport_startup(void);
  */
 defw_rc_t defw_transport_ofi_init(const char *provider);
 
+/* True when the OFI endpoint is up, so this process advertises an OFI address
+ * to its peers. False when DEFw was built without libfabric support.
+ */
+bool defw_transport_ofi_active(void);
+
 /* Copy this process's OFI endpoint address into buf (for the session
  * handshake). On entry *len is the buffer size; on success it is set to the
  * address length. Returns EN_DEFW_RC_FAIL when OFI is not active (so the
