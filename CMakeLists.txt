@@ -13,6 +13,7 @@ find_package(SWIG REQUIRED)
 find_package(Threads REQUIRED)
 find_library(UUID_LIBRARY uuid REQUIRED)
 
+option(DEFW_BUILD_V2 "Build the DEFw v2 prototype" OFF)
 option(DEFW_ENABLE_LIBFABRIC "Enable the optional libfabric transport" ON)
 set(DEFW_HAVE_LIBFABRIC OFF)
 if(DEFW_ENABLE_LIBFABRIC)
@@ -612,3 +613,9 @@ install(FILES
 	"${CMAKE_CURRENT_BINARY_DIR}/DEFwConfig.cmake"
 	"${CMAKE_CURRENT_BINARY_DIR}/DEFwConfigVersion.cmake"
 	DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/DEFw")
+
+# The v2 prototype lives beside v1 and is off by default, so nothing above
+# changes until a build asks for it. See src2/CMakeLists.txt.
+if(DEFW_BUILD_V2)
+	add_subdirectory(src2)
+endif()

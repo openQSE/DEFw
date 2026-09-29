@@ -542,6 +542,11 @@ the Margo provider identifier that serves it. A client resolves a binding,
 looks up the address, and forwards typed RPCs to that provider. Clients never
 learn which language implements the service.
 
+A record also carries a `properties` map that the service fills in. The
+directory stores and returns it without defining the names or the values, as
+`openQSE/DEFw` #20 left v1. Anything a service wants callers to see lives
+there, and adding one needs no DEFw release.
+
 ### Operations
 
 | RPC | Caller | Behaviour |
@@ -549,7 +554,7 @@ learn which language implements the service.
 | `register_service` | A service at startup | Validates the record, rejects a live conflicting runtime for the same `service_id`, assigns or increments the generation, marks the record `UP`, returns the generation. |
 | `heartbeat` | A service, on a Margo timer | Refreshes `last_heartbeat`. Carries `service_id`, `runtime_id` and generation so a stale process cannot refresh a newer record. |
 | `deregister_service` | A service at shutdown | Marks `DEREGISTERED`, clears the address, sets the retention deadline. |
-| `resolve_services` | Clients | Filters by `service_type`, selector name or resource, `binding_name` and API version. Returns records with the selected binding. Omits `DOWN`, `TIMED_OUT` and `DEREGISTERED` records. |
+| `resolve_services` | Clients | Filters by `service_type`, selector name or resource, `binding_name`, API version, and properties. A property filter matches on equality by default. A caller that needs a bitmask match, which v1 hard-codes for `qpm_type` and `qpm_capabilities`, names those properties in the request, so the directory keeps no vocabulary of its own. Returns records with the selected binding. Omits `DOWN`, `TIMED_OUT` and `DEREGISTERED` records. |
 | `query_directory` | Operators | Everything, including inactive records until retention expires. |
 | `get_generation` | Clients and services | Current generation for a `service_id`. |
 | `subscribe` | Clients, optional | Registers an event sink for record changes so cached bindings can be invalidated without polling. |
@@ -1178,7 +1183,10 @@ The QFw-SLURM-Cluster image builds libfabric from source into
 `/opt/qfw/libfabric`. v2 adds the Mochi stack the same way into
 `/opt/qfw/mochi`, pinned to the versions in Appendix B, with Mercury
 configured for the OFI and shared-memory plugins and the bundled Boost
-preprocessor headers. Sites with Spack use the `mochi-margo` package instead.
+preprocessor headers. Mercury's `hg_rate`, `hg_bw_read` and `hg_bw_write`
+benchmarks are installed with it, since the success criteria compare against
+them. `module load libfabric mochi` puts the stack on the compiler, pkg-config
+and CMake paths. Sites with Spack use the `mochi-margo` package instead.
 `pkg-config` finds either.
 
 ## Coexistence and Migration
@@ -1276,6 +1284,7 @@ table records what each family asks for and where it lands in v2.
 | Binding technology | cffi is proposed. v1 uses SWIG and the QFw design invests in SWIG typemaps. | Open for review. The C API is designed so either works. |
 | Document tier encoding | CBOR is proposed. | Open for review. JSON is the fallback and costs nothing to swap. |
 | Slingshot access | Phase 2 of the v1 plan never had a system to test on. | The go decision should name the system and the window. |
+| Bitmask property matching in the directory | v1 hard-codes it for `qpm_type` and `qpm_capabilities`, and matches every other property on equality. Those two names are the only QPM vocabulary left in the directory after `openQSE/DEFw` #20. | Replace the special case with a generic filter whose bitmask property names come from the caller. Offered to Amir as a follow-up, no answer yet. |
 | Where v2 lives long term | `src2/` in DEFw is proposed for the prototype. | A separate repository is a possible outcome of the go decision, not a starting condition. |
 
 ## Phased Plan
@@ -1337,10 +1346,10 @@ import DEFw infrastructure.
 
 | Component | Pinned version | License | Notes |
 | --- | --- | --- | --- |
-| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. |
+| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. The oldest release that Spack allows with libfabric 2.x. |
 | Margo | 0.24.2 | Argonne open source license | BSD-3-style with a DOE contract notice. |
-| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. |
-| json-c | 0.19 | MIT | Margo dependency. |
+| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. The 1.2 release reports its version as 1.2rc1. |
+| json-c | 0.18, from the distribution | MIT | Margo dependency. Margo accepts any version, and Slurm in the container already links the distribution package. |
 | libfabric | 2.3.1 in the container, 2.6.0 upstream | BSD-2 or GPLv2 at the user's choice | Already a DEFw dependency. BSD is chosen. |
 | tinycbor | current | MIT | Document tier, C side. |
 | cbor2 | current | MIT | Document tier, Python side. |
