@@ -18,16 +18,50 @@ The directory client, the document tier and events are still to come.
 The build is off by default, so every existing DEFw build and CI job is
 unchanged until it is asked for.
 
+In the QFw-SLURM-Cluster image, from the repository root:
+
 ```bash
-module load libfabric mochi          # in the QFw-SLURM-Cluster image
-cmake -S . -B build -DDEFW_BUILD_V2=ON
-cmake --build build --target defw2 defw2-echo
+export PKG_CONFIG_PATH=/opt/qfw/mochi/lib/pkgconfig:/opt/qfw/libfabric/lib/pkgconfig
+export LD_LIBRARY_PATH=/opt/qfw/mochi/lib:/opt/qfw/libfabric/lib
+
+cmake -S . -B build -DDEFW_BUILD_V2=ON \
+	-DPython3_EXECUTABLE=/workspace/qfw-container-base/qfw-venv/bin/python
+cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-python \
+	defw2_runtime_smoke defw2_echo_smoke defw2_queue_smoke \
+	defw2_telemetry_smoke
 ctest --test-dir build -R defw2
 ```
 
-Mercury, Margo and Argobots are found through pkg-config, so any of the
-image's `/opt/qfw/mochi`, a Spack `mochi-margo`, or a local build works as
-long as `PKG_CONFIG_PATH` points at it.
+That prints six passing tests. Each line of it is doing something, so
+changing one of them tends to be how a build goes wrong:
+
+- **The paths are set by hand rather than with `module load`.** The image
+  ships Mochi under `/opt/qfw/mochi` and libfabric under
+  `/opt/qfw/libfabric`, but their modulefiles are not on `MODULEPATH`, so
+  `module load libfabric mochi` leaves `PKG_CONFIG_PATH` empty and
+  pkg-config then cannot find Margo. Mercury, Margo and Argobots are found
+  through pkg-config, so any of the image's copy, a Spack `mochi-margo`, or
+  a local build works as long as `PKG_CONFIG_PATH` points at it.
+- **The targets are named.** `cmake --build build` with no target also
+  builds v1, which fails on a SWIG fixture that needs PyYAML, and the
+  system Python has none. Naming the targets keeps the v2 build independent
+  of the v1 tree's own dependencies.
+- **The test binaries are among them.** They are separate targets, so a
+  build of `defw2` and `defw2-echo` alone leaves `ctest` reporting every
+  test as Not Run, which reads like a broken build rather than a missing
+  target.
+- **The Python interpreter is named.** The binding needs cffi, the
+  container's default `python3` has none, and a configure that does not
+  find it says so once and then carries on without the binding. So the
+  build looks successful while omitting the `defw2` package and its smoke
+  test.
+
+Outside that image, point `PKG_CONFIG_PATH` at whatever provides Margo and
+`-DPython3_EXECUTABLE` at a Python with cffi.
+
+Build trees are not relocatable: a configured `build/` holds absolute
+paths, so copying a source tree that contains one and building in the copy
+writes back into the original. Configure a fresh one instead.
 
 ## Trying it
 

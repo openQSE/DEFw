@@ -83,9 +83,9 @@ class ServiceHost:
 			rc = lib.defw2_service_next_call(self._svc, poll_ms,
 							 holder)
 			if rc == lib.DEFW2_ERR_NOT_FOUND:
-				break		# the queue closed
+				break  # the queue closed
 			if rc != lib.DEFW2_OK:
-				continue	# nothing arrived in time
+				continue  # nothing arrived in time
 
 			call = holder[0]
 			data = lib.defw2_call_request(call, length)
@@ -95,7 +95,7 @@ class ServiceHost:
 				lib.defw2_call_method(call)).decode()
 			try:
 				reply = self._invoke(handler, method, request)
-			except Exception as exc:	# noqa: BLE001
+			except Exception as exc:  # noqa: BLE001
 				# A service that raises answers with a status
 				# rather than leaving its caller waiting.
 				lib.defw2_service_fail(
