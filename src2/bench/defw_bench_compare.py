@@ -7,8 +7,12 @@ workload. Give it run directories or summary files, in any mix:
 	defw_bench_compare.py /tmp/defw-bench /mnt/defw2-baselines/2026-09-23-tcp
 
 Runs are grouped by workload, payload and client count. Within a group the
-v1 runs are the baseline and each v2 run is shown against it. A group with
-only one version is still listed, because a missing half is worth seeing.
+v1 runs are the baselines, and each v2 run is shown against the v1 run on
+the matching provider: v2's ofi+tcp against v1's ofi+tcp, and Mercury's
+shared memory, na+sm, against v1's, ofi+sm2. When the group has no v1 run
+on that provider, the v2 run is shown against the first v1 run it has, and
+the row says the pair is unmatched. A group with only one version is still
+listed, because a missing half is worth seeing.
 """
 
 import argparse
@@ -84,6 +88,36 @@ def describe(report):
 	return '{} {}'.format(flavour, report['transport']['kind'])
 
 
+# The v1 provider each v2 provider is measured against. The design compares
+# like with like, so the two shared-memory transports pair with each other.
+MATCHING_V1 = {
+	'ofi+tcp': 'ofi+tcp',
+	'ofi+cxi': 'ofi+cxi',
+	'na+sm': 'ofi+sm2',
+}
+
+
+def baseline_for(report, baselines):
+	"""The v1 run a v2 run is compared against, and whether it is on the
+	matching provider."""
+	wanted = MATCHING_V1.get(report['transport']['kind'])
+	for candidate in baselines:
+		if candidate['transport']['kind'] == wanted:
+			return candidate, True
+	return (baselines[0], False) if baselines else (None, False)
+
+
+def row_order(report):
+	return (report['run']['defw_major'], report['transport']['kind'])
+
+
+def against_text(baseline, matched):
+	if baseline is None:
+		return ''
+	text = 'v1 ' + baseline['transport']['kind']
+	return text if matched else text + ', unmatched'
+
+
 def ratio(value, baseline, better):
 	"""How much better or worse than the baseline, as a plain number."""
 	if value is None or baseline in (None, 0):
@@ -103,35 +137,65 @@ def value_text(value):
 def print_group(key, reports):
 	workload, payload, clients = key
 	baselines = [r for r in reports if r['run']['defw_major'] == 1]
-	baseline = baselines[0] if baselines else None
 
 	print()
 	print('{}  {}  {} client{}'.format(
 		workload, common.format_size(payload), clients,
 		'' if clients == 1 else 's'))
-	if baseline is not None and len(baselines) > 1:
-		print('  baseline: {}'.format(os.path.dirname(baseline['_path'])))
+	kinds = [b['transport']['kind'] for b in baselines]
+	for kind in sorted(set(kinds)):
+		if kinds.count(kind) > 1:
+			first = baselines[kinds.index(kind)]
+			print('  v1 {} has {} runs, compared against {}'.format(
+				kind, kinds.count(kind),
+				os.path.dirname(first['_path'])))
 
 	width = max(len(describe(r)) for r in reports)
 	header = '  {:<{w}}'.format('', w=width)
 	for name, _, _ in METRICS:
 		header += '  {:>14}'.format(name)
+	if baselines and len(baselines) < len(reports):
+		header += '  against'
 	print(header)
 
-	for report in sorted(reports, key=lambda r: r['run']['defw_major']):
+	for report in sorted(reports, key=row_order):
+		baseline, matched = None, False
+		if report['run']['defw_major'] != 1:
+			baseline, matched = baseline_for(report, baselines)
 		line = '  {:<{w}}'.format(describe(report), w=width)
 		for name, better, get in METRICS:
 			value = get(report)
 			text = value_text(value)
-			if baseline is not None and report is not baseline:
+			if baseline is not None:
 				against = ratio(value, get(baseline), better)
 				if against:
 					text += ' ' + against
 			line += '  {:>14}'.format(text)
+		if baseline is not None:
+			line += '  ' + against_text(baseline, matched)
 		print(line)
 		if report['failed_calls']:
 			print('  {:<{w}}  {} calls FAILED'.format(
 				'', report['failed_calls'], w=width))
+
+
+def json_run(report, baselines):
+	run = {
+		'version': report['run']['defw_major'],
+		'transport': report['transport']['kind'],
+		'label': report['run']['label'],
+		'path': report['_path'],
+		'metrics': {name: get(report) for name, _, get in METRICS},
+		'failed_calls': report['failed_calls'],
+	}
+	if report['run']['defw_major'] != 1:
+		baseline, matched = baseline_for(report, baselines)
+		run['against'] = None if baseline is None else {
+			'transport': baseline['transport']['kind'],
+			'path': baseline['_path'],
+			'matched': matched,
+		}
+	return run
 
 
 def main(argv):
@@ -159,19 +223,13 @@ def main(argv):
 		out = []
 		for key in sorted(groups):
 			workload, payload, clients = key
+			baselines = [r for r in groups[key]
+				     if r['run']['defw_major'] == 1]
 			out.append({
 				'workload': workload,
 				'payload_bytes': payload,
 				'clients': clients,
-				'runs': [{
-					'version': r['run']['defw_major'],
-					'transport': r['transport']['kind'],
-					'label': r['run']['label'],
-					'path': r['_path'],
-					'metrics': {name: get(r)
-						    for name, _, get in METRICS},
-					'failed_calls': r['failed_calls'],
-				} for r in groups[key]],
+				'runs': [json_run(r, baselines) for r in groups[key]],
 			})
 		common.write_json(args.json, out, indent=2)
 		print('wrote {}'.format(args.json))

@@ -17,7 +17,7 @@ compare field by field.
 | `v2/defw2_bench.c` | The measured v2 client, built as `defw2-bench`. It knows nothing about workloads or reports. |
 | `v2/defw2_bench_client.py` | The same measurement through the Python binding, with the same arguments and the same result file. |
 | `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
-| `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. |
+| `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. |
 
 ## Running the v1 harness
 
