@@ -15,6 +15,7 @@ Python environment has PyYAML. ../README.md describes the output.
 """
 
 import argparse
+import glob
 import json
 import os
 import signal
@@ -384,6 +385,46 @@ def signal_group(pid, sig):
 		pass
 
 
+def is_defwp(pid):
+	try:
+		with open(f'/proc/{pid}/cmdline', 'rb') as stream:
+			return b'defwp' in stream.read()
+	except OSError:
+		return False
+
+
+def run_pids(run_dir):
+	"""The processes of a run, as far as they can be found.
+
+	The driver records each process in pids.json once it has started, but
+	it learns the service's pid only when defw_spawn_services returns. A
+	service that never finished registering is missing from it. The service
+	runs as a daemon in a session of its own, so stopping the driver does
+	not stop it either, and it would keep its port and fail the next run.
+	Every DEFw process writes its pid beside its logs, so look there too.
+	Only processes that are still defwp are returned, since a pid of a run
+	that ended long ago may belong to something else by now."""
+	pids = set()
+	try:
+		with open(os.path.join(run_dir, 'control', 'pids.json'),
+			  encoding='utf-8') as stream:
+			pids.update(json.load(stream).values())
+	except (OSError, ValueError):
+		pass
+	for path in glob.glob(os.path.join(run_dir, 'dirsvc', '*', 'pid')):
+		try:
+			with open(path, encoding='ascii') as stream:
+				pids.add(int(stream.read().strip()))
+		except (OSError, ValueError):
+			pass
+	return sorted(pid for pid in pids if is_defwp(pid))
+
+
+def stop_leftovers(run_dir):
+	for pid in run_pids(run_dir):
+		signal_group(pid, signal.SIGKILL)
+
+
 def stop_run(driver, run_dir):
 	"""Stop the driver and anything it left running."""
 	signal_group(driver.pid, signal.SIGTERM)
@@ -391,14 +432,7 @@ def stop_run(driver, run_dir):
 		driver.wait(timeout=10)
 	except subprocess.TimeoutExpired:
 		signal_group(driver.pid, signal.SIGKILL)
-	try:
-		with open(os.path.join(run_dir, 'control', 'pids.json'),
-			  encoding='utf-8') as stream:
-			pids = json.load(stream)
-	except (OSError, ValueError):
-		pids = {}
-	for pid in pids.values():
-		signal_group(pid, signal.SIGKILL)
+	stop_leftovers(run_dir)
 
 
 def run_driver(config, env):
@@ -426,6 +460,10 @@ def run_driver(config, env):
 			      file=sys.stderr)
 			stop_run(driver, run_dir)
 			rc = 128 + exc.signum
+		else:
+			# A driver that failed may have left the service it spawned.
+			if rc != 0:
+				stop_leftovers(run_dir)
 		pump.join(timeout=10)
 	return rc
 
