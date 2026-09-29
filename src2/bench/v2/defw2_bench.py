@@ -155,8 +155,8 @@ def check_memory(args):
 	per_client = args.payload_bytes * (2 if args.bulk else 1)
 	needed = per_client * args.clients + args.payload_bytes
 	try:
-		available = (os.sysconf('SC_AVPHYS_PAGES') *
-			     os.sysconf('SC_PAGE_SIZE'))
+		pages = os.sysconf('SC_AVPHYS_PAGES')
+		available = pages * os.sysconf('SC_PAGE_SIZE')
 	except (ValueError, OSError):
 		return
 	if needed > available * 0.8:
