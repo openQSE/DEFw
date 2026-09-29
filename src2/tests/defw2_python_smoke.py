@@ -9,7 +9,9 @@ Python.
 """
 
 import sys
+import threading
 import time
+import warnings
 
 import defw2
 
@@ -50,6 +52,60 @@ def count_while_workers_wait(seconds):
 	while time.monotonic() < deadline:
 		ticks += 1
 	return ticks
+
+
+def check_close_does_not_free_under_a_worker():
+	"""A worker still in a handler must outlive close(), not be freed under.
+
+	close() frees the queue, the mutex and the condition variable that a
+	worker uses. A handler that outlasts the wait used to be freed under,
+	which corrupts memory instead of leaking it. The handler here is held
+	open until close() has returned, so nothing about this races.
+	"""
+	entered = threading.Event()
+	release = threading.Event()
+
+	class Slow:
+		def echo(self, request):
+			entered.set()
+			release.wait(30)
+			return request
+
+	server = defw2.Runtime(role='server', node_name='py-slow')
+	host = defw2.ServiceHost(server, 'py-slow-echo')
+	host.CLOSE_TIMEOUT = 0.2
+	host.start(Slow(), workers=1)
+
+	client = defw2.Runtime(role='client', node_name='py-slow-client')
+	echo = defw2.Echo(client, host.address)
+
+	def call():
+		try:
+			echo.echo(b'slow')
+		except defw2.DefwError:
+			# the queue closes under it, which is expected
+			pass
+
+	caller = threading.Thread(target=call, daemon=True)
+	caller.start()
+	check('the slow handler is running', entered.wait(10))
+
+	with warnings.catch_warnings(record=True) as caught:
+		warnings.simplefilter('always')
+		host.close()
+	warned = [w for w in caught if w.category is RuntimeWarning]
+	check('close warns rather than freeing under a worker',
+	      len(warned) == 1)
+	check('the warning says the service was left allocated',
+	      bool(warned) and 'left allocated' in str(warned[0].message))
+
+	release.set()
+	caller.join(10)
+	check('the slow caller finished', not caller.is_alive())
+
+	echo.close()
+	client.close()
+	server.close()
 
 
 def main():
@@ -103,6 +159,8 @@ def main():
 	client.close()
 	host.close()
 	server.close()
+
+	check_close_does_not_free_under_a_worker()
 
 	print('PYTHON SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

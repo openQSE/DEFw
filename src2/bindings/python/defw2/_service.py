@@ -12,6 +12,7 @@ server span reports as its queue event.
 """
 
 import threading
+import warnings
 
 from ._defw2 import ffi, lib
 from ._echo import API_ECHO, PROVIDER_ECHO
@@ -25,7 +26,13 @@ class ServiceHost:
 
 	A handler is either a callable taking (method, request) or an object
 	whose method names match the API's, each taking the request bytes.
+
+	CLOSE_TIMEOUT is how long close() waits for a worker to leave a
+	handler before it gives up and leaks the service. Raise it on a host
+	whose handlers are legitimately slow.
 	"""
+
+	CLOSE_TIMEOUT = 5
 
 	def __init__(self, runtime, service_id, service_type=API_ECHO,
 		     provider_id=PROVIDER_ECHO, depth=0):
@@ -120,16 +127,33 @@ class ServiceHost:
 		lib.defw2_service_queue_close(self._svc)
 
 	def join(self, timeout=None):
+		"""Wait for the workers. True when every one of them has left."""
 		for thread in self._workers:
 			thread.join(timeout)
-		self._workers = []
+		self._workers = [t for t in self._workers if t.is_alive()]
+		return not self._workers
 
 	def close(self):
-		if self._svc is not None:
-			self.stop()
-			self.join(timeout=5)
-			lib.defw2_service_destroy(self._svc)
+		if self._svc is None:
+			return
+		self.stop()
+		if not self.join(timeout=self.CLOSE_TIMEOUT):
+			# A worker still inside a handler owns the queue that
+			# defw2_service_destroy would free, along with the
+			# mutex and condition variable it is waiting on.
+			# Freeing them under a live thread corrupts memory,
+			# so the allocation is given up instead. The workers
+			# are daemons, so this does not hold up exit.
+			warnings.warn(
+				'defw2: a service worker outlasted the {}s '
+				'close, so the service was left allocated '
+				'rather than freed under it'.format(
+					self.CLOSE_TIMEOUT),
+				RuntimeWarning, stacklevel=2)
 			self._svc = None
+			return
+		lib.defw2_service_destroy(self._svc)
+		self._svc = None
 
 	def __enter__(self):
 		return self
