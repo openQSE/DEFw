@@ -198,3 +198,6 @@ The payload size decides v1's path, which matters when reading results.
 - The launcher refuses a payload and client count that look too large for the
   available memory. `--force` skips this check and the libfabric check.
 - Stopping the launcher with Ctrl-C or SIGTERM stops every process of the run.
+  So does a run that times out or fails, including an echo service that never
+  finished registering, which would otherwise keep its port and fail the next
+  run.
