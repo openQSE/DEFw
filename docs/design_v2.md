@@ -81,6 +81,7 @@ Slurm plugin calling DEFw directly in C and the gateway daemon being deleted.
 - [Risks and Open Questions](#risks-and-open-questions)
 - [Phased Plan](#phased-plan)
 - [Success Criteria](#success-criteria)
+- [Phase 0 Results](#phase-0-results)
 - [Appendix A: DEFw v1 Inventory](#appendix-a-defw-v1-inventory)
 - [Appendix B: Dependencies and Licenses](#appendix-b-dependencies-and-licenses)
 - [Appendix C: References](#appendix-c-references)
@@ -1028,36 +1029,47 @@ the recommended path.
 ## Profiling and the v1 Comparison
 
 Profiling is a first-class component, built in phase 0 and switched on for
-every benchmark run. Its vocabulary is the QFw benchmarking design's, so the
-existing extractor produces the comparison reports.
+every benchmark run. Its vocabulary is the QFw benchmarking design's. QFw's
+extractor for that vocabulary, `qfw_bench_extract`, does not exist yet, so
+the comparison is made by `src2/bench/defw_bench_compare.py`, which joins
+the summary reports that the v1 and v2 harnesses both write.
 
 ### What is recorded
 
 | Source | Records | How enabled |
 | --- | --- | --- |
-| Margo profiling | Per-RPC count, elapsed time, call path dependency chain | `enable_profiling` in the Margo JSON, or `MARGO_ENABLE_PROFILING=1` |
-| Margo diagnostics | Progress loop and trigger statistics | `enable_diagnostics`, or `MARGO_ENABLE_DIAGNOSTICS=1` |
+| Margo monitor | Per-RPC count, elapsed time and the calling RPC, one `stats.json` per process beside the spans | `DEFW2_MARGO_MONITOR=1` together with `DEFW2_PROFILE=1`. Off by default, see below |
 | `libdefw2` spans | One `qfw.transport.rpc` span per forward with `qfw.rpc.api`, `qfw.rpc.method`, `qfw.transport.kind` (`ofi+tcp`, `ofi+cxi`, `na+sm`), request bytes, response bytes, bulk bytes, status category, and the tier | `DEFW2_PROFILE=1` |
 | `libdefw2` server timings | Decode time, queue wait for Python services, handler time, encode time, as span events on the server span | `DEFW2_PROFILE=1` |
 | `libdefw2` metrics | `qfw.transport.rpc.duration` and `qfw.transport.rpc.bytes` histograms labelled by `qfw.transport.kind` and tier | `DEFW2_PROFILE=1` |
 | Process metrics | CPU time and maximum resident set at exit, from `getrusage` | always |
+
+This table first named Margo's breadcrumb profiler and its diagnostics,
+switched on by `enable_profiling` and `enable_diagnostics` in the Margo JSON
+or by `MARGO_ENABLE_PROFILING` and `MARGO_ENABLE_DIAGNOSTICS`. Margo 0.24
+removed both. None of those names appears in the Margo 0.24.2 library, and
+neither does `margo_profile_dump`. Per-RPC statistics now come from Margo's
+monitor. The runtime installs it only on request, because the default
+monitor in Margo 0.24.2 reads freed memory under concurrent load and takes
+a service down (`mochi-hpc/mochi-margo` issue #322). The `libdefw2` spans
+cover the same ground without it.
 
 Every RPC header carries the W3C `traceparent` the caller supplies, so v2
 spans join QFw's Phase 1 benchmarking traces the way v1's do, following
 `openQSE/DEFw` pull request #17, which added trace-context propagation across
 the v1 RPC boundary.
 
-All four sources land in the same place, and the comparison is produced by
-tooling QFw already has.
+All four sources land in the same place. The comparison comes from
+`defw_bench_compare.py` until QFw's extractor exists.
 
 ```mermaid
 flowchart LR
     A["libdefw2 spans<br/>per RPC round trip"]
     B["libdefw2 metrics<br/>duration and byte histograms"]
-    M["Margo profiling<br/>per-RPC count, time, call path"]
+    M["Margo monitor, opt-in<br/>per-RPC count, time, call path"]
     R["getrusage<br/>CPU time and peak memory"]
     F[("OTLP JSON files<br/>node-local, under DEFW_LOG_DIR")]
-    X["qfw_bench_extract"]
+    X["defw_bench_compare.py<br/>qfw_bench_extract later"]
     Rep["Comparison report<br/>v1 against v2"]
 
     A --> F
@@ -1080,7 +1092,8 @@ free, and at fabric latencies it would tax the quantity under measurement.
 
 **Node-local export.** Each process writes OTLP JSON files under
 `DEFW_LOG_DIR`, the benchmarking design's profile 1, using a small writer in
-C with no external dependency. `qfw_bench_extract` reads them unchanged.
+C with no external dependency. They follow that profile so that QFw's
+extractor can read them unchanged once it exists.
 
 ### Timestamps
 
@@ -1144,7 +1157,9 @@ and adds a small `DEFW2_` set.
 | `DEFW2_ADDRESS` | | Margo address string, default `ofi+tcp://`. `ofi+cxi://` on Slingshot, `na+sm://` for single-node tests. |
 | `DEFW2_DIRSVC` | | Directory address string or path to its address file. |
 | `DEFW2_MARGO_CONFIG` | | Path to the Margo JSON configuration. A built-in default is used when unset. |
-| `DEFW2_PROFILE` | | `1` turns on spans, metrics and Margo profiling. |
+| `DEFW2_PROFILE` | | `1` turns on spans and metrics. |
+| `DEFW2_MARGO_MONITOR` | | `1` also installs Margo's monitor while profiling is on. Off by default, see Profiling and the v1 Comparison. |
+| `DEFW2_RPC_THREADS` | | Handler execution streams. A server gets two when it is unset. |
 | `DEFW2_HEARTBEAT_MS`, `DEFW2_HEARTBEAT_TIMEOUT_MS` | | Liveness intervals. |
 
 The launcher gains the `DEFW2_` names in its allow list and a per-role switch
@@ -1168,14 +1183,14 @@ the prototype.
     ]
   },
   "progress_pool": "progress",
-  "rpc_pool": "handlers",
-  "enable_profiling": false,
-  "enable_diagnostics": false
+  "rpc_pool": "handlers"
 }
 ```
 
-The built-in default is this file with two handler streams. Sites tune it
-without rebuilding.
+The runtime's built-in configuration is shorter: a progress thread and
+`DEFW2_RPC_THREADS` handler streams, plus Margo's monitor when
+`DEFW2_MARGO_MONITOR` asks for it. A site that wants explicit pools like
+these supplies the file through `DEFW2_MARGO_CONFIG`, without rebuilding.
 
 ### Container
 
@@ -1302,6 +1317,8 @@ met.
 | 4. Decision | Review with Amir and interested parties. | Go, no-go, or go with changes. |
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
 
+Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
+
 ## Success Criteria
 
 The prototype succeeds if the comparison report shows all of the following.
@@ -1324,6 +1341,99 @@ fitted to the result.
 A result that meets the performance targets but fails the Python service
 criterion is a no-go, because QFw's services are Python for the foreseeable
 future.
+
+## Phase 0 Results
+
+Phase 0's exit criterion is met. These results were measured on 29 September
+2026.
+
+**How it was measured.** The QFw-SLURM-Cluster image, built from its
+`defw2-prototype` branch, ran one container with a compute node's limits of
+4 CPUs and 6 GiB. v1 is DEFw `master` at `f2da31b`, which includes
+`openQSE/DEFw` #24. Without that change v1 drops the first RPC it receives
+over OFI, and the benchmark's echo service never registers. v2 is
+`defw2-prototype` at `4a940a7`. For each workload the five configurations ran
+back to back: v1 on tcp, `ofi+tcp` and `sm2`, and v2 on `ofi+tcp` and
+`na+sm`. Each v2 run is set against v1 on the same provider. v1 cannot use
+Mercury's `na+sm`, so the shared-memory pair is `na+sm` against v1's `sm2`.
+Clients and services are C unless a row says otherwise, and profiling was on
+in every run.
+
+**Round trip and throughput.** Latency is the client's p50 round trip.
+Throughput is calls per second across all clients.
+
+| Workload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| W1, 64 B, 1 client, p50 | 4.303 ms | 0.081 ms | 53x | 4.271 ms | 0.067 ms | 64x |
+| W1, 64 B, 8 clients | 426 calls/s | 7,811 calls/s | 18x | 419 calls/s | 42,994 calls/s | 103x |
+| W2, 4 KiB, 1 client, p50 | 10.076 ms | 0.190 ms | 53x | 10.277 ms | 0.091 ms | 113x |
+| W2, 4 KiB, 8 clients | 184 calls/s | 4,863 calls/s | 26x | 175 calls/s | 27,665 calls/s | 158x |
+
+**Bulk.** W3 echoes one payload per call from one client. The figures are
+payload MiB per second of round trip.
+
+| Payload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 MiB | 49 | 2,669 | 54x | 0.6 | 3,875 | 6,000x |
+| 16 MiB | 68 | 1,749 | 26x | 0.6 | 3,119 | 4,800x |
+| 256 MiB | 52 | 1,900 | 37x | not run | 3,390 | |
+
+**Python.** W1 with 64 B payloads and one client, except the last row, which
+is eight clients against a Python service.
+
+| Pairing | v2 `ofi+tcp` | against v1 `ofi+tcp` | v2 `na+sm` | against v1 `sm2` |
+| --- | --- | --- | --- | --- |
+| C client, C service | 0.081 ms | 53x | 0.067 ms | 64x |
+| Python client, C service | 0.091 ms | 47x | 0.071 ms | 60x |
+| C client, Python service | 0.130 ms | 33x | 0.102 ms | 42x |
+| Python client and service | 0.140 ms | 31x | 0.091 ms | 47x |
+| 8 clients, Python service | 6,357 calls/s | 15x | 18,311 calls/s | 44x |
+
+No call failed in any run. The Python service held all eight clients without
+a stall, which is the second half of the exit criterion.
+
+**Success criteria that can be judged now.**
+
+| Criterion | Target | Result |
+| --- | --- | --- |
+| Small RPC round trip, C client, `ofi+tcp` | At most one tenth of v1 | One 53rd. Met. |
+| Small RPC round trip, Python client through the binding | At most one half of v1 | One 47th on `ofi+tcp`. Met. |
+| Small RPC round trip, Python service, C client | At most one half of v1 | One 33rd on `ofi+tcp`. Met. |
+| Throughput at eight concurrent clients | At least four times v1 | 18 times on `ofi+tcp` and 103 times on shared memory, and 15 and 44 times with the Python service. Met. |
+| Bulk bandwidth, 16 MiB and above | At least eighty percent of Mercury's own bulk benchmark | Not measured yet. `hg_bw_read` and `hg_bw_write` are in the image. |
+
+The other criteria belong to later phases: W5, W7, unsafe deserialization,
+lines of code and the SPANK flow.
+
+**What the matched pairing shows.**
+
+- v1's small-RPC cost does not depend on the transport. W1 takes 4.29 ms
+  over tcp, 4.30 ms over `ofi+tcp` and 4.27 ms over `sm2`, because Python
+  dominates it. Pairing providers barely moves the small-RPC ratios.
+- Bulk is where the pairing matters. Over `ofi+tcp`, v1 moves a W3 payload
+  by RMA. 1 MiB takes 20 ms rather than the 1.46 s it takes over tcp, and
+  256 MiB completes in 4.9 s where tcp would take about six minutes a call.
+  Ratios in the thousands against v1 over tcp measure v1's inline base64
+  path, not its best one. Against v1 on the same provider, v2's bulk rate is
+  26 to 54 times higher.
+- v1's `sm2` has no RMA. Its W3 payloads travel inline, and above the
+  256 KiB eager buffer they go over TCP, so the shared-memory W3 pair sets
+  v2's shared memory against v1's inline path. 256 MiB was not run on
+  `sm2`, at about six minutes a call.
+- v1 over `sm2` spends more CPU for the same latency. At W1 it uses 5.5 ms a
+  call in the client and 5.4 ms in the service, against 2.1 and 2.4 ms over
+  `ofi+tcp`.
+- Peak memory is the least settled figure. In W1 the C service peaked at
+  16 MiB on `na+sm` and 34 MiB on `ofi+tcp` against a C client, but at
+  94 and 116 MiB against the Python client, where v1's service peaked at
+  44 and 56 MiB. The same service code should not care which language
+  calls it, so this wants a closer look before memory is quoted. From
+  16 MiB payloads up v2 is well below v1, at 361 MiB against 1,781 MiB for
+  256 MiB. The Python service peaks between 104 and 172 MiB.
+- Eight clients over `ofi+tcp` are CPU-bound. They share four CPUs with the
+  service and its progress threads, and v2 manages 7,811 calls/s with eight
+  clients against 12,047 with one, so that row understates v2. `na+sm`
+  leaves out the network stack and scales from 13,912 to 42,994 calls/s.
 
 ## Appendix A: DEFw v1 Inventory
 
