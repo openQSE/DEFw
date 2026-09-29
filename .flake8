@@ -1,2 +1,4 @@
 [flake8]
-ignore = W191,E101,E265
+# extend-ignore, not ignore: ignore= REPLACES pycodestyle defaults,
+# which include the mutually contradictory W503 and W504.
+extend-ignore = W191,E101,E265
