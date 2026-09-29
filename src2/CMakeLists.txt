@@ -61,7 +61,16 @@ set_target_properties(defw2-echo
 	PROPERTIES
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
-install(TARGETS defw2 defw2-echo
+# The measured client. The launcher beside it, bench/v2/defw2_bench.py, runs
+# as many of these as the workload asks for and writes the report.
+add_executable(defw2-bench bench/v2/defw2_bench.c)
+target_link_libraries(defw2-bench PRIVATE defw2)
+target_compile_options(defw2-bench PRIVATE -Wall -Wextra)
+set_target_properties(defw2-bench
+	PROPERTIES
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+
+install(TARGETS defw2 defw2-echo defw2-bench
 	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/defw2
