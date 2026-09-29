@@ -1028,36 +1028,47 @@ the recommended path.
 ## Profiling and the v1 Comparison
 
 Profiling is a first-class component, built in phase 0 and switched on for
-every benchmark run. Its vocabulary is the QFw benchmarking design's, so the
-existing extractor produces the comparison reports.
+every benchmark run. Its vocabulary is the QFw benchmarking design's. QFw's
+extractor for that vocabulary, `qfw_bench_extract`, does not exist yet, so
+the comparison is made by `src2/bench/defw_bench_compare.py`, which joins
+the summary reports that the v1 and v2 harnesses both write.
 
 ### What is recorded
 
 | Source | Records | How enabled |
 | --- | --- | --- |
-| Margo profiling | Per-RPC count, elapsed time, call path dependency chain | `enable_profiling` in the Margo JSON, or `MARGO_ENABLE_PROFILING=1` |
-| Margo diagnostics | Progress loop and trigger statistics | `enable_diagnostics`, or `MARGO_ENABLE_DIAGNOSTICS=1` |
+| Margo monitor | Per-RPC count, elapsed time and the calling RPC, one `stats.json` per process beside the spans | `DEFW2_MARGO_MONITOR=1` together with `DEFW2_PROFILE=1`. Off by default, see below |
 | `libdefw2` spans | One `qfw.transport.rpc` span per forward with `qfw.rpc.api`, `qfw.rpc.method`, `qfw.transport.kind` (`ofi+tcp`, `ofi+cxi`, `na+sm`), request bytes, response bytes, bulk bytes, status category, and the tier | `DEFW2_PROFILE=1` |
 | `libdefw2` server timings | Decode time, queue wait for Python services, handler time, encode time, as span events on the server span | `DEFW2_PROFILE=1` |
 | `libdefw2` metrics | `qfw.transport.rpc.duration` and `qfw.transport.rpc.bytes` histograms labelled by `qfw.transport.kind` and tier | `DEFW2_PROFILE=1` |
 | Process metrics | CPU time and maximum resident set at exit, from `getrusage` | always |
+
+This table first named Margo's breadcrumb profiler and its diagnostics,
+switched on by `enable_profiling` and `enable_diagnostics` in the Margo JSON
+or by `MARGO_ENABLE_PROFILING` and `MARGO_ENABLE_DIAGNOSTICS`. Margo 0.24
+removed both. None of those names appears in the Margo 0.24.2 library, and
+neither does `margo_profile_dump`. Per-RPC statistics now come from Margo's
+monitor. The runtime installs it only on request, because the default
+monitor in Margo 0.24.2 reads freed memory under concurrent load and takes
+a service down (`mochi-hpc/mochi-margo` issue #322). The `libdefw2` spans
+cover the same ground without it.
 
 Every RPC header carries the W3C `traceparent` the caller supplies, so v2
 spans join QFw's Phase 1 benchmarking traces the way v1's do, following
 `openQSE/DEFw` pull request #17, which added trace-context propagation across
 the v1 RPC boundary.
 
-All four sources land in the same place, and the comparison is produced by
-tooling QFw already has.
+All four sources land in the same place. The comparison comes from
+`defw_bench_compare.py` until QFw's extractor exists.
 
 ```mermaid
 flowchart LR
     A["libdefw2 spans<br/>per RPC round trip"]
     B["libdefw2 metrics<br/>duration and byte histograms"]
-    M["Margo profiling<br/>per-RPC count, time, call path"]
+    M["Margo monitor, opt-in<br/>per-RPC count, time, call path"]
     R["getrusage<br/>CPU time and peak memory"]
     F[("OTLP JSON files<br/>node-local, under DEFW_LOG_DIR")]
-    X["qfw_bench_extract"]
+    X["defw_bench_compare.py<br/>qfw_bench_extract later"]
     Rep["Comparison report<br/>v1 against v2"]
 
     A --> F
@@ -1080,7 +1091,8 @@ free, and at fabric latencies it would tax the quantity under measurement.
 
 **Node-local export.** Each process writes OTLP JSON files under
 `DEFW_LOG_DIR`, the benchmarking design's profile 1, using a small writer in
-C with no external dependency. `qfw_bench_extract` reads them unchanged.
+C with no external dependency. They follow that profile so that QFw's
+extractor can read them unchanged once it exists.
 
 ### Timestamps
 
@@ -1144,7 +1156,9 @@ and adds a small `DEFW2_` set.
 | `DEFW2_ADDRESS` | | Margo address string, default `ofi+tcp://`. `ofi+cxi://` on Slingshot, `na+sm://` for single-node tests. |
 | `DEFW2_DIRSVC` | | Directory address string or path to its address file. |
 | `DEFW2_MARGO_CONFIG` | | Path to the Margo JSON configuration. A built-in default is used when unset. |
-| `DEFW2_PROFILE` | | `1` turns on spans, metrics and Margo profiling. |
+| `DEFW2_PROFILE` | | `1` turns on spans and metrics. |
+| `DEFW2_MARGO_MONITOR` | | `1` also installs Margo's monitor while profiling is on. Off by default, see Profiling and the v1 Comparison. |
+| `DEFW2_RPC_THREADS` | | Handler execution streams. A server gets two when it is unset. |
 | `DEFW2_HEARTBEAT_MS`, `DEFW2_HEARTBEAT_TIMEOUT_MS` | | Liveness intervals. |
 
 The launcher gains the `DEFW2_` names in its allow list and a per-role switch
@@ -1168,14 +1182,14 @@ the prototype.
     ]
   },
   "progress_pool": "progress",
-  "rpc_pool": "handlers",
-  "enable_profiling": false,
-  "enable_diagnostics": false
+  "rpc_pool": "handlers"
 }
 ```
 
-The built-in default is this file with two handler streams. Sites tune it
-without rebuilding.
+The runtime's built-in configuration is shorter: a progress thread and
+`DEFW2_RPC_THREADS` handler streams, plus Margo's monitor when
+`DEFW2_MARGO_MONITOR` asks for it. A site that wants explicit pools like
+these supplies the file through `DEFW2_MARGO_CONFIG`, without rebuilding.
 
 ### Container
 
