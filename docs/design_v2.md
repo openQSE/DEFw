@@ -81,6 +81,7 @@ Slurm plugin calling DEFw directly in C and the gateway daemon being deleted.
 - [Risks and Open Questions](#risks-and-open-questions)
 - [Phased Plan](#phased-plan)
 - [Success Criteria](#success-criteria)
+- [Phase 0 Results](#phase-0-results)
 - [Appendix A: DEFw v1 Inventory](#appendix-a-defw-v1-inventory)
 - [Appendix B: Dependencies and Licenses](#appendix-b-dependencies-and-licenses)
 - [Appendix C: References](#appendix-c-references)
@@ -1316,6 +1317,8 @@ met.
 | 4. Decision | Review with Amir and interested parties. | Go, no-go, or go with changes. |
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
 
+Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
+
 ## Success Criteria
 
 The prototype succeeds if the comparison report shows all of the following.
@@ -1338,6 +1341,99 @@ fitted to the result.
 A result that meets the performance targets but fails the Python service
 criterion is a no-go, because QFw's services are Python for the foreseeable
 future.
+
+## Phase 0 Results
+
+Phase 0's exit criterion is met. These results were measured on 29 September
+2026.
+
+**How it was measured.** The QFw-SLURM-Cluster image, built from its
+`defw2-prototype` branch, ran one container with a compute node's limits of
+4 CPUs and 6 GiB. v1 is DEFw `master` at `f2da31b`, which includes
+`openQSE/DEFw` #24. Without that change v1 drops the first RPC it receives
+over OFI, and the benchmark's echo service never registers. v2 is
+`defw2-prototype` at `4a940a7`. For each workload the five configurations ran
+back to back: v1 on tcp, `ofi+tcp` and `sm2`, and v2 on `ofi+tcp` and
+`na+sm`. Each v2 run is set against v1 on the same provider. v1 cannot use
+Mercury's `na+sm`, so the shared-memory pair is `na+sm` against v1's `sm2`.
+Clients and services are C unless a row says otherwise, and profiling was on
+in every run.
+
+**Round trip and throughput.** Latency is the client's p50 round trip.
+Throughput is calls per second across all clients.
+
+| Workload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| W1, 64 B, 1 client, p50 | 4.303 ms | 0.081 ms | 53x | 4.271 ms | 0.067 ms | 64x |
+| W1, 64 B, 8 clients | 426 calls/s | 7,811 calls/s | 18x | 419 calls/s | 42,994 calls/s | 103x |
+| W2, 4 KiB, 1 client, p50 | 10.076 ms | 0.190 ms | 53x | 10.277 ms | 0.091 ms | 113x |
+| W2, 4 KiB, 8 clients | 184 calls/s | 4,863 calls/s | 26x | 175 calls/s | 27,665 calls/s | 158x |
+
+**Bulk.** W3 echoes one payload per call from one client. The figures are
+payload MiB per second of round trip.
+
+| Payload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 MiB | 49 | 2,669 | 54x | 0.6 | 3,875 | 6,000x |
+| 16 MiB | 68 | 1,749 | 26x | 0.6 | 3,119 | 4,800x |
+| 256 MiB | 52 | 1,900 | 37x | not run | 3,390 | |
+
+**Python.** W1 with 64 B payloads and one client, except the last row, which
+is eight clients against a Python service.
+
+| Pairing | v2 `ofi+tcp` | against v1 `ofi+tcp` | v2 `na+sm` | against v1 `sm2` |
+| --- | --- | --- | --- | --- |
+| C client, C service | 0.081 ms | 53x | 0.067 ms | 64x |
+| Python client, C service | 0.091 ms | 47x | 0.071 ms | 60x |
+| C client, Python service | 0.130 ms | 33x | 0.102 ms | 42x |
+| Python client and service | 0.140 ms | 31x | 0.091 ms | 47x |
+| 8 clients, Python service | 6,357 calls/s | 15x | 18,311 calls/s | 44x |
+
+No call failed in any run. The Python service held all eight clients without
+a stall, which is the second half of the exit criterion.
+
+**Success criteria that can be judged now.**
+
+| Criterion | Target | Result |
+| --- | --- | --- |
+| Small RPC round trip, C client, `ofi+tcp` | At most one tenth of v1 | One 53rd. Met. |
+| Small RPC round trip, Python client through the binding | At most one half of v1 | One 47th on `ofi+tcp`. Met. |
+| Small RPC round trip, Python service, C client | At most one half of v1 | One 33rd on `ofi+tcp`. Met. |
+| Throughput at eight concurrent clients | At least four times v1 | 18 times on `ofi+tcp` and 103 times on shared memory, and 15 and 44 times with the Python service. Met. |
+| Bulk bandwidth, 16 MiB and above | At least eighty percent of Mercury's own bulk benchmark | Not measured yet. `hg_bw_read` and `hg_bw_write` are in the image. |
+
+The other criteria belong to later phases: W5, W7, unsafe deserialization,
+lines of code and the SPANK flow.
+
+**What the matched pairing shows.**
+
+- v1's small-RPC cost does not depend on the transport. W1 takes 4.29 ms
+  over tcp, 4.30 ms over `ofi+tcp` and 4.27 ms over `sm2`, because Python
+  dominates it. Pairing providers barely moves the small-RPC ratios.
+- Bulk is where the pairing matters. Over `ofi+tcp`, v1 moves a W3 payload
+  by RMA. 1 MiB takes 20 ms rather than the 1.46 s it takes over tcp, and
+  256 MiB completes in 4.9 s where tcp would take about six minutes a call.
+  Ratios in the thousands against v1 over tcp measure v1's inline base64
+  path, not its best one. Against v1 on the same provider, v2's bulk rate is
+  26 to 54 times higher.
+- v1's `sm2` has no RMA. Its W3 payloads travel inline, and above the
+  256 KiB eager buffer they go over TCP, so the shared-memory W3 pair sets
+  v2's shared memory against v1's inline path. 256 MiB was not run on
+  `sm2`, at about six minutes a call.
+- v1 over `sm2` spends more CPU for the same latency. At W1 it uses 5.5 ms a
+  call in the client and 5.4 ms in the service, against 2.1 and 2.4 ms over
+  `ofi+tcp`.
+- Peak memory is the least settled figure. In W1 the C service peaked at
+  16 MiB on `na+sm` and 34 MiB on `ofi+tcp` against a C client, but at
+  94 and 116 MiB against the Python client, where v1's service peaked at
+  44 and 56 MiB. The same service code should not care which language
+  calls it, so this wants a closer look before memory is quoted. From
+  16 MiB payloads up v2 is well below v1, at 361 MiB against 1,781 MiB for
+  256 MiB. The Python service peaks between 104 and 172 MiB.
+- Eight clients over `ofi+tcp` are CPU-bound. They share four CPUs with the
+  service and its progress threads, and v2 manages 7,811 calls/s with eight
+  clients against 12,047 with one, so that row understates v2. `na+sm`
+  leaves out the network stack and scales from 13,912 to 42,994 calls/s.
 
 ## Appendix A: DEFw v1 Inventory
 
