@@ -9,9 +9,9 @@ and the Python binding: configuration from the environment, `defw2_init`
 and `defw2_finalize`, identity, the status model, the logging sink,
 bindings and typed stubs, the service host with its call queue, `qfw.echo`
 as the reference service with its eager and bulk methods, the spans and
-histograms a comparison reads, and a `defw2` Python package that both
-calls and serves. The benchmarks that use all of it are a separate change.
-The directory client, the document tier and events are still to come.
+histograms the comparison reads, a `defw2` Python package that both calls
+and serves, and the benchmarks that measure the lot against v1. The
+directory client, the document tier and events are still to come.
 
 ## Building
 
@@ -78,7 +78,7 @@ DEFW2_ADDRESS=ofi+tcp:// defw2-echo ping ofi+tcp://10.0.0.5:45817 -b 16777216
 path, `-n` is the call count, `-p` the provider and `-t` the timeout in
 milliseconds. It is a development tool and reports nothing but latency and
 rate. The benchmark client that records spans and writes the OTLP files the
-comparison reads is `defw2-bench`, which is separate and still to come.
+comparison reads is `defw2-bench`, under `bench/`.
 
 ## Layout
 
@@ -92,6 +92,7 @@ comparison reads is `defw2-bench`, which is separate and still to come.
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
+| `bench/` | The benchmarks, and the v1 side of the comparison |
 
 ## Calling and serving
 
