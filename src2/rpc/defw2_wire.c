@@ -121,7 +121,19 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 			  DEFW2_RPC_CACHE_MAX, name);
 		goto out;
 	}
-	rt->rpc_cache[rt->rpc_cached].name = name;
+	/*
+	 * The name is copied, not borrowed. Every caller today passes a
+	 * literal, but the cache outlives the call and phase 1 looks names up
+	 * from the directory, so a borrowed pointer would dangle in a table
+	 * that is read on every lookup. A copy that fails costs only the
+	 * cache entry, so the call itself still goes ahead.
+	 */
+	rt->rpc_cache[rt->rpc_cached].name = strdup(name);
+	if (rt->rpc_cache[rt->rpc_cached].name == NULL) {
+		defw2_log(rt, DEFW2_LOG_WARNING,
+			  "cannot cache %s, it will re-register", name);
+		goto out;
+	}
 	rt->rpc_cache[rt->rpc_cached].id = id;
 	rt->rpc_cached++;
 out:

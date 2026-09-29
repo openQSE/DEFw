@@ -28,7 +28,7 @@
 #define DEFW2_RPC_CACHE_MAX	64
 
 struct defw2_rpc_entry {
-	const char	*name;
+	char		*name;		/* owned, freed in defw2_finalize */
 	hg_id_t		id;
 };
 

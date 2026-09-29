@@ -220,7 +220,12 @@ defw2_rc_t defw2_service_dispatch(struct defw2_service *svc, const char *api,
 	if (queue->depth != 0 && queue->length >= queue->depth) {
 		pthread_mutex_unlock(&queue->lock);
 		ABT_eventual_free(&call.done);
-		return DEFW2_ERR_TIMEOUT;
+		/*
+		 * Backpressure, not a deadline. A caller that retries a
+		 * timeout would hammer a service that is merely full, and
+		 * with a depth of one that is the common answer.
+		 */
+		return DEFW2_ERR_BUSY;
 	}
 	if (queue->tail == NULL)
 		queue->head = &call;

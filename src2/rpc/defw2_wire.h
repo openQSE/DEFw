@@ -61,7 +61,18 @@ static HG_INLINE hg_return_t hg_proc_defw2_bytes_t(hg_proc_t proc, void *arg)
 		bytes->data = (char *)malloc(bytes->len);
 		if (bytes->data == NULL)
 			return HG_NOMEM;
-		return hg_proc_memcpy(proc, bytes->data, bytes->len);
+		ret = hg_proc_memcpy(proc, bytes->data, bytes->len);
+		if (ret != HG_SUCCESS) {
+			/*
+			 * A decoded buffer is released through HG_FREE, which
+			 * a decode that fails may never reach. Drop it here
+			 * and leave NULL, so a later HG_FREE is a no-op
+			 * whichever way Mercury unwinds.
+			 */
+			free(bytes->data);
+			bytes->data = NULL;
+		}
+		return ret;
 	case HG_ENCODE:
 		return hg_proc_memcpy(proc, bytes->data, bytes->len);
 	case HG_FREE:

@@ -102,7 +102,7 @@ static void defw2_echo_ult(hg_handle_t handle)
 						       &reply_len, &answer,
 						       &waited);
 
-		if (rc == DEFW2_ERR_TIMEOUT)
+		if (rc == DEFW2_ERR_BUSY)
 			defw2_wire_status_set(&out.status, rc,
 					      DEFW2_CAT_PENDING_CAPACITY,
 					      "the service is at capacity");

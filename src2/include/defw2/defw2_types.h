@@ -31,6 +31,7 @@ typedef enum {
 	DEFW2_ERR_NOT_FOUND	= -7,
 	DEFW2_ERR_VERSION	= -8,
 	DEFW2_ERR_INTERNAL	= -9,
+	DEFW2_ERR_BUSY		= -10,
 } defw2_rc_t;
 
 typedef enum {

@@ -276,6 +276,8 @@ void defw2_runtime_stop(struct defw2_rt *rt)
 
 void defw2_finalize(defw2_rt_t *rt)
 {
+	int i;
+
 	if (rt == NULL)
 		return;
 
@@ -287,6 +289,8 @@ void defw2_finalize(defw2_rt_t *rt)
 	defw2_runtime_stop(rt);
 	free(rt->address);
 	free(rt->dirsvc);
+	for (i = 0; i < rt->rpc_cached; i++)
+		free(rt->rpc_cache[i].name);
 	defw2_log_close(rt);
 	pthread_mutex_destroy(&rt->rpc_lock);
 	pthread_mutex_destroy(&rt->log_lock);
@@ -392,6 +396,8 @@ const char *defw2_strerror(defw2_rc_t rc)
 		return "version mismatch";
 	case DEFW2_ERR_INTERNAL:
 		return "internal error";
+	case DEFW2_ERR_BUSY:
+		return "at capacity";
 	default:
 		return "unknown error";
 	}
