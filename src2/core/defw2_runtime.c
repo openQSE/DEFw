@@ -312,6 +312,11 @@ const char *defw2_node_name(const defw2_rt_t *rt)
 	return rt ? rt->node_name : NULL;
 }
 
+const char *defw2_dirsvc(const defw2_rt_t *rt)
+{
+	return rt ? rt->dirsvc : NULL;
+}
+
 const char *defw2_hostname(const defw2_rt_t *rt)
 {
 	return rt ? rt->hostname : NULL;

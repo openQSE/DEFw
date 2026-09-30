@@ -82,6 +82,12 @@ void defw2_finalize(defw2_rt_t *rt);
 const char *defw2_runtime_id(const defw2_rt_t *rt);
 const char *defw2_address(const defw2_rt_t *rt);
 const char *defw2_node_name(const defw2_rt_t *rt);
+/*
+ * Where the directory is, as the config resolved it, or NULL when this
+ * process was told there is none. This is the whole of the address bootstrap
+ * a caller sees: defw2_dir_open takes it directly.
+ */
+const char *defw2_dirsvc(const defw2_rt_t *rt);
 const char *defw2_hostname(const defw2_rt_t *rt);
 int defw2_pid(const defw2_rt_t *rt);
 defw2_role_t defw2_role(const defw2_rt_t *rt);
