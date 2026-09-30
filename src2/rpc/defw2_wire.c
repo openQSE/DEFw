@@ -25,6 +25,15 @@ void defw2_status_from_wire(defw2_status_t *status,
 {
 	if (status == NULL)
 		return;
+	/*
+	 * Release whatever a previous call left here. Reusing one status
+	 * across several calls is the natural way to write a loop, and
+	 * without this every message but the last would leak. Zero
+	 * initialised is still the caller's obligation before the first call,
+	 * since there is nothing to distinguish an uninitialised pointer
+	 * from a live one.
+	 */
+	free(status->message);
 	status->code = wire->code;
 	status->category = wire->category;
 	status->message = (wire->message != NULL && wire->message[0] != '\0')

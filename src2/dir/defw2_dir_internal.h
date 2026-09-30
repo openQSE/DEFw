@@ -169,6 +169,23 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 				   defw2_dir_result_t *result,
 				   defw2_status_t *status);
 
+/*
+ * As above, and also reports which binding each record's query selected, as
+ * an index into that record's bindings or DEFW2_DIR_NO_BINDING_INDEX.
+ *
+ * Only the service handler wants this: it has to put the selection on the
+ * wire, and deriving it again on the client would be the selection rules
+ * implemented twice. selected is malloc'd with entry_count entries and is
+ * the caller's to free; pass NULL to not be told.
+ */
+#define DEFW2_DIR_NO_BINDING_INDEX	0xffffffffu
+
+defw2_rc_t defw2_dir_store_resolve_indexed(defw2_dir_store_t *store,
+					   const defw2_dir_query_t *query,
+					   defw2_dir_result_t *result,
+					   uint32_t **selected,
+					   defw2_status_t *status);
+
 defw2_rc_t defw2_dir_store_generation(defw2_dir_store_t *store,
 				      const char *service_id,
 				      uint64_t *generation,

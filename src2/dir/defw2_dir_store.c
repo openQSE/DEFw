@@ -894,10 +894,21 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 				   defw2_dir_result_t *result,
 				   defw2_status_t *status)
 {
+	return defw2_dir_store_resolve_indexed(store, query, result, NULL,
+					       status);
+}
+
+defw2_rc_t defw2_dir_store_resolve_indexed(defw2_dir_store_t *store,
+					   const defw2_dir_query_t *query,
+					   defw2_dir_result_t *result,
+					   uint32_t **selected,
+					   defw2_status_t *status)
+{
 	static const defw2_dir_query_t match_all;
 	defw2_dir_record_own_t *record;
 	defw2_dir_arena_t *arena;
 	defw2_dir_entry_t *entries = NULL;
+	uint32_t *indices = NULL;
 	size_t matched = 0, capacity = 0;
 	defw2_rc_t rc = DEFW2_OK;
 
@@ -907,6 +918,8 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 		query = &match_all;
 
 	memset(result, 0, sizeof(*result));
+	if (selected != NULL)
+		*selected = NULL;
 	arena = calloc(1, sizeof(*arena));
 	if (arena == NULL)
 		return DEFW2_ERR_NOMEM;
@@ -926,6 +939,7 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 			size_t want = capacity ? capacity * 2 : 4;
 			defw2_dir_entry_t *grown = realloc(
 				entries, want * sizeof(*grown));
+			uint32_t *grown_indices;
 
 			if (grown == NULL) {
 				rc = DEFW2_ERR_NOMEM;
@@ -934,12 +948,21 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 			memset(grown + capacity, 0,
 			       (want - capacity) * sizeof(*grown));
 			entries = grown;
+			grown_indices = realloc(indices,
+						want * sizeof(*grown_indices));
+			if (grown_indices == NULL) {
+				rc = DEFW2_ERR_NOMEM;
+				break;
+			}
+			indices = grown_indices;
 			capacity = want;
 		}
 		if (!publish(arena, record, binding_index, &entries[matched])) {
 			rc = DEFW2_ERR_NOMEM;
 			break;
 		}
+		indices[matched] = binding_index >= 0 ?
+			(uint32_t)binding_index : DEFW2_DIR_NO_BINDING_INDEX;
 		matched++;
 	}
 	pthread_mutex_unlock(&store->lock);
@@ -948,11 +971,16 @@ defw2_rc_t defw2_dir_store_resolve(defw2_dir_store_t *store,
 		defw2_dir_arena_free(arena);
 		free(arena);
 		free(entries);
+		free(indices);
 		return rc;
 	}
 	result->entries = entries;
 	result->entry_count = matched;
 	result->arena = arena;
+	if (selected != NULL)
+		*selected = indices;
+	else
+		free(indices);
 	status_ok(status);
 	return DEFW2_OK;
 }
