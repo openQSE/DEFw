@@ -24,6 +24,7 @@ add_library(defw2 SHARED
 	dir/defw2_dir_store.c
 	dir/defw2_dir_svc.c
 	dir/defw2_dir_client.c
+	dir/defw2_dir_agent.c
 	services/echo/defw2_echo_svc.c)
 
 target_include_directories(defw2
@@ -137,6 +138,11 @@ if(BUILD_TESTING)
 	add_executable(defw2_dir_rpc_smoke tests/defw2_dir_rpc_smoke.c)
 	target_link_libraries(defw2_dir_rpc_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_dir_rpc_smoke COMMAND defw2_dir_rpc_smoke)
+
+	# Waits out several heartbeat timeouts, so it is the slow one.
+	add_executable(defw2_dir_agent_smoke tests/defw2_dir_agent_smoke.c)
+	target_link_libraries(defw2_dir_agent_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_dir_agent_smoke COMMAND defw2_dir_agent_smoke)
 
 	# The telemetry test leaves its files behind for the checker below.
 	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")

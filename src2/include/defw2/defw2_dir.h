@@ -338,8 +338,14 @@ defw2_rc_t defw2_dir_bind(defw2_service_t *svc,
  *
  * This is the half of the directory a service author should never have to
  * write: it registers the record, starts a Margo timer that heartbeats at
- * interval_ms, and re-registers with a fresh runtime_id if the directory ever
- * says it does not know this one. On a clean stop it deregisters.
+ * interval_ms, and registers again whenever the directory says it does not
+ * know this registration. On a clean stop it deregisters.
+ *
+ * Re-registering reuses this process's runtime_id rather than minting one.
+ * The runtime_id identifies the process, and it is what lets the directory
+ * refuse a heartbeat from a process that has already been replaced; a new one
+ * per attempt would give that up for nothing. A new runtime_id comes from a
+ * new process, which is exactly when the generation should move.
  *
  * The record's address, endpoint and runtime_id are filled from the runtime,
  * so a caller supplies the parts only it knows: service_id, service_type,

@@ -180,19 +180,52 @@ void defw2_dir_record_own_free(defw2_dir_record_own_t *record)
 	free(record->node_name);
 	free(record->hostname);
 	free(record->selector_name);
+	/*
+	 * These came from strdup, so releasing them through a const pointer is
+	 * well defined; it is only the declared type that says const.
+	 */
 	for (i = 0; i < record->binding_count; i++) {
-		free(record->bindings[i].binding_name);
-		free(record->bindings[i].api_id);
+		free((void *)(uintptr_t)record->bindings[i].binding_name);
+		free((void *)(uintptr_t)record->bindings[i].api_id);
 	}
 	free(record->bindings);
 	free_str_list(record->aliases, record->alias_count);
 	free_str_list(record->resources, record->resource_count);
 	for (i = 0; i < record->property_count; i++) {
-		free(record->properties[i].name);
-		free(record->properties[i].value);
+		free((void *)(uintptr_t)record->properties[i].name);
+		free((void *)(uintptr_t)record->properties[i].value);
 	}
 	free(record->properties);
 	free(record);
+}
+
+void defw2_dir_record_own_view(const defw2_dir_record_own_t *record,
+			       defw2_dir_record_t *view)
+{
+	if (record == NULL || view == NULL)
+		return;
+	memset(view, 0, sizeof(*view));
+	view->service_id = record->service_id;
+	view->service_type = record->service_type;
+	view->runtime_id = record->runtime_id;
+	view->generation = record->generation;
+	view->state = record->state;
+	view->address = record->address;
+	view->endpoint.node_name = record->node_name;
+	view->endpoint.hostname = record->hostname;
+	view->endpoint.pid = record->pid;
+	view->selector.name = record->selector_name;
+	view->selector.aliases = (const char *const *)record->aliases;
+	view->selector.alias_count = record->alias_count;
+	view->selector.resources = (const char *const *)record->resources;
+	view->selector.resource_count = record->resource_count;
+	view->registered_at_ns = record->registered_at_ns;
+	view->last_heartbeat_ns = record->last_heartbeat_ns;
+	view->retention_deadline_ns = record->retention_deadline_ns;
+	view->bindings = record->bindings;
+	view->binding_count = record->binding_count;
+	view->properties = record->properties;
+	view->property_count = record->property_count;
 }
 
 defw2_rc_t defw2_dir_record_own_from(const defw2_dir_record_t *src,
@@ -730,7 +763,7 @@ static long select_binding(const defw2_dir_record_own_t *record,
 	size_t i;
 
 	for (i = 0; i < record->binding_count; i++) {
-		const defw2_dir_binding_own_t *b = &record->bindings[i];
+		const defw2_dir_binding_t *b = &record->bindings[i];
 
 		if (query->binding_name != NULL &&
 		    !str_eq(b->binding_name, query->binding_name))

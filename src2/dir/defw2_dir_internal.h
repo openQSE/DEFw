@@ -65,18 +65,14 @@ void defw2_dir_arena_free(defw2_dir_arena_t *arena);
 
 /* --- the owned record ------------------------------------------------ */
 
-typedef struct {
-	char		*binding_name;
-	char		*api_id;
-	uint32_t	api_version;
-	uint16_t	provider_id;
-} defw2_dir_binding_own_t;
-
-typedef struct {
-	char	*name;
-	char	*value;
-} defw2_dir_property_own_t;
-
+/*
+ * The binding and property lists are the public structures, not parallel
+ * ones with the const dropped. Two structs that differ only in a qualifier
+ * are layout compatible but still distinct types, so casting an array of one
+ * to the other to build a view would be an aliasing violation. Owning the
+ * public shape means the view needs no cast at all, and the only place that
+ * has to remember these strings came from strdup is the free below.
+ */
 typedef struct defw2_dir_record_own {
 	char				*service_id;
 	char				*service_type;
@@ -87,14 +83,14 @@ typedef struct defw2_dir_record_own {
 	char				*node_name;
 	char				*hostname;
 	int32_t				pid;
-	defw2_dir_binding_own_t		*bindings;
+	defw2_dir_binding_t		*bindings;	/* owned strings */
 	size_t				binding_count;
 	char				*selector_name;
 	char				**aliases;
 	size_t				alias_count;
 	char				**resources;
 	size_t				resource_count;
-	defw2_dir_property_own_t	*properties;
+	defw2_dir_property_t		*properties;	/* owned strings */
 	size_t				property_count;
 	uint64_t			registered_at_ns;
 	uint64_t			last_heartbeat_ns;
@@ -103,6 +99,14 @@ typedef struct defw2_dir_record_own {
 } defw2_dir_record_own_t;
 
 void defw2_dir_record_own_free(defw2_dir_record_own_t *record);
+
+/*
+ * A public view of an owned record. Nothing is copied: view borrows every
+ * string and array from record, so it is valid only while record is. The
+ * agent uses it to re-send the registration it is holding on to.
+ */
+void defw2_dir_record_own_view(const defw2_dir_record_own_t *record,
+			       defw2_dir_record_t *view);
 
 /*
  * Deep copy a public record into an owned one. Ignores the fields the
