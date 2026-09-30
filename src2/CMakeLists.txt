@@ -21,6 +21,7 @@ add_library(defw2 SHARED
 	telemetry/defw2_otlp.c
 	telemetry/defw2_trace.c
 	host/defw2_service.c
+	dir/defw2_dir_store.c
 	services/echo/defw2_echo_svc.c)
 
 target_include_directories(defw2
@@ -120,6 +121,15 @@ if(BUILD_TESTING)
 	add_executable(defw2_queue_smoke tests/defw2_queue_smoke.c)
 	target_link_libraries(defw2_queue_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_queue_smoke COMMAND defw2_queue_smoke)
+
+	# Drives the store directly, so it needs no runtime and no provider.
+	# The argument is where the snapshot test writes; without it that one
+	# case is skipped.
+	add_executable(defw2_dir_store_smoke tests/defw2_dir_store_smoke.c)
+	target_link_libraries(defw2_dir_store_smoke PRIVATE defw2)
+	add_test(NAME defw2_dir_store_smoke
+		COMMAND defw2_dir_store_smoke
+			"${CMAKE_CURRENT_BINARY_DIR}/dir-snapshot.json")
 
 	# The telemetry test leaves its files behind for the checker below.
 	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")
