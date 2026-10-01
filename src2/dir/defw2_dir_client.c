@@ -88,6 +88,11 @@ defw2_rc_t defw2_dir_open(defw2_rt_t *rt, const char *address,
 	return DEFW2_OK;
 }
 
+struct defw2_rt *defw2_dir_runtime(const defw2_dir_t *dir)
+{
+	return dir != NULL ? dir->rt : NULL;
+}
+
 void defw2_dir_close(defw2_dir_t *dir)
 {
 	if (dir == NULL)

@@ -116,6 +116,12 @@ void defw2_dir_record_own_view(const defw2_dir_record_own_t *record,
 defw2_rc_t defw2_dir_record_own_from(const defw2_dir_record_t *src,
 				     defw2_dir_record_own_t **out);
 
+/*
+ * The runtime behind a directory handle. The cache needs it to build the
+ * bindings it hands out, and nothing outside libdefw2 has any use for it.
+ */
+struct defw2_rt *defw2_dir_runtime(const defw2_dir_t *dir);
+
 /* --- the store ------------------------------------------------------- */
 
 typedef struct defw2_dir_store defw2_dir_store_t;

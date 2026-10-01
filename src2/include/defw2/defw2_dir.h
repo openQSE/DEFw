@@ -303,6 +303,90 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 				const defw2_call_opts_t *opts,
 				uint64_t *generation, defw2_status_t *status);
 
+/* --- the binding cache ---------------------------------------------- */
+
+/*
+ * Resolve once, call many times, and notice when that stops being valid.
+ *
+ * A typed call needs a defw2_binding_t, and resolving one every time would
+ * put the directory on the hot path of every RPC in the system. The cache
+ * keeps the binding a query resolved to and hands the same one back until
+ * something says it is stale.
+ *
+ * What says so is the caller. Mercury reports failures per call, not per
+ * peer, so nothing else can know: a client whose forward fails at the
+ * transport calls defw2_dir_cache_failed and the next lookup re-resolves.
+ * That is the loop the design describes, and it is the whole invalidation
+ * story apart from the optional generation check below.
+ *
+ *	defw2_dir_cache_binding(cache, &query, &opts, &binding, &status);
+ *	rc = defw2_echo(binding, ...);
+ *	if (rc == DEFW2_ERR_TRANSPORT)
+ *		defw2_dir_cache_failed(cache, binding);
+ *
+ * A cache may be shared between threads. The bindings it returns belong to
+ * it and must not be freed by a caller; they stay valid until the cache is
+ * destroyed or the entry is invalidated, so a caller that keeps one across an
+ * invalidate should look it up again rather than hold it.
+ */
+typedef struct defw2_dir_cache defw2_dir_cache_t;
+
+/*
+ * The cache borrows dir, which must outlive it. One cache per directory
+ * handle is the expected shape; there is nothing to gain from two.
+ */
+defw2_rc_t defw2_dir_cache_create(defw2_dir_t *dir,
+				  defw2_dir_cache_t **cache);
+void defw2_dir_cache_destroy(defw2_dir_cache_t *cache);
+
+/*
+ * The binding this query resolves to, from the cache when it is there and by
+ * resolving when it is not. Queries are matched on every field, so passing
+ * the same query gets the same entry.
+ *
+ * A query that resolves to nothing is DEFW2_ERR_NOT_FOUND with the status
+ * carrying the directory's own answer, and nothing is cached: "not yet" is a
+ * state a caller retries, and remembering it would mean never noticing when
+ * the service arrives.
+ */
+defw2_rc_t defw2_dir_cache_binding(defw2_dir_cache_t *cache,
+				   const defw2_dir_query_t *query,
+				   const defw2_call_opts_t *opts,
+				   defw2_binding_t **binding,
+				   defw2_status_t *status);
+
+/*
+ * Report that a call through this binding failed at the transport, so the
+ * next lookup resolves again. Safe with a binding the cache does not know,
+ * which is what lets a caller report every failure without checking.
+ */
+void defw2_dir_cache_failed(defw2_dir_cache_t *cache,
+			    const defw2_binding_t *binding);
+
+/*
+ * Drop everything. For a client that has reason to believe the whole
+ * directory moved, such as one that just reconnected.
+ */
+void defw2_dir_cache_clear(defw2_dir_cache_t *cache);
+
+/*
+ * Ask the directory whether the services behind the cached bindings are still
+ * the same generation, and invalidate the ones that are not.
+ *
+ * This is the cheap half of the design's liveness story: get_generation
+ * carries no record, so a client can notice a restart it has not yet called
+ * into for the cost of one small RPC per cached service. It is optional, and
+ * a client that only calls defw2_dir_cache_failed is still correct, just one
+ * failed call slower to notice.
+ *
+ * Returns the number of entries it invalidated.
+ */
+size_t defw2_dir_cache_revalidate(defw2_dir_cache_t *cache,
+				  const defw2_call_opts_t *opts);
+
+/* How many bindings are held, which is for tests and for an operator. */
+size_t defw2_dir_cache_size(const defw2_dir_cache_t *cache);
+
 /* --- service side --------------------------------------------------- */
 
 /*
