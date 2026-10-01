@@ -1022,34 +1022,43 @@ locks.
 ```python
 import defw2
 
-rt = defw2.Runtime.from_environment()
-qpm = rt.resolve(service_type="qfw.qpm", resource="IQM-20q", binding="execution")
-job = qpm.async_run(qasm=qasm, num_qubits=5, num_shots=1024,
+rt = defw2.Runtime()
+record = defw2.Directory(rt).resolve(service_type="qfw.qpm",
+                                     resource="IQM-20q")[0]
+qpm = defw2.QPM.from_record(rt, record)
+job = qpm.async_run(qasm, num_qubits=5, num_shots=1024,
                     reservation_id=rid, token=token)
-result = qpm.read_cq(job.circuit_id, reservation_id=rid)
+result = qpm.read_cq(cid=job.cid, reservation_id=rid)
 ```
 
-Typed methods are bound one to one. Anything else on a binding goes through
-the document tier as a dictionary in and a dictionary out, which is how the
-telemetry surface works from day one.
+Typed methods are bound one to one, through the same C stubs a C caller
+uses. Anything else on a binding goes through the document tier as a
+dictionary in and a dictionary out, which is how the telemetry surface works
+from day one. Any Python thread may call: the runtime keeps Margo's progress
+loop on its own execution stream, so a thread Argobots has never seen can
+wait on a reply, which the tests do with eight threads sharing one client.
 
 **Service API.**
 
 ```python
 class QPM:
-    api_bindings = {
-        "control":   defw2.api.QPM_CONTROL,
-        "execution": defw2.api.QPM_EXECUTION,
-        "telemetry": defw2.api.DOCUMENT,   # dict in, dict out
-    }
-    def is_ready(self, token=None): ...
-    def async_run(self, qasm, num_qubits, num_shots, reservation_id, **kw): ...
+    def is_ready(self, request): ...           # request.reservation_id, .token
+    def async_run(self, request): ...          # .circuit, .num_qubits, .extra
+        return {"outcome": "ACCEPTED", "cid": cid, "qtask_id": qtask}
 
-host = defw2.ServiceHost.from_environment(service_id="qpm-iqm-ornl",
-                                          service_type="qfw.qpm",
+host = defw2.ServiceHost.from_environment("qpm-iqm-ornl", "qfw.qpm",
+                                          apis=defw2.QPM_APIS,
                                           selector=selector)
 host.serve(QPM())
 ```
+
+Each API is served on its own provider with its own queue and workers, so a
+QPM answers `is_ready` while its execution queue is backed up. Measured with
+one execution worker and a 2.5 second backlog of `async_run` calls,
+`is_ready` answered in 1.6 ms at worst. A typed call reaches Python as the C
+request structure read into plain values, and the dictionary a method
+returns is written straight into the C answer, so nothing is encoded between
+the two languages.
 
 The QPM service classes in QFw keep their method names and their dictionary
 results. The adapter in `src2/services/qpm_adapter` maps the typed

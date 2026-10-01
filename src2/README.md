@@ -11,9 +11,9 @@ sink, bindings and typed stubs, the service host with its call queue,
 `qfw.echo` as the reference service with its eager and bulk methods, the
 directory service with its client, agent and binding cache, the QPM's
 control, admission and execution APIs typed in C, the spans and histograms
-the comparison reads, a `defw2` Python package that both calls and serves,
-and the benchmarks that measure the lot against v1. The document tier and
-events are still to come, and so is the QPM's Python side.
+the comparison reads, a `defw2` Python package that calls and serves all of
+it, and the benchmarks that measure the lot against v1. The document tier
+and events are still to come.
 
 ## Building
 
@@ -36,7 +36,7 @@ cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-dirsvc \
 ctest --test-dir build -R defw2
 ```
 
-That prints fourteen passing tests. Each line of it is doing something, so
+That prints fifteen passing tests. Each line of it is doing something, so
 changing one of them tends to be how a build goes wrong:
 
 - **The paths are set by hand rather than with `module load`.** The image
@@ -179,6 +179,13 @@ A C service supplies an operations table per API. Each operation answers
 into a structure whose strings come from the call, through
 `defw2_call_strdup` and its relatives, and the provider frees all of it once
 the reply is on the wire.
+
+A Python service answers the same calls through the call queue, as a typed
+call: the consumer reads the call's request structure, fills its answer
+structure, and responds with no reply bytes, so nothing is encoded between
+C and Python in either direction. `defw2_qpm_smoke --serve` and
+`tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
+the C checks and the Python checks pass against both.
 
 ## What the wire refuses
 
