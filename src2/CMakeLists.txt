@@ -65,6 +65,16 @@ set_target_properties(defw2-echo
 	PROPERTIES
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
+# The directory. One process, one provider, and the one address that cannot
+# be resolved and so has to be announced: on stdout, and optionally to a file
+# for a provider where there is no port to agree on in advance.
+add_executable(defw2-dirsvc services/dirsvc/defw2_dirsvc_main.c)
+target_link_libraries(defw2-dirsvc PRIVATE defw2 Threads::Threads)
+target_compile_options(defw2-dirsvc PRIVATE -Wall -Wextra)
+set_target_properties(defw2-dirsvc
+	PROPERTIES
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+
 # The measured client. The launcher beside it, bench/v2/defw2_bench.py, runs
 # as many of these as the workload asks for and writes the report.
 add_executable(defw2-bench bench/v2/defw2_bench.c)
@@ -74,7 +84,7 @@ set_target_properties(defw2-bench
 	PROPERTIES
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
-install(TARGETS defw2 defw2-echo defw2-bench
+install(TARGETS defw2 defw2-echo defw2-dirsvc defw2-bench
 	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/defw2
