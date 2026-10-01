@@ -51,9 +51,13 @@ struct defw2_rt {
 	bool			log_owned;
 	pthread_mutex_t		log_lock;
 	/*
-	 * Mercury refuses to look a registration up by name once Margo has
-	 * mangled the provider into the identifier, so the runtime keeps
-	 * its own record of what it has registered.
+	 * A memo of what this runtime has registered, so a lookup on the hot
+	 * path is a scan of a short array rather than a call into Margo.
+	 *
+	 * It is a cache, not the source of truth. defw2_rpc_lookup asks Margo
+	 * through margo_provider_registered_name when a name is not in here,
+	 * because a provider registration made elsewhere in the process never
+	 * passes through this table and must not be overwritten.
 	 */
 	struct defw2_rpc_entry	rpc_cache[DEFW2_RPC_CACHE_MAX];
 	int			rpc_cached;
