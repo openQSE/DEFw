@@ -9,8 +9,8 @@ so a blocking call here does not stall other Python threads.
 from ._defw2 import ffi, lib
 
 __all__ = [
-	'Runtime', 'Status', 'DefwError', 'CATEGORY', 'version',
-	'process_stats',
+	'Runtime', 'Status', 'DefwError', 'ServiceError', 'CATEGORY',
+	'CATEGORY_CODE', 'version', 'process_stats',
 ]
 
 # The wire-visible outcome categories, as names a caller can branch on.
@@ -30,6 +30,10 @@ CATEGORY = {
 	lib.DEFW2_CAT_SCHEDULER_FAILURE: 'scheduler-failure',
 	lib.DEFW2_CAT_PROVIDER_FAILURE: 'provider-failure',
 }
+
+
+# The same categories by name, for a service that answers with one.
+CATEGORY_CODE = {name: code for code, name in CATEGORY.items()}
 
 
 def version():
@@ -55,6 +59,21 @@ class DefwError(Exception):
 		self.category = category or CATEGORY.get(lib.DEFW2_CAT_OK)
 		self.message = message or _text(lib.defw2_strerror(code))
 		super().__init__('{} ({})'.format(self.message, self.category))
+
+
+class ServiceError(DefwError):
+	"""What a Python service raises to fail a call with a category.
+
+	A service that raises anything else fails the call as a provider
+	failure. This one says which category the caller should see, such as
+	'invalid-reservation', and the message travels with it.
+	"""
+
+	def __init__(self, category, message=None, code=None):
+		if category not in CATEGORY_CODE:
+			raise ValueError('unknown category {!r}'.format(category))
+		super().__init__(lib.DEFW2_ERR_INTERNAL if code is None else code,
+				 category, message)
 
 
 class Status:
@@ -168,6 +187,15 @@ class Runtime:
 	@property
 	def node_name(self):
 		return _text(lib.defw2_node_name(self.handle))
+
+	@property
+	def hostname(self):
+		return _text(lib.defw2_hostname(self.handle))
+
+	@property
+	def dirsvc(self):
+		"""Where the directory is, or None when this process has none."""
+		return _text(lib.defw2_dirsvc(self.handle))
 
 	@property
 	def profiling(self):
