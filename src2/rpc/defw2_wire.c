@@ -101,6 +101,7 @@ defw2_rc_t defw2_rc_from_hg(hg_return_t hret, uint32_t *category)
 hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 			 hg_proc_cb_t in_cb, hg_proc_cb_t out_cb)
 {
+	hg_bool_t flag;
 	hg_id_t id = 0;
 	int i;
 
@@ -113,11 +114,38 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 	}
 
 	/*
-	 * A caller registers with the default provider identifier. Margo puts
-	 * the target provider into the identifier when the call is forwarded,
-	 * so one registration reaches every provider.
+	 * Ask Margo before registering anything.
+	 *
+	 * margo_register_name is margo_provider_register_name with provider 0
+	 * and a NULL handler. So on a process that already serves this very
+	 * API on provider 0, registering it again as a caller replaces the
+	 * handler with NULL and the provider silently stops answering its own
+	 * API. Mercury says "Overwriting RPC callback for a previously
+	 * registered RPC ID" and nothing else notices.
+	 *
+	 * That is not hypothetical: the directory serves on provider 0, so a
+	 * directory process that also called the directory API elsewhere, or
+	 * a test that put both on one runtime, broke exactly this way. A
+	 * service on any other provider never collided, which is why it took
+	 * until the directory to find.
+	 *
+	 * Reusing the existing registration is safe because the target
+	 * provider goes into the identifier when the call is forwarded, so one
+	 * registration reaches every provider however it was made. The name
+	 * determines the payload types here -- it is defw2.<api>.<method> --
+	 * so an existing registration always carries the procs this caller
+	 * would have supplied.
 	 */
-	id = margo_register_name(rt->mid, name, in_cb, out_cb, NULL);
+	flag = HG_FALSE;
+	if (margo_provider_registered_name(rt->mid, name, 0, &id,
+					   &flag) != HG_SUCCESS)
+		flag = HG_FALSE;
+	if (!flag) {
+		id = margo_register_name(rt->mid, name, in_cb, out_cb, NULL);
+	} else {
+		defw2_log(rt, DEFW2_LOG_DEBUG,
+			  "%s is already registered here, reusing it", name);
+	}
 	if (id == 0) {
 		defw2_log(rt, DEFW2_LOG_ERROR, "cannot register %s", name);
 		goto out;

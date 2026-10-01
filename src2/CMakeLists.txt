@@ -160,6 +160,12 @@ if(BUILD_TESTING)
 	target_link_libraries(defw2_dir_cache_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_dir_cache_smoke COMMAND defw2_dir_cache_smoke)
 
+	# One runtime that both serves an API and calls it. Guards the
+	# registration collision that silently unbound a provider.
+	add_executable(defw2_self_call_smoke tests/defw2_self_call_smoke.c)
+	target_link_libraries(defw2_self_call_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_self_call_smoke COMMAND defw2_self_call_smoke)
+
 	# The telemetry test leaves its files behind for the checker below.
 	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")
 	file(MAKE_DIRECTORY "${DEFW2_TELEMETRY_DIR}")

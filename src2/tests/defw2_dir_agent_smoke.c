@@ -12,12 +12,10 @@
  * any service code having asked for one.
  *
  * The directory gets a runtime of its own, and the registering service
- * another, both over na+sm in this one process. They cannot share a runtime:
- * registering qfw.directory as a provider and then looking the same RPC names
- * up as a client on one Margo instance overwrites the provider's handlers,
- * which Mercury warns about and which leaves the directory unable to answer
- * itself. Separate runtimes is also what production does, since the directory
- * is its own process.
+ * another, both over na+sm in this one process. They could share one now that
+ * defw2_rpc_lookup reuses a registration the process already has, which
+ * defw2_self_call_smoke covers; a runtime each is kept because it is what
+ * production does, the directory being its own process.
  */
 #include <stdio.h>
 #include <stdlib.h>
