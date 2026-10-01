@@ -114,7 +114,10 @@ const char *defw2_call_api(const defw2_call_t *call);
 const char *defw2_call_method(const defw2_call_t *call);
 const void *defw2_call_request(const defw2_call_t *call, size_t *len);
 
-/* Answer it. reply is copied, so the caller keeps nothing. */
+/*
+ * Answer it. reply is copied, so the caller keeps nothing. A failure's
+ * message is copied too, and cut to DEFW2_STR_MAX if it is longer.
+ */
 defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 				 size_t len);
 defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,

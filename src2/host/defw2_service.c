@@ -338,14 +338,28 @@ defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 	return DEFW2_OK;
 }
 
+/*
+ * A status message is borrowed straight onto the wire, where a string longer
+ * than DEFW2_STR_MAX will not encode. Messages that come from a service, such
+ * as an exception's text, have no such bound of their own, so they are cut to
+ * fit here rather than left to fail the reply.
+ */
+static void call_status(defw2_call_t *call, defw2_rc_t code,
+			uint32_t category, const char *message)
+{
+	free(call->status.message);
+	call->status.code = code;
+	call->status.category = category;
+	call->status.message = message ? strndup(message, DEFW2_STR_MAX - 1)
+				       : NULL;
+}
+
 defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
 			      uint32_t category, const char *message)
 {
 	if (call == NULL)
 		return DEFW2_ERR_INVALID;
-	call->status.code = code;
-	call->status.category = category;
-	call->status.message = message ? strdup(message) : NULL;
+	call_status(call, code, category, message);
 	ABT_eventual_set(call->done, NULL, 0);
 	return DEFW2_OK;
 }

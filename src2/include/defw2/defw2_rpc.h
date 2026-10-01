@@ -34,17 +34,31 @@ extern "C" {
 #endif
 
 /*
- * The wire contract version, major in the high sixteen bits. A provider
- * refuses a request whose major differs from its own with the
- * version-mismatch category, before it reads the payload.
+ * The version of DEFw's own APIs, echo and the directory, major in the high
+ * sixteen bits. A provider refuses a request whose major differs from its
+ * own with the version-mismatch category, before it reads the payload. An
+ * API defined on top of DEFw, such as the QPM's, carries its own version in
+ * the same field.
+ *
+ * 0.2 moved every string to an explicit length with a checked terminator.
+ * The version lives inside the header that changed, so a 0.1 peer meets a
+ * 0.2 one as a request that will not decode rather than as a mismatch.
  */
 #define DEFW2_API_VERSION_MAJOR	0
-#define DEFW2_API_VERSION_MINOR	1
+#define DEFW2_API_VERSION_MINOR	2
 #define DEFW2_API_VERSION	(((uint32_t)DEFW2_API_VERSION_MAJOR << 16) | \
 				 (uint32_t)DEFW2_API_VERSION_MINOR)
 
 /* The largest payload that may travel inside a request or a response. */
 #define DEFW2_EAGER_MAX		(4u * 1024u * 1024u)
+
+/*
+ * The longest string a typed field may carry, terminator included. A string
+ * is an identifier, a name or a message. Anything longer is a document, which
+ * may be as long as DEFW2_EAGER_MAX. A receiver refuses a longer string
+ * before it allocates, and a sender refuses to encode one.
+ */
+#define DEFW2_STR_MAX		(64u * 1024u)
 
 /* The largest single bulk transfer a handler will set up. */
 #define DEFW2_BULK_MAX		(1024ull * 1024ull * 1024ull)

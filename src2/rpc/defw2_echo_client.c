@@ -66,7 +66,7 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	defw2_trace_begin(rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
 	/* The service's span becomes a child of this one, which is what the
 	 * traceparent this call carries is for. */
-	defw2_hdr_fill(rt, &in.hdr,
+	defw2_hdr_fill(rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 	in.payload.len = len;
 	/* The encoder only reads the payload, so a caller's const buffer is
@@ -83,8 +83,14 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 		goto out;
 	}
 
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_echo_out_t, &out);
 		rc = defw2_rc_from_hg(hret, &category);
 		code = rc;
 		goto out;
@@ -180,7 +186,7 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 	}
 
 	defw2_trace_begin(rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
-	defw2_hdr_fill(rt, &in.hdr,
+	defw2_hdr_fill(rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 	in.nbytes = len;
 	in.source = source_bulk;
@@ -196,8 +202,14 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 		goto out;
 	}
 
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_echo_bulk_out_t, &out);
 		rc = defw2_rc_from_hg(hret, &category);
 		code = rc;
 		goto out;

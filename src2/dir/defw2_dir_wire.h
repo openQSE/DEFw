@@ -10,15 +10,17 @@
  * That bound is the point. Every count is checked against a maximum before
  * anything is allocated from it, the way hg_proc_defw2_bytes_t checks a
  * length, so a malicious or corrupt count cannot ask the decoder for an
- * arbitrary allocation. This is what the design means by no unsafe
+ * arbitrary allocation. Every string goes through hg_proc_defw2_str_t, which
+ * checks its length against what the message carries and its terminator
+ * before anything reads it. This is what the design means by no unsafe
  * deserialization on any path.
  *
- * Absent and empty are the same thing on this wire. Mercury's string proc
- * has no NULL, so an absent field travels as "" and comes back NULL through
- * dir_str_in. A directory field that is legitimately an empty string does
- * not exist -- the store already refuses an empty service_id -- so nothing
- * is lost and every caller is spared a NULL check that would only ever fire
- * on a field it did not set.
+ * Absent and empty are the same thing in a directory record. An absent field
+ * travels as "" and comes back NULL through dir_str_in. The wire could carry
+ * the difference now, but a directory field that is legitimately an empty
+ * string does not exist -- the store already refuses an empty service_id --
+ * so nothing is lost and every caller is spared a NULL check that would only
+ * ever fire on a field it did not set.
  */
 #ifndef DEFW2_DIR_WIRE_H
 #define DEFW2_DIR_WIRE_H
@@ -52,7 +54,7 @@ static HG_INLINE const char *dir_str_in(const char *s)
 
 typedef struct {
 	hg_uint32_t	count;
-	hg_string_t	*items;
+	defw2_str_t	*items;
 } defw2_wire_strs_t;
 
 static HG_INLINE hg_return_t hg_proc_defw2_wire_strs_t(hg_proc_t proc,
@@ -74,7 +76,7 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_strs_t(hg_proc_t proc,
 		return HG_SUCCESS;
 	}
 	if (op == HG_DECODE) {
-		list->items = (hg_string_t *)calloc(list->count,
+		list->items = (defw2_str_t *)calloc(list->count,
 						    sizeof(*list->items));
 		if (list->items == NULL)
 			return HG_NOMEM;
@@ -86,7 +88,7 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_strs_t(hg_proc_t proc,
 	if (list->items == NULL)
 		return HG_SUCCESS;
 	for (i = 0; i < list->count; i++) {
-		ret = hg_proc_hg_string_t(proc, &list->items[i]);
+		ret = hg_proc_defw2_str_t(proc, &list->items[i]);
 		if (ret != HG_SUCCESS)
 			return ret;
 	}
@@ -145,8 +147,8 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_u32s_t(hg_proc_t proc,
 /* --- bindings -------------------------------------------------------- */
 
 MERCURY_GEN_PROC(defw2_wire_binding_t,
-	((hg_string_t)(binding_name))
-	((hg_string_t)(api_id))
+	((defw2_str_t)(binding_name))
+	((defw2_str_t)(api_id))
 	((hg_uint32_t)(api_version))
 	((hg_uint16_t)(provider_id)))
 
@@ -196,8 +198,8 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_bindings_t(hg_proc_t proc,
 /* --- properties ------------------------------------------------------ */
 
 MERCURY_GEN_PROC(defw2_wire_property_t,
-	((hg_string_t)(name))
-	((hg_string_t)(value)))
+	((defw2_str_t)(name))
+	((defw2_str_t)(value)))
 
 typedef struct {
 	hg_uint32_t		count;
@@ -245,16 +247,16 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_properties_t(hg_proc_t proc,
 /* --- the record ------------------------------------------------------ */
 
 MERCURY_GEN_PROC(defw2_wire_record_t,
-	((hg_string_t)(service_id))
-	((hg_string_t)(service_type))
-	((hg_string_t)(runtime_id))
+	((defw2_str_t)(service_id))
+	((defw2_str_t)(service_type))
+	((defw2_str_t)(runtime_id))
 	((hg_uint64_t)(generation))
 	((hg_uint32_t)(state))
-	((hg_string_t)(address))
-	((hg_string_t)(node_name))
-	((hg_string_t)(hostname))
+	((defw2_str_t)(address))
+	((defw2_str_t)(node_name))
+	((defw2_str_t)(hostname))
 	((hg_int32_t)(pid))
-	((hg_string_t)(selector_name))
+	((defw2_str_t)(selector_name))
 	((defw2_wire_strs_t)(aliases))
 	((defw2_wire_strs_t)(resources))
 	((defw2_wire_bindings_t)(bindings))
@@ -309,8 +311,8 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_records_t(hg_proc_t proc,
 /* --- the query ------------------------------------------------------- */
 
 MERCURY_GEN_PROC(defw2_wire_filter_t,
-	((hg_string_t)(name))
-	((hg_string_t)(value))
+	((defw2_str_t)(name))
+	((defw2_str_t)(value))
 	((hg_uint32_t)(match)))
 
 typedef struct {
@@ -357,11 +359,11 @@ static HG_INLINE hg_return_t hg_proc_defw2_wire_filters_t(hg_proc_t proc,
 }
 
 MERCURY_GEN_PROC(defw2_wire_query_t,
-	((hg_string_t)(service_id))
-	((hg_string_t)(service_type))
-	((hg_string_t)(selector_name))
-	((hg_string_t)(resource))
-	((hg_string_t)(binding_name))
+	((defw2_str_t)(service_id))
+	((defw2_str_t)(service_type))
+	((defw2_str_t)(selector_name))
+	((defw2_str_t)(resource))
+	((defw2_str_t)(binding_name))
 	((hg_uint32_t)(api_version))
 	((defw2_wire_filters_t)(filters))
 	((hg_uint32_t)(include_inactive))
@@ -384,8 +386,8 @@ MERCURY_GEN_PROC(defw2_dir_register_out_t,
  */
 MERCURY_GEN_PROC(defw2_dir_lease_in_t,
 	((defw2_hdr_t)(hdr))
-	((hg_string_t)(service_id))
-	((hg_string_t)(runtime_id))
+	((defw2_str_t)(service_id))
+	((defw2_str_t)(runtime_id))
 	((hg_uint64_t)(generation)))
 
 MERCURY_GEN_PROC(defw2_dir_lease_out_t,
@@ -414,7 +416,7 @@ MERCURY_GEN_PROC(defw2_dir_resolve_out_t,
 
 MERCURY_GEN_PROC(defw2_dir_generation_in_t,
 	((defw2_hdr_t)(hdr))
-	((hg_string_t)(service_id)))
+	((defw2_str_t)(service_id)))
 
 MERCURY_GEN_PROC(defw2_dir_generation_out_t,
 	((defw2_wire_status_t)(status))

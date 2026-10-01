@@ -162,6 +162,19 @@ if(BUILD_TESTING)
 
 	# One runtime that both serves an API and calls it. Guards the
 	# registration collision that silently unbound a provider.
+	# The wire test reaches the procs directly, so it sees the internal
+	# headers the library is built from.
+	add_executable(defw2_wire_smoke tests/defw2_wire_smoke.c)
+	target_include_directories(defw2_wire_smoke
+		PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/core
+			${CMAKE_CURRENT_SOURCE_DIR}/rpc
+			${CMAKE_CURRENT_SOURCE_DIR}/telemetry
+			${CMAKE_CURRENT_SOURCE_DIR}/host)
+	target_link_libraries(defw2_wire_smoke
+		PRIVATE defw2 PkgConfig::ARGOBOTS Threads::Threads)
+	add_test(NAME defw2_wire_smoke COMMAND defw2_wire_smoke)
+
 	add_executable(defw2_self_call_smoke tests/defw2_self_call_smoke.c)
 	target_link_libraries(defw2_self_call_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_self_call_smoke COMMAND defw2_self_call_smoke)
