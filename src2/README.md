@@ -4,14 +4,16 @@ v2 is built on Mercury and Margo and lives here, beside v1 in `src/`, which
 it does not touch. `docs/design_v2.md` is the design. This directory is the
 prototype that the go or no-go decision is made on.
 
-What exists so far is the runtime core, the typed RPC tier, the telemetry
-and the Python binding: configuration from the environment, `defw2_init`
-and `defw2_finalize`, identity, the status model, the logging sink,
-bindings and typed stubs, the service host with its call queue, `qfw.echo`
-as the reference service with its eager and bulk methods, the spans and
-histograms the comparison reads, a `defw2` Python package that both calls
-and serves, and the benchmarks that measure the lot against v1. The
-directory client, the document tier and events are still to come.
+What exists so far is the runtime core, the typed RPC tier, the telemetry,
+the directory and the Python binding: configuration from the environment,
+`defw2_init` and `defw2_finalize`, identity, the status model, the logging
+sink, bindings and typed stubs, the service host with its call queue,
+`qfw.echo` as the reference service with its eager and bulk methods, the
+directory service with its client, agent and binding cache, the QPM's
+control, admission and execution APIs typed in C, the spans and histograms
+the comparison reads, a `defw2` Python package that both calls and serves,
+and the benchmarks that measure the lot against v1. The document tier and
+events are still to come, and so is the QPM's Python side.
 
 ## Building
 
@@ -26,13 +28,15 @@ export LD_LIBRARY_PATH=/opt/qfw/mochi/lib:/opt/qfw/libfabric/lib
 
 cmake -S . -B build -DDEFW_BUILD_V2=ON \
 	-DPython3_EXECUTABLE=/workspace/qfw-container-base/qfw-venv/bin/python
-cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-python \
-	defw2_runtime_smoke defw2_echo_smoke defw2_queue_smoke \
-	defw2_telemetry_smoke
+cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-dirsvc \
+	defw2-bench defw2-python defw2_runtime_smoke defw2_echo_smoke \
+	defw2_queue_smoke defw2_telemetry_smoke defw2_dir_store_smoke \
+	defw2_dir_rpc_smoke defw2_dir_agent_smoke defw2_dir_cache_smoke \
+	defw2_self_call_smoke defw2_qpm_smoke defw2_wire_smoke
 ctest --test-dir build -R defw2
 ```
 
-That prints six passing tests. Each line of it is doing something, so
+That prints fourteen passing tests. Each line of it is doing something, so
 changing one of them tends to be how a build goes wrong:
 
 - **The paths are set by hand rather than with `module load`.** The image
@@ -86,10 +90,12 @@ comparison reads is `defw2-bench`, under `bench/`.
 | --- | --- |
 | `include/defw2/` | The public headers, written for bindings: opaque handles, fixed-width fields, explicit ownership, no Mercury |
 | `core/` | Runtime, configuration, identity and logging |
-| `rpc/` | The wire structures, the header and status helpers, bindings and the typed client stubs |
+| `rpc/` | The wire structures, the checked string and bulk procs, the header and status helpers, bindings, the typed client stubs, and the one client path and one provider path every typed method takes |
 | `telemetry/` | Spans, histograms and the OTLP JSON writer |
 | `host/` | The service host: identity, provider registration and the run loop |
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
+| `dir/`, `services/dirsvc/` | The directory: store, wire, service, client, agent and binding cache, and the `defw2-dirsvc` daemon |
+| `qpm/` | The QPM's control, admission and execution APIs: wire, client stubs and provider. Nothing outside this directory and `defw2_qpm.h` knows what a QPM is |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
 | `bench/` | The benchmarks, and the v1 side of the comparison |
@@ -130,6 +136,72 @@ The design's stub signature passes the wire input structure and a timeout.
 These stubs take the payload and a `defw2_call_opts_t` instead, which keeps
 Mercury out of the public headers. The header, including the caller's
 `traceparent`, is filled from the options.
+
+## The QPM APIs
+
+`defw2_qpm.h` types the QPM hot path, so a C caller such as the Slurm plugin
+can reserve, run and collect without an interpreter in its process. Each of
+`qfw.qpm.control`, `qfw.qpm.admission` and `qfw.qpm.execution` is its own
+provider, 2, 3 and 4 by default, so a service answers `is_ready` while its
+execution queue is full.
+
+```c
+defw2_qpm_run_req_t run = {
+	.ctx = { .reservation_id = rid },
+	.circuit = { DEFW2_QPM_FORMAT_OPENQASM2, qasm, strlen(qasm) },
+	.num_qubits = 20,
+	.num_shots = 1024,
+	.return_statevector = true,
+};
+defw2_result_buffer_t sv = { .data = buf, .capacity = 16u << 20 };
+
+defw2_qpm_async_run(execution, &run, &opts, &task, &status);
+defw2_qpm_read_cq(execution, &(defw2_qpm_task_req_t){ .ctx = run.ctx,
+		  .cid = task.cid }, &sv, &opts, &done, &status);
+```
+
+Every answer has two layers. The typed fields are what a C caller branches
+on, and `extra` is a JSON object carrying the rest of what the service said,
+which is how a QPM's provider-shaped answers travel without a schema per
+provider. Outcomes are data and failures are status: a task whose
+reservation does not match comes back with outcome `INVALID_RESERVATION`
+and a status of OK, because the service answered.
+
+A large result never travels inside a message. A caller that expects one
+lends a buffer with `read_cq`, `peek_cq` or `sync_run`, and the provider
+pushes the statevector into it. A buffer that is missing or too small gets
+the size it needs back, and `read_cq` leaves the completion queued for the
+retry. The buffer goes on the call that collects the result rather than on
+`async_run`, because the result exists only once the task completes, and a
+Python completion thread cannot drive a Margo transfer.
+
+A C service supplies an operations table per API. Each operation answers
+into a structure whose strings come from the call, through
+`defw2_call_strdup` and its relatives, and the provider frees all of it once
+the reply is on the wire.
+
+## What the wire refuses
+
+Mercury's own string decoder trusts the sender twice: it allocates whatever
+length a message claims before checking the bytes are there, growing its
+buffer and copying uninitialised memory when they are not, and it never
+checks for the terminator. Its bulk-handle decoder has the first flaw too.
+Every v2 string therefore goes through `hg_proc_defw2_str_t`, which refuses
+a length longer than the field allows or than the message carries, and a
+string whose last byte is not its only NUL. Counted bytes, tensor shapes and
+lent buffers are bounded the same way, and a provider checks its own answer
+before encoding it, so a field too long to send becomes a provider failure
+rather than a reply that never arrives.
+
+A decode that fails part way has allocated the fields before the one it
+refused. `margo_free_input` would walk them, but it also drops a reference
+on the handle that only a successful decode took, and Mercury then recycles
+the handle under the handler. `defw2_free_partial` walks them with a proc of
+its own instead. `tests/defw2_wire_smoke.c` sends hostile requests to a
+live provider and measures the heap across a thousand of them, because the
+leak sanitizer cannot see this leak: the decoded structure lives on a
+handler stack that Argobots keeps pooled, so a stale pointer to the string
+survives and counts as a reference.
 
 ## What a run records
 
