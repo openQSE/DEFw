@@ -83,6 +83,7 @@ struct defw2_served {
 	struct defw2_call		call;
 	defw2_wire_status_t		*status;	/* the answer's own */
 	uint64_t			bulk_bytes;	/* pushed, for the span */
+	uint64_t			queue_ns;	/* waited, for the span */
 };
 
 /*
@@ -104,6 +105,22 @@ void defw2_typed_serve(hg_handle_t handle, const struct defw2_method *method,
 /* Answer with a failure. message is borrowed and must be a literal. */
 void defw2_served_fail(struct defw2_served *served, defw2_rc_t code,
 		       uint32_t category, const char *message);
+
+/*
+ * Does this call's service answer from its queue? A service in another
+ * language does, and then the call goes to defw2_served_queue rather than
+ * to an operations table.
+ */
+bool defw2_served_queued(const struct defw2_served *served);
+
+/*
+ * Hand the call to the service's queue and park until a consumer answers
+ * it. The consumer answers into the call's own request, answer and storage,
+ * so nothing is copied either way. Returns what defw2_served_finish takes:
+ * the consumer's code, or why the queue would not take the call, with the
+ * status set to say which.
+ */
+defw2_rc_t defw2_served_queue(struct defw2_served *served);
 
 /*
  * Turn what the service returned into the answer's status. A status the
