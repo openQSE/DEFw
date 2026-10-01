@@ -21,6 +21,11 @@ add_library(defw2 SHARED
 	telemetry/defw2_otlp.c
 	telemetry/defw2_trace.c
 	host/defw2_service.c
+	dir/defw2_dir_store.c
+	dir/defw2_dir_svc.c
+	dir/defw2_dir_client.c
+	dir/defw2_dir_agent.c
+	dir/defw2_dir_cache.c
 	services/echo/defw2_echo_svc.c)
 
 target_include_directories(defw2
@@ -61,6 +66,16 @@ set_target_properties(defw2-echo
 	PROPERTIES
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
+# The directory. One process, one provider, and the one address that cannot
+# be resolved and so has to be announced: on stdout, and optionally to a file
+# for a provider where there is no port to agree on in advance.
+add_executable(defw2-dirsvc services/dirsvc/defw2_dirsvc_main.c)
+target_link_libraries(defw2-dirsvc PRIVATE defw2 Threads::Threads)
+target_compile_options(defw2-dirsvc PRIVATE -Wall -Wextra)
+set_target_properties(defw2-dirsvc
+	PROPERTIES
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+
 # The measured client. The launcher beside it, bench/v2/defw2_bench.py, runs
 # as many of these as the workload asks for and writes the report.
 add_executable(defw2-bench bench/v2/defw2_bench.c)
@@ -70,7 +85,7 @@ set_target_properties(defw2-bench
 	PROPERTIES
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
-install(TARGETS defw2 defw2-echo defw2-bench
+install(TARGETS defw2 defw2-echo defw2-dirsvc defw2-bench
 	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/defw2
@@ -120,6 +135,30 @@ if(BUILD_TESTING)
 	add_executable(defw2_queue_smoke tests/defw2_queue_smoke.c)
 	target_link_libraries(defw2_queue_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_queue_smoke COMMAND defw2_queue_smoke)
+
+	# Drives the store directly, so it needs no runtime and no provider.
+	# The argument is where the snapshot test writes; without it that one
+	# case is skipped.
+	add_executable(defw2_dir_store_smoke tests/defw2_dir_store_smoke.c)
+	target_link_libraries(defw2_dir_store_smoke PRIVATE defw2)
+	add_test(NAME defw2_dir_store_smoke
+		COMMAND defw2_dir_store_smoke
+			"${CMAKE_CURRENT_BINARY_DIR}/dir-snapshot.json")
+
+	# Runs a directory and a client in one process over na+sm.
+	add_executable(defw2_dir_rpc_smoke tests/defw2_dir_rpc_smoke.c)
+	target_link_libraries(defw2_dir_rpc_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_dir_rpc_smoke COMMAND defw2_dir_rpc_smoke)
+
+	# Waits out several heartbeat timeouts, so it is the slow one.
+	add_executable(defw2_dir_agent_smoke tests/defw2_dir_agent_smoke.c)
+	target_link_libraries(defw2_dir_agent_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_dir_agent_smoke COMMAND defw2_dir_agent_smoke)
+
+	# A directory, a service and a client, one runtime each.
+	add_executable(defw2_dir_cache_smoke tests/defw2_dir_cache_smoke.c)
+	target_link_libraries(defw2_dir_cache_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_dir_cache_smoke COMMAND defw2_dir_cache_smoke)
 
 	# The telemetry test leaves its files behind for the checker below.
 	set(DEFW2_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry")

@@ -18,6 +18,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <defw2/defw2_dir.h>
 #include <defw2/defw2_echo.h>
 
 struct options {
@@ -74,9 +75,14 @@ static double percentile(const double *sorted, size_t count, double fraction)
  * code rather than a signal handler, where almost nothing is legal to call.
  * The main thread belongs to defw2_service_run.
  */
+struct stopping {
+	defw2_service_t		*svc;
+	defw2_dir_agent_t	*agent;	/* NULL without a directory */
+};
+
 static void *wait_for_signal(void *arg)
 {
-	defw2_service_t *svc = arg;
+	struct stopping *ctx = arg;
 	sigset_t stopping;
 	int signo = 0;
 
@@ -85,17 +91,25 @@ static void *wait_for_signal(void *arg)
 	sigaddset(&stopping, SIGTERM);
 	sigwait(&stopping, &signo);
 
-	defw2_log(defw2_service_runtime(svc), DEFW2_LOG_MESSAGE,
+	defw2_log(defw2_service_runtime(ctx->svc), DEFW2_LOG_MESSAGE,
 		  "signal %d, stopping", signo);
-	defw2_service_shutdown(svc);
+	/*
+	 * Deregister first. Shutdown stops the Margo instance, so an agent
+	 * stopped after it cannot send its goodbye, and the record would sit
+	 * UP at an address nobody serves until the directory timed it out.
+	 */
+	defw2_dir_agent_stop(ctx->agent);
+	defw2_service_shutdown(ctx->svc);
 	return NULL;
 }
 
 static int serve(void)
 {
+	defw2_dir_agent_t *agent = NULL;
 	defw2_service_t *svc = NULL;
 	defw2_config_t cfg;
 	defw2_rt_t *rt = NULL;
+	struct stopping ctx = { 0 };
 	pthread_t waiter;
 	sigset_t stopping;
 
@@ -114,7 +128,15 @@ static int serve(void)
 		fprintf(stderr, "cannot start on %s\n", cfg.address);
 		return 1;
 	}
-	if (defw2_service_create(rt, "echo", DEFW2_API_ECHO,
+	/*
+	 * The node name, so several echo services can register at once. One
+	 * hardcoded service_id meant the second instance was refused as a
+	 * conflict with the first, which is the directory being right about a
+	 * mistake this program was making.
+	 */
+	if (defw2_service_create(rt, defw2_node_name(rt) != NULL ?
+					 defw2_node_name(rt) : "echo",
+				 DEFW2_API_ECHO,
 				 DEFW2_PROVIDER_ECHO, &svc) != DEFW2_OK ||
 	    defw2_echo_bind(svc, NULL) != DEFW2_OK) {
 		fprintf(stderr, "cannot bind %s\n", DEFW2_API_ECHO);
@@ -123,13 +145,45 @@ static int serve(void)
 		return 1;
 	}
 
+	/*
+	 * Register, when this deployment has a directory. Without one the
+	 * service is still perfectly usable by a caller that was given the
+	 * address, which is how the benchmarks drive it, so an absent
+	 * directory is a configuration choice rather than a failure.
+	 */
+	if (defw2_dirsvc(rt) != NULL) {
+		defw2_dir_record_t record;
+		const defw2_dir_binding_t bindings[] = {
+			{ "echo", DEFW2_API_ECHO, DEFW2_API_VERSION_MAJOR,
+			  DEFW2_PROVIDER_ECHO },
+		};
+
+		memset(&record, 0, sizeof(record));
+		record.service_type = DEFW2_API_ECHO;
+		record.selector.name = defw2_node_name(rt);
+		record.bindings = bindings;
+		record.binding_count = 1;
+		if (defw2_dir_agent_start(svc, defw2_dirsvc(rt), &record, 0,
+					  &agent) != DEFW2_OK) {
+			fprintf(stderr, "cannot register with the directory "
+				"at %s\n", defw2_dirsvc(rt));
+			defw2_service_shutdown(svc);
+			defw2_service_destroy(svc);
+			defw2_finalize(rt);
+			return 1;
+		}
+	}
+
 	/* One line, on stdout, so a script can read the address back. */
 	printf("%s\n", defw2_service_address(svc));
 	fflush(stdout);
 
-	if (pthread_create(&waiter, NULL, wait_for_signal, svc) != 0) {
+	ctx.svc = svc;
+	ctx.agent = agent;
+	if (pthread_create(&waiter, NULL, wait_for_signal, &ctx) != 0) {
 		fprintf(stderr, "cannot wait for a signal: %s\n",
 			strerror(errno));
+		defw2_dir_agent_stop(agent);
 		defw2_service_shutdown(svc);
 		defw2_service_destroy(svc);
 		defw2_finalize(rt);
@@ -138,6 +192,7 @@ static int serve(void)
 
 	defw2_service_run(svc);
 	pthread_join(waiter, NULL);
+	/* The waiter already stopped the agent, while the runtime could send. */
 	defw2_service_destroy(svc);
 	defw2_finalize(rt);
 	return 0;

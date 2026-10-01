@@ -24,6 +24,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <defw2/defw2_dir.h>
 #include <defw2/defw2_echo.h>
 #include <defw2/defw2_telemetry.h>
 
@@ -41,6 +42,14 @@ struct options {
 	long		warmup;
 	size_t		payload;
 	bool		bulk;
+	/*
+	 * W4. The address is then the directory's and every call is a
+	 * resolve, so what is measured is the control plane rather than the
+	 * echo path. resolve_type narrows the query the way a real client
+	 * would, since resolving everything is not what anyone does.
+	 */
+	bool		resolve;
+	const char	*resolve_type;
 	uint32_t	timeout_ms;
 	long		wait_s;
 };
@@ -57,6 +66,9 @@ static void usage(void)
 		"  --warmup N          unmeasured calls first (default 100)\n"
 		"  --payload N         payload bytes (default 64)\n"
 		"  --bulk              move the payload through bulk memory\n"
+		"  --resolve           W4: call the directory at --address\n"
+		"                      instead of an echo service\n"
+		"  --resolve-type S    narrow the resolve to this service_type\n"
 		"  --traceparent S     the run's W3C trace context\n"
 		"  --ready PATH        created once warmed up\n"
 		"  --go PATH           waited for before measuring\n"
@@ -183,6 +195,45 @@ static void run_eager(defw2_binding_t *echo, const struct options *opts,
 	}
 }
 
+/*
+ * W4: directory resolve. The control plane's latency, which is what a client
+ * pays before it can call anything at all.
+ *
+ * An empty answer is not a failure here. The directory may legitimately have
+ * nothing matching, and counting that as an error would make the workload
+ * depend on what else happens to be registered; what W4 measures is the cost
+ * of asking.
+ */
+static void run_resolve(defw2_dir_t *dir, const struct options *opts,
+			struct results *results,
+			const defw2_call_opts_t *call)
+{
+	defw2_dir_query_t query;
+	long i;
+
+	memset(&query, 0, sizeof(query));
+	query.service_type = opts->resolve_type;
+
+	for (i = 0; i < opts->calls; i++) {
+		defw2_dir_result_t result = { 0 };
+		defw2_status_t status = { 0 };
+		uint64_t started = mono_ns();
+		defw2_rc_t rc;
+
+		rc = defw2_dir_resolve(dir, &query, call, &result, &status);
+		results->durations[i] = mono_ns() - started;
+
+		if (rc != DEFW2_OK)
+			note_failure(results, i, defw2_strerror(rc));
+		else if (status.category != DEFW2_CAT_OK)
+			note_failure(results, i,
+				     defw2_category_name(status.category));
+
+		defw2_dir_result_free(&result);
+		defw2_status_free(&status);
+	}
+}
+
 static void run_bulk(defw2_binding_t *echo, const struct options *opts,
 		     const unsigned char *payload, unsigned char *sink,
 		     struct results *results, const defw2_call_opts_t *call)
@@ -301,6 +352,10 @@ static bool parse(int argc, char **argv, struct options *opts)
 			opts->bulk = true;
 			continue;
 		}
+		if (strcmp(name, "--resolve") == 0) {
+			opts->resolve = true;
+			continue;
+		}
 		if (value == NULL)
 			return false;
 		i++;
@@ -308,6 +363,8 @@ static bool parse(int argc, char **argv, struct options *opts)
 			opts->address = value;
 		else if (strcmp(name, "--traceparent") == 0)
 			opts->traceparent = value;
+		else if (strcmp(name, "--resolve-type") == 0)
+			opts->resolve_type = value;
 		else if (strcmp(name, "--ready") == 0)
 			opts->ready_path = value;
 		else if (strcmp(name, "--go") == 0)
@@ -348,6 +405,7 @@ int main(int argc, char **argv)
 	defw2_process_stats_t before, after;
 	struct results results = { 0 };
 	defw2_binding_t *echo = NULL;
+	defw2_dir_t *dir = NULL;	/* W4 only */
 	unsigned char *payload = NULL;
 	unsigned char *sink = NULL;
 	defw2_call_opts_t call, warm;
@@ -385,7 +443,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "cannot start a client on %s\n", cfg.address);
 		return 1;
 	}
-	if (defw2_binding_create(rt, opts.address, opts.provider_id, &echo) !=
+	/* W4 talks to the directory, so there is no echo service to bind. */
+	if (!opts.resolve &&
+	    defw2_binding_create(rt, opts.address, opts.provider_id, &echo) !=
 	    DEFW2_OK) {
 		fprintf(stderr, "cannot reach %s\n", opts.address);
 		goto out;
@@ -403,6 +463,55 @@ int main(int argc, char **argv)
 			opts.calls, opts.payload);
 		goto out;
 	}
+	if (opts.resolve) {
+		/*
+		 * W4 takes a different path from here: a directory handle
+		 * rather than an echo binding, and no payload to verify, so
+		 * the echo warm-up and its data check do not apply.
+		 */
+		defw2_dir_query_t warm_query;
+		long w;
+
+		memset(&warm_query, 0, sizeof(warm_query));
+		warm_query.service_type = opts.resolve_type;
+		if (defw2_dir_open(rt, opts.address, &dir) != DEFW2_OK) {
+			fprintf(stderr, "cannot reach the directory at %s\n",
+				opts.address);
+			goto out;
+		}
+		for (w = 0; w < opts.warmup; w++) {
+			defw2_dir_result_t warm_result = { 0 };
+
+			defw2_dir_resolve(dir, &warm_query, &warm,
+					  &warm_result, &status);
+			defw2_dir_result_free(&warm_result);
+			defw2_status_free(&status);
+		}
+		if (!touch(opts.ready_path))
+			goto out;
+		if (!wait_for(opts.go_path, opts.wait_s))
+			goto out;
+
+		defw2_process_stats(&before);
+		results.loop_start_unix_ns = wall_ns();
+		loop_start = mono_ns();
+		run_resolve(dir, &opts, &results, &call);
+		results.loop_ns = mono_ns() - loop_start;
+		defw2_process_stats(&after);
+
+		results.cpu_ns = (after.user_us + after.system_us -
+				  before.user_us - before.system_us) * 1000ull;
+		results.max_rss_kib = after.peak_rss_kib;
+		if (write_results(&opts, &results))
+			rc = results.failures ? 1 : 0;
+		if (results.failures)
+			fprintf(stderr,
+				"client %ld: %ld of %ld resolves failed (%s)\n",
+				opts.index, results.failures, opts.calls,
+				results.message);
+		goto out;
+	}
+
 	build_payload(payload, opts.payload);
 
 	/* One checked call before anything is measured, so a broken service
@@ -467,6 +576,7 @@ int main(int argc, char **argv)
 out:
 	defw2_buffer_free(&reply);
 	defw2_status_free(&status);
+	defw2_dir_close(dir);
 	defw2_binding_free(echo);
 	defw2_finalize(rt);
 	free(results.durations);
