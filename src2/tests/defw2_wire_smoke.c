@@ -4,9 +4,10 @@
  * Mercury's own string and bulk procs trust the length a message claims and
  * the terminator it promises. v2's do not, and this test holds them to it.
  * The first half hands the decoders the bytes a broken or hostile peer would
- * send, built by hand. The second half sends such requests to a real
- * provider, echo, to show that a malformed request is answered rather than
- * crashing the provider or leaking what it half decoded.
+ * send, built by hand. The second half sends such requests to real
+ * providers, echo and a QPM's control API, to show that a malformed request
+ * is answered rather than crashing the provider or leaking what it half
+ * decoded.
  *
  * Whether a refused request leaks is measured rather than left to the leak
  * sanitizer. A provider decodes into a structure on its handler's stack, and
@@ -43,8 +44,9 @@ static size_t heap_in_use(void)
 #endif
 
 #include <defw2/defw2_echo.h>
+#include <defw2/defw2_qpm.h>
 
-#include "defw2_wire.h"
+#include "defw2_qpm_wire.h"
 
 static int failures;
 
@@ -209,6 +211,50 @@ static void counted(hg_proc_t proc, struct msg *m)
 	      bytes.data == NULL);
 }
 
+static void bulk(hg_proc_t proc, struct msg *m)
+{
+	defw2_wire_tensor_t tensor;
+	defw2_wire_result_t result;
+
+	memset(&tensor, 0, sizeof(tensor));
+	reset(m);
+	put_u32(m, DEFW2_DTYPE_C128);
+	put_u32(m, DEFW2_TENSOR_RANK_MAX + 1);
+	check("a tensor with too many dimensions is refused",
+	      decode(proc, m, hg_proc_defw2_wire_tensor_t, &tensor) ==
+	      HG_OVERFLOW);
+
+	memset(&result, 0, sizeof(result));
+	reset(m);
+	put_u64(m, DEFW2_BULK_MAX + 1);
+	put_u64(m, 0);
+	check("a result buffer past the bulk limit is refused",
+	      decode(proc, m, hg_proc_defw2_wire_result_t, &result) ==
+	      HG_OVERFLOW && result.handle == HG_BULK_NULL);
+
+	/*
+	 * A bulk handle that claims a serialized size the message does not
+	 * carry, which Mercury's own proc would reserve and parse from
+	 * memory it never received.
+	 */
+	reset(m);
+	put_u64(m, 4096);
+	put_u64(m, 1u << 20);
+	put(m, "handle", 6);
+	check("a bulk handle longer than the message is refused",
+	      decode(proc, m, hg_proc_defw2_wire_result_t, &result) ==
+	      HG_OVERFLOW && result.handle == HG_BULK_NULL);
+
+	reset(m);
+	put_u64(m, 0);
+	put_u64(m, 0);
+	check("a request that lends nothing decodes as nothing",
+	      decode(proc, m, hg_proc_defw2_wire_result_t, &result) ==
+	      HG_SUCCESS && result.capacity == 0 &&
+	      result.handle == HG_BULK_NULL);
+	release(proc, hg_proc_defw2_wire_result_t, &result);
+}
+
 /*
  * A structure that fails part way. The runtime_id decoded before the
  * traceparent was refused, and a handler that frees the input after a
@@ -249,6 +295,19 @@ static defw2_rc_t counting_echo(void *ctx, const void *request, size_t len,
 	__atomic_add_fetch(&served_calls, 1, __ATOMIC_RELAXED);
 	*reply = NULL;
 	*reply_len = 0;
+	return DEFW2_OK;
+}
+
+static defw2_rc_t counting_is_ready(void *ctx, defw2_call_t *call,
+				    const defw2_qpm_ctx_t *req,
+				    defw2_qpm_service_status_t *out)
+{
+	(void)ctx;
+	(void)call;
+	(void)req;
+	__atomic_add_fetch(&served_calls, 1, __ATOMIC_RELAXED);
+	out->state = "running";
+	out->ready = true;
 	return DEFW2_OK;
 }
 
@@ -428,16 +487,25 @@ static void attack(margo_instance_id evil, const char *address,
 static void hostile(void)
 {
 	static const defw2_echo_ops_t echo_ops = { .echo = counting_echo };
+	static const defw2_qpm_control_ops_t qpm_ops = {
+		.is_ready = counting_is_ready,
+	};
 	const struct target echo_target = {
 		"echo", DEFW2_RPC_ECHO, DEFW2_PROVIDER_ECHO, DEFW2_API_VERSION,
 		1, hg_proc_defw2_echo_out_t,
 	};
+	const struct target qpm_target = {
+		"a QPM", defw2_qpm_m_is_ready.rpc, DEFW2_PROVIDER_QPM_CONTROL,
+		DEFW2_QPM_VERSION, 2, hg_proc_defw2_qpm_status_out_t,
+	};
 	defw2_config_t server_cfg, client_cfg;
 	defw2_rt_t *server_rt = NULL, *client_rt = NULL;
-	defw2_service_t *echo_svc = NULL;
-	defw2_binding_t *echo = NULL;
+	defw2_service_t *echo_svc = NULL, *qpm_svc = NULL;
+	defw2_binding_t *echo = NULL, *control = NULL;
 	defw2_call_opts_t opts = { .timeout_ms = 10000 };
+	defw2_qpm_service_status_t status_out = { 0 };
 	defw2_buffer_t reply = { 0 };
+	defw2_qpm_ctx_t req = { 0 };
 	defw2_status_t status = { 0 };
 	margo_instance_id evil;
 	bool honest;
@@ -452,23 +520,29 @@ static void hostile(void)
 	server_cfg.log_level = DEFW2_LOG_ERROR;
 	server_cfg.rpc_thread_count = 2;
 	if (defw2_init(&server_cfg, &server_rt) != DEFW2_OK) {
-		check("the provider starts", false);
+		check("the providers start", false);
 		return;
 	}
-	check("an echo provider binds",
+	check("an echo provider and a QPM control provider bind",
 	      defw2_service_create(server_rt, "victim-echo", DEFW2_API_ECHO,
 				   DEFW2_PROVIDER_ECHO, &echo_svc) ==
-	      DEFW2_OK && defw2_echo_bind(echo_svc, &echo_ops) == DEFW2_OK);
+	      DEFW2_OK && defw2_echo_bind(echo_svc, &echo_ops) == DEFW2_OK &&
+	      defw2_service_create(server_rt, "victim-qpm", "qfw.qpm",
+				   DEFW2_PROVIDER_QPM_CONTROL, &qpm_svc) ==
+	      DEFW2_OK && defw2_qpm_control_bind(qpm_svc, &qpm_ops) ==
+	      DEFW2_OK);
 
 	/*
-	 * A Margo instance of its own, so the hostile registration of the
-	 * method's name cannot leak into the honest client's.
+	 * A Margo instance of its own, so the hostile registrations of the
+	 * methods' names cannot leak into the honest client's.
 	 */
 	evil = margo_init("na+sm://", MARGO_CLIENT_MODE, 0, 0);
 	check("the hostile peer starts", evil != MARGO_INSTANCE_NULL);
-	if (evil != MARGO_INSTANCE_NULL)
+	if (evil != MARGO_INSTANCE_NULL) {
 		attack(evil, defw2_address(server_rt), &echo_target);
-	check("the service ran for none of them",
+		attack(evil, defw2_address(server_rt), &qpm_target);
+	}
+	check("no service ran for any of them",
 	      __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 0);
 
 	memset(&client_cfg, 0, sizeof(client_cfg));
@@ -479,20 +553,31 @@ static void hostile(void)
 	honest = defw2_init(&client_cfg, &client_rt) == DEFW2_OK &&
 		 defw2_binding_create(client_rt, defw2_address(server_rt),
 				      DEFW2_PROVIDER_ECHO, &echo) == DEFW2_OK &&
+		 defw2_binding_create(client_rt, defw2_address(server_rt),
+				      DEFW2_PROVIDER_QPM_CONTROL, &control) ==
+		 DEFW2_OK;
+	honest = honest &&
 		 defw2_echo(echo, "hi", 2, &opts, &reply, &status) ==
 		 DEFW2_OK && status.code == DEFW2_OK;
-	check("after all that an honest caller is served",
-	      honest && __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 1);
+	honest = honest &&
+		 defw2_qpm_is_ready(control, &req, &opts, &status_out,
+				    &status) == DEFW2_OK &&
+		 status.code == DEFW2_OK && status_out.ready;
+	check("after all that an honest caller is served by both",
+	      honest && __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 2);
 	defw2_buffer_free(&reply);
+	defw2_qpm_service_status_free(&status_out);
 	defw2_status_free(&status);
 
 	defw2_binding_free(echo);
+	defw2_binding_free(control);
 	if (client_rt != NULL)
 		defw2_finalize(client_rt);
 	if (evil != MARGO_INSTANCE_NULL)
 		margo_finalize(evil);
 	defw2_service_shutdown(echo_svc);
 	defw2_service_destroy(echo_svc);
+	defw2_service_destroy(qpm_svc);
 	defw2_finalize(server_rt);
 }
 
@@ -514,6 +599,7 @@ int main(void)
 
 	strings(proc, &m);
 	counted(proc, &m);
+	bulk(proc, &m);
 	partial(proc, &m);
 
 	hg_proc_free(proc);

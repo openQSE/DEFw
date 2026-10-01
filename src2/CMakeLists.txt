@@ -12,11 +12,14 @@ pkg_check_modules(ARGOBOTS REQUIRED IMPORTED_TARGET argobots>=1.2)
 message(STATUS "DEFw v2: margo ${MARGO_VERSION}, argobots ${ARGOBOTS_VERSION}")
 
 add_library(defw2 SHARED
+	core/defw2_arena.c
 	core/defw2_config.c
 	core/defw2_log.c
 	core/defw2_runtime.c
 	rpc/defw2_wire.c
 	rpc/defw2_binding.c
+	rpc/defw2_bulk.c
+	rpc/defw2_typed.c
 	rpc/defw2_echo_client.c
 	telemetry/defw2_otlp.c
 	telemetry/defw2_trace.c
@@ -26,7 +29,9 @@ add_library(defw2 SHARED
 	dir/defw2_dir_client.c
 	dir/defw2_dir_agent.c
 	dir/defw2_dir_cache.c
-	services/echo/defw2_echo_svc.c)
+	services/echo/defw2_echo_svc.c
+	qpm/defw2_qpm_client.c
+	qpm/defw2_qpm_svc.c)
 
 target_include_directories(defw2
 	PUBLIC
@@ -162,6 +167,19 @@ if(BUILD_TESTING)
 
 	# One runtime that both serves an API and calls it. Guards the
 	# registration collision that silently unbound a provider.
+	# The QPM test profiles into a directory of its own, which the OTLP
+	# checker then reads back, so the shared typed code's spans are
+	# checked as well as its calls.
+	set(DEFW2_QPM_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry-qpm")
+	file(MAKE_DIRECTORY "${DEFW2_QPM_TELEMETRY_DIR}")
+	add_executable(defw2_qpm_smoke tests/defw2_qpm_smoke.c)
+	target_link_libraries(defw2_qpm_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_qpm_smoke
+		COMMAND defw2_qpm_smoke "${DEFW2_QPM_TELEMETRY_DIR}")
+	set_tests_properties(defw2_qpm_smoke
+		PROPERTIES
+			FIXTURES_SETUP defw2_qpm_otlp_files)
+
 	# The wire test reaches the procs directly, so it sees the internal
 	# headers the library is built from.
 	add_executable(defw2_wire_smoke tests/defw2_wire_smoke.c)
@@ -170,7 +188,8 @@ if(BUILD_TESTING)
 			${CMAKE_CURRENT_SOURCE_DIR}/core
 			${CMAKE_CURRENT_SOURCE_DIR}/rpc
 			${CMAKE_CURRENT_SOURCE_DIR}/telemetry
-			${CMAKE_CURRENT_SOURCE_DIR}/host)
+			${CMAKE_CURRENT_SOURCE_DIR}/host
+			${CMAKE_CURRENT_SOURCE_DIR}/qpm)
 	target_link_libraries(defw2_wire_smoke
 		PRIVATE defw2 PkgConfig::ARGOBOTS Threads::Threads)
 	add_test(NAME defw2_wire_smoke COMMAND defw2_wire_smoke)
@@ -207,6 +226,13 @@ if(BUILD_TESTING)
 		set_tests_properties(defw2_otlp_check
 			PROPERTIES
 				FIXTURES_REQUIRED defw2_otlp_files)
+		add_test(NAME defw2_qpm_otlp_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_otlp_check.py"
+				"${DEFW2_QPM_TELEMETRY_DIR}")
+		set_tests_properties(defw2_qpm_otlp_check
+			PROPERTIES
+				FIXTURES_REQUIRED defw2_qpm_otlp_files)
 	else()
 		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
 	endif()

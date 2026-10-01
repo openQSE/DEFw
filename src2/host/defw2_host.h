@@ -9,12 +9,20 @@
 
 #include <defw2/defw2_service.h>
 
+#include "defw2_arena.h"
 #include "defw2_internal.h"
 
 /*
- * One call, waiting for a consumer. It lives on the parked handler's own
- * stack, so nothing is allocated per call and its lifetime is exactly the
- * handler's wait.
+ * One call, from the handler that decoded it to whoever answers it: an
+ * operations table on the handler's own thread, or a consumer of the queue.
+ * It lives on the handler's stack, so nothing is allocated per call and its
+ * lifetime is exactly the handler's.
+ *
+ * A typed call adds an answer. request is then the method's public request
+ * structure and response its public answer, which the service fills in.
+ * Everything the answer points at comes from arena, and a bulk reply is
+ * pushed into the buffer the caller lent, so the handler frees all of it
+ * once the reply is on the wire.
  */
 struct defw2_call {
 	struct defw2_call	*next;
@@ -28,7 +36,19 @@ struct defw2_call {
 	ABT_eventual		done;
 	uint64_t		queued_ns;	/* monotonic */
 	uint64_t		taken_ns;
+	void			*response;	/* a typed call's answer */
+	struct defw2_arena	arena;
+	void			*bulk;		/* a bulk reply, owned */
+	uint64_t		bulk_len;
+	uint64_t		result_capacity; /* lent by the caller, 0 for none */
 };
+
+/*
+ * Free what a typed call accumulated: the answer's storage, any bulk reply
+ * and the status message. The call itself is the handler's and is not
+ * freed. Safe on a call that never went typed.
+ */
+void defw2_call_release(struct defw2_call *call);
 
 struct defw2_queue {
 	struct defw2_call	*head;

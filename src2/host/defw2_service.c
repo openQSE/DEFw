@@ -364,6 +364,62 @@ defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
 	return DEFW2_OK;
 }
 
+/*
+ * Answering a typed call. See defw2_service.h. All of this is storage the
+ * handler frees once the reply is on the wire.
+ */
+
+void defw2_call_set_status(defw2_call_t *call, defw2_rc_t code,
+			   uint32_t category, const char *message)
+{
+	if (call != NULL)
+		call_status(call, code, category, message);
+}
+
+void *defw2_call_alloc(defw2_call_t *call, size_t size)
+{
+	return call != NULL ? defw2_arena_alloc(&call->arena, size) : NULL;
+}
+
+char *defw2_call_strdup(defw2_call_t *call, const char *s)
+{
+	return call != NULL ? defw2_arena_strdup(&call->arena, s) : NULL;
+}
+
+char *defw2_call_strndup(defw2_call_t *call, const char *s, size_t len)
+{
+	return call != NULL ? defw2_arena_strndup(&call->arena, s, len)
+			    : NULL;
+}
+
+void *defw2_call_bulk_reply(defw2_call_t *call, uint64_t nbytes)
+{
+	if (call == NULL || nbytes == 0 || nbytes > DEFW2_BULK_MAX)
+		return NULL;
+	/* A second request replaces the first rather than leaking it. */
+	free(call->bulk);
+	call->bulk = malloc(nbytes);
+	call->bulk_len = call->bulk != NULL ? nbytes : 0;
+	return call->bulk;
+}
+
+uint64_t defw2_call_result_capacity(const defw2_call_t *call)
+{
+	return call != NULL ? call->result_capacity : 0;
+}
+
+void defw2_call_release(struct defw2_call *call)
+{
+	if (call == NULL)
+		return;
+	defw2_arena_free(&call->arena);
+	free(call->bulk);
+	call->bulk = NULL;
+	call->bulk_len = 0;
+	free(call->status.message);
+	call->status.message = NULL;
+}
+
 const char *defw2_service_id(const defw2_service_t *svc)
 {
 	return svc ? svc->service_id : NULL;

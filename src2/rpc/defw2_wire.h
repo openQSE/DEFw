@@ -20,7 +20,9 @@
 #include <margo.h>
 #include <mercury_macros.h>
 #include <mercury_proc.h>
+#include <mercury_proc_bulk.h>
 
+#include <defw2/defw2_bulk.h>
 #include <defw2/defw2_rpc.h>
 
 #include "defw2_internal.h"
@@ -186,6 +188,97 @@ static HG_INLINE hg_return_t hg_proc_defw2_bytes_t(hg_proc_t proc, void *arg)
 	default:
 		return HG_SUCCESS;
 	}
+}
+
+/*
+ * A result buffer the caller lends: its registration and how much it holds.
+ * Mercury's bulk proc carries a null handle as a zero size, so a request
+ * that lends nothing costs two integers.
+ *
+ * Mercury's bulk decode has the same flaw as its string decode: it reserves
+ * whatever serialized size the message claims, growing its buffer when the
+ * bytes are not there. So the size is read ahead and checked against what
+ * the message carries before Mercury sees it. That relies on a uint64 being
+ * encoded as its own eight bytes, which is true unless Mercury is built with
+ * XDR, and v2 pins a build without it.
+ */
+typedef struct {
+	hg_uint64_t	capacity;
+	hg_bulk_t	handle;
+} defw2_wire_result_t;
+
+static HG_INLINE hg_return_t hg_proc_defw2_wire_result_t(hg_proc_t proc,
+							 void *arg)
+{
+	defw2_wire_result_t *result = (defw2_wire_result_t *)arg;
+	hg_return_t ret;
+
+	ret = hg_proc_hg_uint64_t(proc, &result->capacity);
+	if (ret != HG_SUCCESS)
+		return ret;
+	if (hg_proc_get_op(proc) == HG_DECODE) {
+#ifndef HG_HAS_XDR
+		hg_uint64_t claimed;
+		void *at;
+
+		if (result->capacity > DEFW2_BULK_MAX)
+			return HG_OVERFLOW;
+		if (hg_proc_get_size_left(proc) < sizeof(claimed))
+			return HG_OVERFLOW;
+		/* A zero-size save hands back the current position and
+		 * leaves it there, so this reads without consuming. */
+		at = hg_proc_save_ptr(proc, 0);
+		if (at == NULL)
+			return HG_PROTOCOL_ERROR;
+		memcpy(&claimed, at, sizeof(claimed));
+		hg_proc_restore_ptr(proc, at, 0);
+		if (claimed > hg_proc_get_size_left(proc) - sizeof(claimed))
+			return HG_OVERFLOW;
+#else
+		if (result->capacity > DEFW2_BULK_MAX)
+			return HG_OVERFLOW;
+#endif
+	}
+	return hg_proc_hg_bulk_t(proc, &result->handle);
+}
+
+/*
+ * A tensor descriptor, as defw2_tensor_t, plus whether the data arrived in
+ * the buffer the caller lent. Only the dimensions in use travel, and a rank
+ * beyond DEFW2_TENSOR_RANK_MAX is refused before any of them is read.
+ */
+typedef struct {
+	hg_uint32_t	dtype;
+	hg_uint32_t	rank;
+	hg_uint64_t	shape[DEFW2_TENSOR_RANK_MAX];
+	hg_uint64_t	nbytes;
+	hg_uint8_t	delivered;
+} defw2_wire_tensor_t;
+
+static HG_INLINE hg_return_t hg_proc_defw2_wire_tensor_t(hg_proc_t proc,
+							 void *arg)
+{
+	defw2_wire_tensor_t *tensor = (defw2_wire_tensor_t *)arg;
+	hg_return_t ret;
+	hg_uint32_t i;
+
+	ret = hg_proc_hg_uint32_t(proc, &tensor->dtype);
+	if (ret != HG_SUCCESS)
+		return ret;
+	ret = hg_proc_hg_uint32_t(proc, &tensor->rank);
+	if (ret != HG_SUCCESS)
+		return ret;
+	if (tensor->rank > DEFW2_TENSOR_RANK_MAX)
+		return HG_OVERFLOW;
+	for (i = 0; i < tensor->rank; i++) {
+		ret = hg_proc_hg_uint64_t(proc, &tensor->shape[i]);
+		if (ret != HG_SUCCESS)
+			return ret;
+	}
+	ret = hg_proc_hg_uint64_t(proc, &tensor->nbytes);
+	if (ret != HG_SUCCESS)
+		return ret;
+	return hg_proc_hg_uint8_t(proc, &tensor->delivered);
 }
 
 /*
