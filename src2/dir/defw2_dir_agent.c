@@ -43,16 +43,16 @@ struct defw2_dir_agent {
 };
 
 /*
- * Send one registration and keep the generation it assigned. Returns whether
- * the directory accepted it.
+ * Send one registration and keep the generation it assigned. Returns
+ * DEFW2_OK when the directory accepted it, the transport's code when it did
+ * not reach a directory, and the directory's own code when it refused.
  */
-static bool register_once(defw2_dir_agent_t *agent)
+static defw2_rc_t register_once(defw2_dir_agent_t *agent)
 {
 	defw2_call_opts_t opts;
 	defw2_dir_record_t view;
 	defw2_status_t status;
 	uint64_t generation = 0;
-	bool accepted;
 	defw2_rc_t rc;
 
 	memset(&opts, 0, sizeof(opts));
@@ -67,8 +67,9 @@ static bool register_once(defw2_dir_agent_t *agent)
 	defw2_dir_record_own_view(agent->record, &view);
 	rc = defw2_dir_register(agent->dir, &view, &opts, &generation,
 				&status);
-	accepted = rc == DEFW2_OK && status.code == DEFW2_OK;
-	if (accepted) {
+	if (rc == DEFW2_OK)
+		rc = status.code;
+	if (rc == DEFW2_OK) {
 		pthread_mutex_lock(&agent->lock);
 		agent->generation = generation;
 		pthread_mutex_unlock(&agent->lock);
@@ -84,7 +85,7 @@ static bool register_once(defw2_dir_agent_t *agent)
 					 : defw2_strerror(rc));
 	}
 	defw2_status_free(&status);
-	return accepted;
+	return rc;
 }
 
 static void beat_timer_cb(void *arg)
@@ -207,11 +208,14 @@ defw2_rc_t defw2_dir_agent_start(defw2_service_t *svc, const char *dir_address,
 	 * agent rather than something to retry in the background: a conflict
 	 * with a live runtime will not resolve itself, and a service that
 	 * silently serves while unregistered is worse than one that stops.
+	 *
+	 * The caller gets the reason. This used to return DEFW2_ERR_BUSY for
+	 * every failure, so a directory that could not be reached was reported
+	 * as being at capacity.
 	 */
-	if (!register_once(agent)) {
-		rc = DEFW2_ERR_BUSY;
+	rc = register_once(agent);
+	if (rc != DEFW2_OK)
 		goto fail;
-	}
 
 	if (margo_timer_create(rt->mid, beat_timer_cb, agent,
 			       &agent->timer) != 0) {

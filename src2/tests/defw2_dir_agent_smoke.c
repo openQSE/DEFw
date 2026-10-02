@@ -11,6 +11,8 @@
  * second agent for the same service_id comes back as a new generation without
  * any service code having asked for one.
  *
+ * Between the two, it shows that an agent which cannot register says why.
+ *
  * The directory gets a runtime of its own, and the registering service
  * another, both over na+sm in this one process. They could share one now that
  * defw2_rpc_lookup reuses a registration the process already has, which
@@ -86,11 +88,13 @@ static size_t up_count(defw2_dir_t *dir, const char *service_id,
 
 int main(void)
 {
-	defw2_config_t dir_cfg, svc_cfg, client_cfg;
+	defw2_config_t dir_cfg, svc_cfg, client_cfg, rival_cfg;
 	defw2_rt_t *dir_rt = NULL, *svc_rt = NULL, *client_rt = NULL;
-	defw2_service_t *dirsvc = NULL, *svc = NULL;
+	defw2_rt_t *rival_rt = NULL;
+	defw2_service_t *dirsvc = NULL, *svc = NULL, *rival = NULL;
 	defw2_dir_store_opts_t store_opts;
-	defw2_dir_agent_t *agent = NULL;
+	defw2_dir_agent_t *agent = NULL, *rival_agent = NULL;
+	defw2_rc_t rc;
 	defw2_dir_t *dir = NULL;
 	defw2_dir_record_t record;
 	defw2_dir_state_t state = DEFW2_DIR_STATE_UP;
@@ -105,6 +109,7 @@ int main(void)
 	memset(&dir_cfg, 0, sizeof(dir_cfg));
 	memset(&svc_cfg, 0, sizeof(svc_cfg));
 	memset(&client_cfg, 0, sizeof(client_cfg));
+	memset(&rival_cfg, 0, sizeof(rival_cfg));
 
 	dir_cfg.address = "na+sm://";
 	dir_cfg.node_name = "dirsvc-host";
@@ -178,6 +183,46 @@ int main(void)
 		     defw2_runtime_id(svc_rt)) == 0);
 	check("the service resolves straight away",
 	      up_count(dir, "qpm-agent", NULL, NULL) == 1);
+
+	/*
+	 * A second process serving the same service_id, which is the mistake
+	 * the directory exists to catch.
+	 */
+	rival_cfg.address = "na+sm://";
+	rival_cfg.node_name = "rival-host";
+	rival_cfg.role = DEFW2_ROLE_SERVER;
+	rival_cfg.log_level = DEFW2_LOG_ERROR;
+	rival_cfg.rpc_thread_count = 2;
+	if (defw2_init(&rival_cfg, &rival_rt) != DEFW2_OK) {
+		fprintf(stderr, "cannot start the rival runtime\n");
+		return EXIT_FAILURE;
+	}
+	check("a rival service binds on provider 1",
+	      defw2_service_create(rival_rt, "qpm-agent", "qfw.qpm",
+				   DEFW2_PROVIDER_ECHO, &rival) == DEFW2_OK &&
+	      defw2_echo_bind(rival, NULL) == DEFW2_OK);
+
+	/*
+	 * Two ways to fail, and the agent says which. The directory refuses
+	 * the rival with its own code. A process with no directory answers
+	 * that it has no such RPC. That used to come back as DEFW2_ERR_BUSY
+	 * too, so a registration that never reached a directory read as a
+	 * directory at capacity.
+	 */
+	rc = defw2_dir_agent_start(rival, defw2_service_address(dirsvc),
+				   &record, BEAT_MS, &rival_agent);
+	check("the directory refuses a rival as busy",
+	      rc == DEFW2_ERR_BUSY && rival_agent == NULL);
+	rc = defw2_dir_agent_start(rival, defw2_service_address(svc),
+				   &record, BEAT_MS, &rival_agent);
+	check("no directory is reported as not found, not busy",
+	      rc == DEFW2_ERR_NOT_FOUND && rival_agent == NULL);
+	check("and the first registration is untouched",
+	      up_count(dir, "qpm-agent", NULL, &generation) == 1 &&
+	      generation == 1);
+	defw2_service_shutdown(rival);
+	defw2_service_destroy(rival);
+	defw2_finalize(rival_rt);
 
 	/*
 	 * The address and endpoint the agent filled in, which a caller never
