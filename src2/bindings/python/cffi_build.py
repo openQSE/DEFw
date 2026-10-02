@@ -141,6 +141,7 @@ char *defw2_call_strdup(defw2_call_t *call, const char *s);
 char *defw2_call_strndup(defw2_call_t *call, const char *s, size_t len);
 void *defw2_call_bulk_reply(defw2_call_t *call, uint64_t nbytes);
 uint64_t defw2_call_result_capacity(const defw2_call_t *call);
+const char *defw2_call_traceparent(const defw2_call_t *call);
 
 /*
  * The QPM APIs. Declared in full rather than with "...", so the compile
