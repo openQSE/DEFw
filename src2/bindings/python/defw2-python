@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run v1 Python on DEFw v2, as v1's defw-python ran it on v1:
+#
+#	defw2-python SCRIPT [ARGS...]
+#	defw2-python -m MODULE [ARGS...]
+#	defw2-python --serve MODULE [--execution-workers N]
+#
+# It runs python3 -m defw2.compat with the defw2 package that sits beside
+# this script first on the path. The interpreter is DEFW2_PYTHON when that
+# is set, the active virtual environment's python when there is one, and
+# python3 otherwise. The v1 tree comes from DEFW_PATH.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -d "${here}/defw2" ]]; then
+	export PYTHONPATH="${here}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
+if [[ -n "${DEFW2_PYTHON:-}" ]]; then
+	python="${DEFW2_PYTHON}"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+	python="${VIRTUAL_ENV}/bin/python"
+else
+	python="$(command -v python3)"
+fi
+
+exec "${python}" -m defw2.compat "$@"

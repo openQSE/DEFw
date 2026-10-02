@@ -117,6 +117,9 @@ if(DEFW2_HAVE_CFFI)
 		COMMAND "${CMAKE_COMMAND}" -E copy_directory
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2"
 			"${DEFW2_PYTHON_DIR}/defw2"
+		COMMAND "${CMAKE_COMMAND}" -E copy
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2-python"
+			"${DEFW2_PYTHON_DIR}/defw2-python"
 		COMMAND "${Python3_EXECUTABLE}"
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/cffi_build.py"
 			--include "${CMAKE_CURRENT_SOURCE_DIR}/include"
