@@ -160,6 +160,35 @@ The cost is one hand-off per call. The server's span reports it as its
 `queue` event, separately from the time the service itself took, so the two
 can be told apart in a report.
 
+## v1 code on v2
+
+QFw's QPM services and its Qiskit backend are written against v1. They run
+on v2 unchanged under `defw2-python`, the launcher `defw2.compat` provides,
+which does for v2 what v1's `defw-python` did for v1:
+
+```bash
+defw2-python test_qiskit_simple.py 4 fake-iqm   # a v1 client
+defw2-python --serve svc_fake_iqm_qpm           # a v1 QPM service module
+```
+
+Before anything else loads, it makes the v1 module names importable.
+`cdefw_global`, `defw`, `defw_app_util`, `defw_remote` and `defw_workers`
+are compat's own, because they were v1's runtime. `api_events`, `defw_cmd`,
+`defw_common_def`, `defw_event_baseapi`, `defw_exception`, `defw_trace`,
+`defw_util` and `svc_launcher` are v1's own files, loaded unchanged from the
+v1 tree that `DEFW_PATH` names. Any other v1 name fails to import with an
+error that says it has no v2 counterpart.
+
+A served v1 QPM answers the typed QPM APIs through `QPMAdapter`, so C and
+Python v2 callers reach it as they reach any QPM. A v1 client's API classes
+send the fourteen typed QPM methods over the same APIs, and the dictionary
+the service returned comes back key for key, its exceptions as the same v1
+classes, and a statevector through the bulk path, put back into the v1
+payload. A v1 client's `register_event_notification` is answered by peeking
+the completion queue until phase 3 brings events. `_mapping.py` says
+exactly what moves into a typed field and what stays in `extra`, and the
+design document's Python section says why.
+
 ## Layout
 
 | Path | Contents |
@@ -170,10 +199,20 @@ can be told apart in a report.
 | `defw2/_qpm.py` | The QPM client, its answers, and the codecs that read a typed call's request and write its answer |
 | `defw2/_dir.py` | The directory client, records as dictionaries, and the record a host registers |
 | `defw2/_service.py` | `ServiceHost`: one provider, queue and set of workers per API, and directory registration |
+| `defw2/compat/__init__.py` | `install`, which makes the v1 names importable, and the finder that refuses the rest |
+| `defw2/compat/_mapping.py` | How a v1 QPM's dictionaries cross the typed APIs, both ways |
+| `defw2/compat/_adapter.py` | `QPMAdapter`, a `ServiceHost` handler over a v1 QPM object |
+| `defw2/compat/_remote.py` | Remote objects for v1 callers, v1 exceptions, and completion events by peeking |
+| `defw2/compat/_directory.py` | `defw.dirsvc`: v1 registration and resolution over the v2 directory |
+| `defw2/compat/_serve.py`, `__main__.py` | `defw2-python` and its `--serve` |
+| `defw2/compat/_v1/` | The five v1 modules compat provides itself |
+| `defw2-python` | The launcher, copied beside the built package |
 
 `src2/tests/defw2_python_smoke.py` exercises echo and the host, including
 the interpreter-lock property. `src2/tests/defw2_python_qpm_smoke.py` holds
 the QPM to the same checks as the C test from both languages, against a C
 service and a Python one, with the control queue under an execution backlog
-and a Python QPM in the directory. Both run under ctest when cffi is
+and a Python QPM in the directory. `src2/tests/defw2_compat_smoke.py` runs
+a v1 QPM and a v1 client, both written against v1 alone, on v2, and holds
+every answer to what v1 gave. All three run under ctest when cffi is
 present.

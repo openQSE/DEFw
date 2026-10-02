@@ -406,9 +406,11 @@ DEFw/
     host/                   defw2-host and the C plugin ABI
     services/
       echo/                 reference C service used by the benchmarks
-      qpm_adapter/          typed QPM hot path over a Python or C QPM
+    qpm/                    the typed QPM APIs
     bindings/python/
       defw2/                Python package
+      defw2/compat/         v1 names on v2, and the v1 QPM adapter
+      defw2-python          the launcher for v1 code
       cffi_build.py         binding build
     bench/                  defw2-bench client and service
     tests/                  C contract tests and Python binding tests
@@ -944,6 +946,11 @@ For a C caller the callback runs on a `libdefw2` delivery thread, never on a
 Margo handler thread, so the caller may block. For Python the event is queued
 to the binding's handler thread, as described next.
 
+Until phase 3 builds this, `defw2.compat` gives a v1 caller its completion
+events by peeking the completion queue instead, as the Python section
+describes. The pull path is the same one the push path falls back to, so
+nothing a v1 caller sees changes when push arrives.
+
 ## Language Bindings
 
 ### C
@@ -1060,16 +1067,83 @@ request structure read into plain values, and the dictionary a method
 returns is written straight into the C answer, so nothing is encoded between
 the two languages.
 
-The QPM service classes in QFw keep their method names and their dictionary
-results. The adapter in `src2/services/qpm_adapter` maps the typed
-structures onto those methods, so a v1 service becomes a v2 service by
-importing a different host and dropping the `BaseRemote` inheritance.
+**Running v1 code on v2.** QFw's QPM services and its Qiskit backend are v1
+Python. They import `defw`, `defw_remote`, `api_events` and the rest, and the
+QPM classes answer v1 calls with dictionaries. They run on v2 unchanged,
+through `defw2.compat` and a launcher, `defw2-python`, which plays the part
+v1's `defw-python` did:
 
-**Compatibility shim.** For the migration period the binding ships
-`defw2.compat.BaseRemote`, a proxy with the v1 constructor shape that routes
-known methods to typed stubs and unknown ones to the document tier. The
-Qiskit backend and the QFw resolver can move to v2 by changing the import
-that constructs the proxy.
+```bash
+defw2-python script.py ARGS              # a v1 client, such as an application
+defw2-python --serve svc_fake_iqm_qpm    # a v1 QPM service module
+```
+
+The launcher makes the v1 module names importable before the script or the
+service module loads, from three places. Five are compat's own, because they
+are v1's runtime: `defw` (the process as `defw.me`, the directory as
+`defw.dirsvc`, and `connect_to_binding`), `defw_remote`, `defw_app_util`,
+`defw_workers` and `cdefw_global`. Eight are v1's own modules, loaded
+unchanged from the v1 tree, because none of them touches the v1 runtime:
+`api_events`, `defw_cmd`, `defw_common_def`, `defw_event_baseapi`,
+`defw_exception`, `defw_trace`, `defw_util` and `svc_launcher`. So a v1
+exception on v2 is v1's own class, and v1's logging works as it did. Every
+other v1 name fails to import, with an error that says so. It has to be
+refused rather than left to the path, because QFw's environment puts v1's
+`infra` directory on `PYTHONPATH`, where v1's `defw` would start the v1
+runtime.
+
+On the service side, `--serve` loads the module as v1 did, calls its
+`initialize()`, and serves its class through `QPMAdapter`, a `ServiceHost`
+handler that turns each typed call back into the v1 call, and the
+dictionary the v1 method returns into the typed answer. The module
+registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
+side, `defw.connect_to_binding` returns QFw's own API classes, such as
+`QPMExecution`, built on compat's `BaseRemote`. A call to one of the
+fourteen typed QPM methods goes over the typed APIs, with its arguments
+taken by the names the API class declares. Any other method fails, naming
+itself, until v2 types it. Phase 2 has no document tier.
+
+A v1 dictionary crosses the typed APIs unchanged. A value moves into a typed
+field only when the trip back gives the same value: a string that is not
+empty, an integer from 1 to 2^64 - 1, or True. An empty string, a zero, a
+False, a None or a float stays in `extra` under its own key. So a v1 caller
+gets back the dictionary the service returned, key for key, and a v2 caller
+still finds what it branches on in the typed fields. A circuit moves into
+the request's circuit bytes, so base64 QPY travels as its bytes. A
+statevector moves into the bulk result. Each leaves a stub where it was, so
+the far side puts it back in the same place and the same encoding. A
+base64+zlib statevector encoded again on the same zlib is the payload the
+service made, byte for byte. `read_cq` peeks first, so a completion whose
+statevector does not fit the buffer the caller lent stays queued for the
+retry the typed API promises, where v1's `read_cq` would have consumed it.
+
+A v1 exception fails the call with a status category, and the message names
+the class, so the caller gets the same class back: a DEFw exception or a
+Python built-in one by name, and any other class as `DEFwRemoteError`
+naming it. Each call carries the caller's trace context from v1's
+`defw_trace` hooks, and the adapter runs the v1 method inside it, through
+`defw2_call_traceparent`, so QFw's own spans stay in one trace across the
+hop, as they did on v1.
+
+Three things v2 does not have yet are emulated, and the log says so.
+Completion events, which arrive with phase 3, are collected by peeking the
+completion queue for each task the process submitted after it registered,
+and put on the caller's own event queue. Peeking leaves the completion
+queued, as v1's push did. Directory events are accepted and not delivered,
+so a client notices a restarted service when it next resolves. And v1's
+directory records: registering keeps the v1 record's fields as JSON in a
+`v1_record` property, beside the typed selector and string properties a v2
+client resolves by, and `resolve_services` rebuilds the v1 record from it
+and matches with v1's rules.
+
+The differences that remain are JSON's. A tuple arrives as a list, a key
+that is not a string arrives as a string, and a value JSON cannot carry
+fails the call rather than being dropped. `defw2_compat_smoke` serves a v1
+QPM written against v1 alone, calls it from a v1 client, and compares every
+answer and every exception with what a v1 caller got from the same calls,
+and every directory answer with v1's own directory code given the same
+record. QFw's fake IQM QPM, its reservation driver and
+`test_qiskit_simple.py` also ran this way, unmodified, outside Slurm.
 
 ### C++
 
@@ -1266,7 +1340,7 @@ time.
 | --- | --- | --- |
 | 1 | `defw2-dirsvc` replaces the v1 directory for a test profile | C and Python clients resolve the echo service |
 | 2 | The fake IQM QPM runs under `defw2.ServiceHost` with the adapter | W5 passes from a C client and a Python client |
-| 3 | The Qiskit backend constructs its proxy through `defw2.compat` | W7 passes unchanged at the application level |
+| 3 | The Qiskit backend runs unchanged under `defw2-python` | W7 passes unchanged at the application level |
 | 4 | The SPANK plugin links `libdefw2` and calls admission RPCs directly | The QSGP gateway and its protocol are deleted |
 | 5 | Remaining Python services move to the host | v1 is no longer started by any QFw profile |
 | 6 | `src/` is retired | One DEFw again |
@@ -1277,7 +1351,7 @@ flowchart LR
         direction TB
         S1["1 Directory<br/>defw2-dirsvc"]
         S2["2 QPM service<br/>on the v2 host"]
-        S3["3 Qiskit backend<br/>via the compat proxy"]
+        S3["3 Qiskit backend<br/>unchanged, under defw2-python"]
         S1 --> S2 --> S3
     end
     G{{"Go or no-go<br/>decision"}}
