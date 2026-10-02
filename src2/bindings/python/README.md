@@ -41,6 +41,12 @@ cmake --build build --target defw2-python
 PYTHONPATH=build/src2/python python3 -c "import defw2; print(defw2.version())"
 ```
 
+An install puts the package under `DEFW2_PYTHON_INSTALL_DIR`, the prefix's
+`lib/pythonX.Y/site-packages` unless set, and `defw2-python` in `bin`. The
+installed extension is built apart from the build tree's, with an RPATH
+relative to itself and nothing else, so an install can move and never
+loads a build tree's library by accident.
+
 ## Calling
 
 ```python
@@ -206,7 +212,7 @@ design document's Python section says why.
 | `defw2/compat/_directory.py` | `defw.dirsvc`: v1 registration and resolution over the v2 directory |
 | `defw2/compat/_serve.py`, `__main__.py` | `defw2-python` and its `--serve` |
 | `defw2/compat/_v1/` | The five v1 modules compat provides itself |
-| `defw2-python` | The launcher, copied beside the built package |
+| `defw2-python.in` | The launcher, configured beside the built package and for the install |
 
 `src2/tests/defw2_python_smoke.py` exercises echo and the host, including
 the interpreter-lock property. `src2/tests/defw2_python_qpm_smoke.py` holds

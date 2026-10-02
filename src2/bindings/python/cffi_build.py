@@ -6,7 +6,10 @@ headers, so a mismatch is a compile error rather than a crash at run time.
 Only what the binding uses is declared, which also documents exactly how
 much of libdefw2 the Python side depends on.
 
-	cffi_build.py --include <dir> --library <dir> --out <dir>
+	cffi_build.py --include <dir> --library <dir> --out <dir> [--rpath <dir>]
+
+--library is where to link libdefw2 from, and where the extension looks
+for it at run time unless --rpath says where else.
 
 Called by CMake when cffi is present. The headers and the library come from
 the build tree, or from an installed DEFw v2.
@@ -394,6 +397,10 @@ def main():
 			    help='where libdefw2 is')
 	parser.add_argument('--out', required=True,
 			    help='where to put the built package')
+	parser.add_argument('--rpath', action='append', default=[],
+			    help='where the extension looks for libdefw2, '
+				 'such as $ORIGIN relative to an install, in '
+				 'place of --library; repeatable')
 	args = parser.parse_args()
 
 	builder = FFI()
@@ -403,8 +410,11 @@ def main():
 		include_dirs=[os.path.abspath(args.include)],
 		library_dirs=[os.path.abspath(args.library)],
 		libraries=['defw2'],
-		# So the extension finds libdefw2 without LD_LIBRARY_PATH.
-		extra_link_args=['-Wl,-rpath,' + os.path.abspath(args.library)])
+		# So the extension finds libdefw2 without LD_LIBRARY_PATH: in
+		# the build tree, or for an install only where the install
+		# put it, so it never reaches back into a build tree.
+		extra_link_args=['-Wl,-rpath,' + path for path in
+				 args.rpath or [os.path.abspath(args.library)]])
 
 	os.makedirs(args.out, exist_ok=True)
 	built = builder.compile(tmpdir=args.out, verbose=False)
