@@ -16,13 +16,38 @@ and on the other side:
 	with defw2.Runtime(role='server') as rt:
 		host = defw2.ServiceHost(rt, 'echo')
 		host.serve(lambda method, request: request)
+
+The QPM's typed APIs work the same way, through defw2.QPM on the calling
+side and a ServiceHost serving defw2.QPM_APIS on the other, and
+defw2.Directory resolves what a host registers.
 """
 
+from ._dir import STATE, Directory
 from ._echo import API_ECHO, PROVIDER_ECHO, Echo
+from ._qpm import (
+	API_QPM_ADMISSION,
+	API_QPM_CONTROL,
+	API_QPM_EXECUTION,
+	DTYPE,
+	PROVIDER_QPM_ADMISSION,
+	PROVIDER_QPM_CONTROL,
+	PROVIDER_QPM_EXECUTION,
+	QPM,
+	QPM_APIS,
+	QPM_VERSION,
+	Decision,
+	Request,
+	Reservation,
+	ServiceStatus,
+	Task,
+	Tensor,
+)
 from ._runtime import (
 	CATEGORY,
+	CATEGORY_CODE,
 	DefwError,
 	Runtime,
+	ServiceError,
 	Status,
 	process_stats,
 	version,
@@ -31,13 +56,33 @@ from ._service import ServiceHost
 
 __all__ = [
 	'API_ECHO',
+	'API_QPM_ADMISSION',
+	'API_QPM_CONTROL',
+	'API_QPM_EXECUTION',
 	'CATEGORY',
+	'CATEGORY_CODE',
+	'DTYPE',
+	'Decision',
 	'DefwError',
+	'Directory',
 	'Echo',
 	'PROVIDER_ECHO',
+	'PROVIDER_QPM_ADMISSION',
+	'PROVIDER_QPM_CONTROL',
+	'PROVIDER_QPM_EXECUTION',
+	'QPM',
+	'QPM_APIS',
+	'QPM_VERSION',
+	'Request',
+	'Reservation',
 	'Runtime',
+	'STATE',
+	'ServiceError',
 	'ServiceHost',
+	'ServiceStatus',
 	'Status',
+	'Task',
+	'Tensor',
 	'process_stats',
 	'version',
 ]

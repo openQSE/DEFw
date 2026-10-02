@@ -9,8 +9,8 @@
  * language that must not run on a Margo thread is served. See the queue
  * section in defw2_service.h.
  *
- * Directory registration and heartbeats belong here too and arrive in phase
- * 1. Until then a caller reaches a service by the address it prints.
+ * Directory registration and heartbeats are the agent's, in dir/, which a
+ * service starts once it is bound.
  */
 #include <errno.h>
 #include <stdlib.h>
@@ -191,35 +191,33 @@ static void queue_destroy(struct defw2_service *svc)
 	svc->queue = NULL;
 }
 
-defw2_rc_t defw2_service_dispatch(struct defw2_service *svc, const char *api,
-				  const char *method, const void *request,
-				  size_t request_len, void **reply,
-				  size_t *reply_len, defw2_status_t *status,
-				  uint64_t *queue_ns)
+defw2_rc_t defw2_service_dispatch_call(struct defw2_service *svc,
+				       struct defw2_call *call,
+				       uint64_t *queue_ns)
 {
 	struct defw2_queue *queue = svc->queue;
-	struct defw2_call call;
 
-	memset(&call, 0, sizeof(call));
-	call.api = api;
-	call.method = method;
-	call.request = request;
-	call.request_len = request_len;
-	call.queued_ns = defw2_mono_ns();
+	if (queue_ns != NULL)
+		*queue_ns = 0;
+	if (queue == NULL)
+		return DEFW2_ERR_NOT_FOUND;
+	call->next = NULL;
+	call->taken_ns = 0;
+	call->queued_ns = defw2_mono_ns();
 	/* Created before the call is visible, so a consumer that takes it
 	 * at once still has something to set. */
-	if (ABT_eventual_create(0, &call.done) != ABT_SUCCESS)
+	if (ABT_eventual_create(0, &call->done) != ABT_SUCCESS)
 		return DEFW2_ERR_INTERNAL;
 
 	pthread_mutex_lock(&queue->lock);
 	if (!queue->open) {
 		pthread_mutex_unlock(&queue->lock);
-		ABT_eventual_free(&call.done);
+		ABT_eventual_free(&call->done);
 		return DEFW2_ERR_NOT_FOUND;
 	}
 	if (queue->depth != 0 && queue->length >= queue->depth) {
 		pthread_mutex_unlock(&queue->lock);
-		ABT_eventual_free(&call.done);
+		ABT_eventual_free(&call->done);
 		/*
 		 * Backpressure, not a deadline. A caller that retries a
 		 * timeout would hammer a service that is merely full, and
@@ -228,21 +226,42 @@ defw2_rc_t defw2_service_dispatch(struct defw2_service *svc, const char *api,
 		return DEFW2_ERR_BUSY;
 	}
 	if (queue->tail == NULL)
-		queue->head = &call;
+		queue->head = call;
 	else
-		queue->tail->next = &call;
-	queue->tail = &call;
+		queue->tail->next = call;
+	queue->tail = call;
 	queue->length++;
 	pthread_cond_signal(&queue->arrived);
 	pthread_mutex_unlock(&queue->lock);
 
 	/* Parks this ULT and leaves the execution stream to other calls. */
-	ABT_eventual_wait(call.done, NULL);
-	ABT_eventual_free(&call.done);
+	ABT_eventual_wait(call->done, NULL);
+	ABT_eventual_free(&call->done);
 
 	if (queue_ns != NULL)
-		*queue_ns = call.taken_ns > call.queued_ns ?
-				    call.taken_ns - call.queued_ns : 0;
+		*queue_ns = call->taken_ns > call->queued_ns ?
+				    call->taken_ns - call->queued_ns : 0;
+	return DEFW2_OK;
+}
+
+defw2_rc_t defw2_service_dispatch(struct defw2_service *svc, const char *api,
+				  const char *method, const void *request,
+				  size_t request_len, void **reply,
+				  size_t *reply_len, defw2_status_t *status,
+				  uint64_t *queue_ns)
+{
+	struct defw2_call call;
+	defw2_rc_t rc;
+
+	memset(&call, 0, sizeof(call));
+	call.api = api;
+	call.method = method;
+	call.request = request;
+	call.request_len = request_len;
+
+	rc = defw2_service_dispatch_call(svc, &call, queue_ns);
+	if (rc != DEFW2_OK)
+		return rc;
 	*reply = call.reply;
 	*reply_len = call.reply_len;
 	if (status != NULL)
@@ -297,6 +316,11 @@ const char *defw2_call_api(const defw2_call_t *call)
 const char *defw2_call_method(const defw2_call_t *call)
 {
 	return call ? call->method : NULL;
+}
+
+void *defw2_call_response(defw2_call_t *call)
+{
+	return call != NULL ? call->response : NULL;
 }
 
 const void *defw2_call_request(const defw2_call_t *call, size_t *len)
