@@ -447,8 +447,9 @@ defw2_rc_t defw2_dir_agent_start(defw2_service_t *svc, const char *dir_address,
 				 defw2_dir_agent_t **agent);
 
 /*
- * Stop heartbeating and deregister. Safe to call more than once, and safe on
- * NULL, so a service with no directory needs no special case.
+ * Stop heartbeating, deregister and free the agent. Safe on NULL, so a
+ * service with no directory needs no special case. It frees the agent, so a
+ * caller calls it once and forgets the pointer.
  *
  * Call it BEFORE defw2_service_shutdown. Deregistering is an RPC, and
  * shutdown stops the Margo instance, so an agent stopped afterwards cannot

@@ -118,6 +118,246 @@ defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
 			      uint32_t category, const char *message);
 
+/* bulk results */
+typedef enum {
+	DEFW2_DTYPE_NONE, DEFW2_DTYPE_U8, DEFW2_DTYPE_I32, DEFW2_DTYPE_I64,
+	DEFW2_DTYPE_F32, DEFW2_DTYPE_F64, DEFW2_DTYPE_C64, DEFW2_DTYPE_C128,
+	...
+} defw2_dtype_t;
+#define DEFW2_TENSOR_RANK_MAX ...
+typedef struct {
+	uint32_t dtype; uint32_t rank; uint64_t shape[...]; uint64_t nbytes;
+} defw2_tensor_t;
+typedef struct { void *data; size_t capacity; } defw2_result_buffer_t;
+size_t defw2_dtype_size(uint32_t dtype);
+bool defw2_tensor_valid(const defw2_tensor_t *tensor);
+bool defw2_tensor_vector(defw2_tensor_t *tensor, uint32_t dtype,
+			 uint64_t count);
+
+/* answering a typed call */
+void *defw2_call_response(defw2_call_t *call);
+void *defw2_call_alloc(defw2_call_t *call, size_t size);
+char *defw2_call_strdup(defw2_call_t *call, const char *s);
+char *defw2_call_strndup(defw2_call_t *call, const char *s, size_t len);
+void *defw2_call_bulk_reply(defw2_call_t *call, uint64_t nbytes);
+uint64_t defw2_call_result_capacity(const defw2_call_t *call);
+
+/*
+ * The QPM APIs. Declared in full rather than with "...", so the compile
+ * checks every field's type and offset against defw2_qpm.h and a drifted
+ * header is a build error here rather than a corrupted call.
+ */
+#define DEFW2_PROVIDER_QPM_CONTROL ...
+#define DEFW2_PROVIDER_QPM_ADMISSION ...
+#define DEFW2_PROVIDER_QPM_EXECUTION ...
+#define DEFW2_QPM_VERSION ...
+#define DEFW2_STR_MAX ...
+#define DEFW2_EAGER_MAX ...
+
+typedef struct {
+	uint64_t reservation_id; const char *token;
+} defw2_qpm_ctx_t;
+typedef struct {
+	uint64_t count; uint32_t qubit_count; uint32_t depth;
+	uint64_t one_q_gate_count; uint64_t two_q_gate_count;
+	uint64_t shots; uint64_t measurement_count;
+} defw2_qpm_task_class_t;
+typedef struct {
+	defw2_qpm_ctx_t ctx; uint64_t request_id; const char *user;
+	const char *job_id; const char *allocation_id;
+	const char *target_device_id; const char *scope_id;
+	const char *workload_kind; uint32_t num_qubits; uint64_t walltime_ns;
+	uint64_t ttl_ns; bool has_task_class;
+	defw2_qpm_task_class_t task_class; const char *extra;
+} defw2_qpm_reserve_req_t;
+typedef struct {
+	defw2_qpm_ctx_t ctx; uint64_t ttl_ns; const char *extra;
+} defw2_qpm_renew_req_t;
+typedef struct {
+	defw2_qpm_ctx_t ctx; uint32_t reason_code;
+} defw2_qpm_close_req_t;
+typedef struct {
+	const char *format; const void *data; size_t len;
+} defw2_qpm_circuit_t;
+typedef struct {
+	defw2_qpm_ctx_t ctx; defw2_qpm_circuit_t circuit; uint32_t num_qubits;
+	uint32_t num_shots; const char *compiler; bool return_statevector;
+	bool has_timeout; uint64_t timeout_ms; bool cancel_on_timeout;
+	const char *extra;
+} defw2_qpm_run_req_t;
+typedef struct {
+	defw2_qpm_ctx_t ctx; const char *cid; uint64_t qtask_id;
+	const char *reason;
+} defw2_qpm_task_req_t;
+typedef struct {
+	const char *state; bool ready; bool initialized;
+	bool accepting_requests; bool provider_ready;
+	uint32_t active_task_count; uint32_t active_reservation_count;
+	const char *extra; void *arena;
+} defw2_qpm_service_status_t;
+typedef struct {
+	const char *decision; uint64_t reservation_id; uint64_t request_id;
+	const char *reason; uint32_t reason_code; uint64_t retry_after_ns;
+	const char *message; const char *extra; void *arena;
+} defw2_qpm_decision_t;
+typedef struct {
+	uint64_t reservation_id; const char *state; uint64_t created_at_ns;
+	uint64_t expires_at_ns; const char *extra; void *arena;
+} defw2_qpm_reservation_t;
+typedef struct {
+	const char *outcome; const char *lifecycle_state; const char *cid;
+	uint64_t qtask_id; uint64_t reservation_id; const char *reason;
+	const char *message; bool completion_ready;
+	defw2_tensor_t statevector; bool statevector_delivered;
+	const char *extra; void *arena;
+} defw2_qpm_task_t;
+
+void defw2_qpm_service_status_free(defw2_qpm_service_status_t *status);
+void defw2_qpm_decision_free(defw2_qpm_decision_t *decision);
+void defw2_qpm_reservation_free(defw2_qpm_reservation_t *reservation);
+void defw2_qpm_task_free(defw2_qpm_task_t *task);
+
+defw2_rc_t defw2_qpm_is_ready(defw2_binding_t *qpm,
+			      const defw2_qpm_ctx_t *req,
+			      const defw2_call_opts_t *opts,
+			      defw2_qpm_service_status_t *out,
+			      defw2_status_t *status);
+defw2_rc_t defw2_qpm_get_service_status(defw2_binding_t *qpm,
+					const defw2_qpm_ctx_t *req,
+					const defw2_call_opts_t *opts,
+					defw2_qpm_service_status_t *out,
+					defw2_status_t *status);
+defw2_rc_t defw2_qpm_reserve(defw2_binding_t *qpm,
+			     const defw2_qpm_reserve_req_t *req,
+			     const defw2_call_opts_t *opts,
+			     defw2_qpm_decision_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_renew(defw2_binding_t *qpm,
+			   const defw2_qpm_renew_req_t *req,
+			   const defw2_call_opts_t *opts,
+			   defw2_qpm_decision_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_release(defw2_binding_t *qpm,
+			     const defw2_qpm_close_req_t *req,
+			     const defw2_call_opts_t *opts,
+			     defw2_qpm_decision_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_cancel(defw2_binding_t *qpm,
+			    const defw2_qpm_close_req_t *req,
+			    const defw2_call_opts_t *opts,
+			    defw2_qpm_decision_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_get_reservation(defw2_binding_t *qpm,
+				     const defw2_qpm_ctx_t *req,
+				     const defw2_call_opts_t *opts,
+				     defw2_qpm_reservation_t *out,
+				     defw2_status_t *status);
+defw2_rc_t defw2_qpm_async_run(defw2_binding_t *qpm,
+			       const defw2_qpm_run_req_t *req,
+			       const defw2_call_opts_t *opts,
+			       defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_sync_run(defw2_binding_t *qpm,
+			      const defw2_qpm_run_req_t *req,
+			      defw2_result_buffer_t *result,
+			      const defw2_call_opts_t *opts,
+			      defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_read_cq(defw2_binding_t *qpm,
+			     const defw2_qpm_task_req_t *req,
+			     defw2_result_buffer_t *result,
+			     const defw2_call_opts_t *opts,
+			     defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_peek_cq(defw2_binding_t *qpm,
+			     const defw2_qpm_task_req_t *req,
+			     defw2_result_buffer_t *result,
+			     const defw2_call_opts_t *opts,
+			     defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_task_status(defw2_binding_t *qpm,
+				 const defw2_qpm_task_req_t *req,
+				 const defw2_call_opts_t *opts,
+				 defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_cancel_task(defw2_binding_t *qpm,
+				 const defw2_qpm_task_req_t *req,
+				 const defw2_call_opts_t *opts,
+				 defw2_qpm_task_t *out, defw2_status_t *status);
+defw2_rc_t defw2_qpm_delete_circuit(defw2_binding_t *qpm,
+				    const defw2_qpm_task_req_t *req,
+				    const defw2_call_opts_t *opts,
+				    defw2_qpm_task_t *out,
+				    defw2_status_t *status);
+defw2_rc_t defw2_qpm_control_bind(defw2_service_t *svc, const void *ops);
+defw2_rc_t defw2_qpm_admission_bind(defw2_service_t *svc, const void *ops);
+defw2_rc_t defw2_qpm_execution_bind(defw2_service_t *svc, const void *ops);
+
+/* the directory */
+typedef enum {
+	DEFW2_DIR_STATE_UP, DEFW2_DIR_STATE_DOWN, DEFW2_DIR_STATE_TIMED_OUT,
+	DEFW2_DIR_STATE_DEREGISTERED, ...
+} defw2_dir_state_t;
+typedef enum {
+	DEFW2_DIR_MATCH_EQUAL, DEFW2_DIR_MATCH_BITS_ALL,
+	DEFW2_DIR_MATCH_BITS_ANY, ...
+} defw2_dir_match_t;
+typedef struct {
+	const char *binding_name; const char *api_id; uint32_t api_version;
+	uint16_t provider_id;
+} defw2_dir_binding_t;
+typedef struct {
+	const char *node_name; const char *hostname; int32_t pid;
+} defw2_dir_endpoint_t;
+typedef struct {
+	const char *name; const char *const *aliases; size_t alias_count;
+	const char *const *resources; size_t resource_count;
+} defw2_dir_selector_t;
+typedef struct { const char *name; const char *value; } defw2_dir_property_t;
+typedef struct {
+	const char *service_id; const char *service_type;
+	const char *runtime_id; uint64_t generation; defw2_dir_state_t state;
+	const char *address; defw2_dir_endpoint_t endpoint;
+	const defw2_dir_binding_t *bindings; size_t binding_count;
+	defw2_dir_selector_t selector; const defw2_dir_property_t *properties;
+	size_t property_count; uint64_t registered_at_ns;
+	uint64_t last_heartbeat_ns; uint64_t retention_deadline_ns;
+} defw2_dir_record_t;
+typedef struct {
+	const char *name; const char *value; defw2_dir_match_t match;
+} defw2_dir_filter_t;
+typedef struct {
+	const char *service_id; const char *service_type;
+	const char *selector_name; const char *resource;
+	const char *binding_name; uint32_t api_version;
+	const defw2_dir_filter_t *filters; size_t filter_count;
+	bool include_inactive; size_t limit;
+} defw2_dir_query_t;
+typedef struct {
+	defw2_dir_record_t record; defw2_dir_binding_t binding;
+} defw2_dir_entry_t;
+typedef struct {
+	defw2_dir_entry_t *entries; size_t entry_count; void *arena;
+} defw2_dir_result_t;
+typedef struct defw2_dir defw2_dir_t;
+typedef struct defw2_dir_agent defw2_dir_agent_t;
+
+const char *defw2_dir_state_name(defw2_dir_state_t state);
+defw2_rc_t defw2_dir_open(defw2_rt_t *rt, const char *address,
+			  defw2_dir_t **dir);
+void defw2_dir_close(defw2_dir_t *dir);
+defw2_rc_t defw2_dir_resolve(defw2_dir_t *dir, const defw2_dir_query_t *query,
+			     const defw2_call_opts_t *opts,
+			     defw2_dir_result_t *result,
+			     defw2_status_t *status);
+defw2_rc_t defw2_dir_query(defw2_dir_t *dir, const defw2_dir_query_t *query,
+			   const defw2_call_opts_t *opts,
+			   defw2_dir_result_t *result,
+			   defw2_status_t *status);
+defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
+				const defw2_call_opts_t *opts,
+				uint64_t *generation, defw2_status_t *status);
+void defw2_dir_result_free(defw2_dir_result_t *result);
+defw2_rc_t defw2_dir_agent_start(defw2_service_t *svc, const char *dir_address,
+				 const defw2_dir_record_t *record,
+				 uint32_t interval_ms,
+				 defw2_dir_agent_t **agent);
+void defw2_dir_agent_stop(defw2_dir_agent_t *agent);
+uint64_t defw2_dir_agent_generation(const defw2_dir_agent_t *agent);
+const char *defw2_dir_agent_runtime_id(const defw2_dir_agent_t *agent);
+const char *defw2_dirsvc(const defw2_rt_t *rt);
+const char *defw2_hostname(const defw2_rt_t *rt);
 /* telemetry */
 bool defw2_profiling(const defw2_rt_t *rt);
 const char *defw2_trace_id(const defw2_rt_t *rt);
@@ -137,7 +377,10 @@ SOURCE = """
 #include <defw2/defw2.h>
 #include <defw2/defw2_rpc.h>
 #include <defw2/defw2_service.h>
+#include <defw2/defw2_bulk.h>
+#include <defw2/defw2_dir.h>
 #include <defw2/defw2_echo.h>
+#include <defw2/defw2_qpm.h>
 #include <defw2/defw2_telemetry.h>
 """
 
