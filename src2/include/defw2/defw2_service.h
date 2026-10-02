@@ -114,11 +114,54 @@ const char *defw2_call_api(const defw2_call_t *call);
 const char *defw2_call_method(const defw2_call_t *call);
 const void *defw2_call_request(const defw2_call_t *call, size_t *len);
 
-/* Answer it. reply is copied, so the caller keeps nothing. */
+/*
+ * Answer it. reply is copied, so the caller keeps nothing. A failure's
+ * message is copied too, and cut to DEFW2_STR_MAX if it is longer.
+ */
 defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 				 size_t len);
 defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
 			      uint32_t category, const char *message);
+
+/*
+ * Answering a typed call.
+ *
+ * A typed method, such as the QPM's, hands its service a call to answer
+ * into, and the answer is a plain structure the service fills in. Strings
+ * and anything else the answer points at come from the call, and the
+ * provider frees all of it once the reply is on the wire, so a service never
+ * frees what it answered with.
+ *
+ * Each returns NULL when there is no memory, and the strdups return NULL for
+ * a NULL string, so an absent field stays absent.
+ */
+void *defw2_call_alloc(defw2_call_t *call, size_t size);
+char *defw2_call_strdup(defw2_call_t *call, const char *s);
+char *defw2_call_strndup(defw2_call_t *call, const char *s, size_t len);
+
+/*
+ * A bulk reply, such as a statevector: nbytes of storage the call owns,
+ * which the provider pushes into the buffer the caller lent once the service
+ * has answered. NULL when there is no memory, or for zero or more than
+ * DEFW2_BULK_MAX bytes.
+ *
+ * A reply larger than the caller's buffer is not pushed, and the caller is
+ * told the size it needs instead. So a service that keeps a result until it
+ * is collected, the way a completion queue does, should compare the result
+ * with defw2_call_result_capacity before it gives the result up.
+ */
+void *defw2_call_bulk_reply(defw2_call_t *call, uint64_t nbytes);
+uint64_t defw2_call_result_capacity(const defw2_call_t *call);
+
+/*
+ * Fail a typed call from an operations table, which answers on the
+ * handler's own thread. Unlike defw2_service_fail it wakes nobody. The
+ * operation then returns a code other than DEFW2_OK, and this status is
+ * what the caller sees. An operation that fails without setting one is
+ * reported as a provider failure.
+ */
+void defw2_call_set_status(defw2_call_t *call, defw2_rc_t code,
+			   uint32_t category, const char *message);
 
 const char *defw2_service_id(const defw2_service_t *svc);
 const char *defw2_service_type(const defw2_service_t *svc);

@@ -54,12 +54,18 @@ static void defw2_echo_ult(hg_handle_t handle)
 		arrived_wall = defw2_wall_ns();
 		arrived_mono = defw2_mono_ns();
 	}
+	memset(&in, 0, sizeof(in));
 	memset(&out, 0, sizeof(out));
 	defw2_wire_status_ok(&out.status);
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
-		/* Nothing decoded, so a status is the whole answer. */
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_echo_in_t, &in);
+		/* Nothing usable decoded, so a status is the whole answer. */
 		defw2_wire_status_set(&out.status, DEFW2_ERR_INVALID,
 				      DEFW2_CAT_INVALID_ARGUMENT,
 				      "cannot decode request");
@@ -85,7 +91,7 @@ static void defw2_echo_ult(hg_handle_t handle)
 		defw2_wire_status_set(&out.status, DEFW2_ERR_NOT_FOUND,
 				      DEFW2_CAT_NOT_FOUND,
 				      "no echo service on this provider");
-	} else if (!defw2_hdr_compatible(&in.hdr)) {
+	} else if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION)) {
 		defw2_wire_status_set(&out.status, DEFW2_ERR_VERSION,
 				      DEFW2_CAT_VERSION_MISMATCH,
 				      "unsupported api version");
@@ -201,11 +207,17 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 		arrived_wall = defw2_wall_ns();
 		arrived_mono = defw2_mono_ns();
 	}
+	memset(&in, 0, sizeof(in));
 	memset(&out, 0, sizeof(out));
 	defw2_wire_status_ok(&out.status);
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_echo_bulk_in_t, &in);
 		defw2_wire_status_set(&out.status, DEFW2_ERR_INVALID,
 				      DEFW2_CAT_INVALID_ARGUMENT,
 				      "cannot decode request");
@@ -228,7 +240,7 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 				      "no echo service on this provider");
 		goto respond;
 	}
-	if (!defw2_hdr_compatible(&in.hdr)) {
+	if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION)) {
 		defw2_wire_status_set(&out.status, DEFW2_ERR_VERSION,
 				      DEFW2_CAT_VERSION_MISMATCH,
 				      "unsupported api version");

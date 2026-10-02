@@ -5,9 +5,9 @@
 #include "defw2_wire.h"
 
 void defw2_hdr_fill(struct defw2_rt *rt, defw2_hdr_t *hdr,
-		    const char *traceparent)
+		    uint32_t api_version, const char *traceparent)
 {
-	hdr->api_version = DEFW2_API_VERSION;
+	hdr->api_version = api_version;
 	hdr->correlation_id = __atomic_add_fetch(&rt->correlation, 1,
 						 __ATOMIC_RELAXED);
 	hdr->runtime_id = rt->runtime_id;
@@ -15,9 +15,9 @@ void defw2_hdr_fill(struct defw2_rt *rt, defw2_hdr_t *hdr,
 	hdr->client_send_ns = defw2_wall_ns();
 }
 
-bool defw2_hdr_compatible(const defw2_hdr_t *hdr)
+bool defw2_hdr_compatible(const defw2_hdr_t *hdr, uint32_t api_version)
 {
-	return (hdr->api_version >> 16) == DEFW2_API_VERSION_MAJOR;
+	return (hdr->api_version >> 16) == (api_version >> 16);
 }
 
 void defw2_status_from_wire(defw2_status_t *status,
@@ -176,4 +176,19 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 out:
 	pthread_mutex_unlock(&rt->rpc_lock);
 	return id;
+}
+
+void defw2_free_partial(margo_instance_id mid, hg_proc_cb_t proc_cb,
+			void *data)
+{
+	hg_proc_t proc = HG_PROC_NULL;
+
+	if (mid == MARGO_INSTANCE_NULL || proc_cb == NULL || data == NULL)
+		return;
+	if (hg_proc_create(margo_get_class(mid), HG_NOHASH, &proc) !=
+	    HG_SUCCESS)
+		return;
+	if (hg_proc_reset(proc, NULL, 0, HG_FREE) == HG_SUCCESS)
+		proc_cb(proc, data);
+	hg_proc_free(proc);
 }

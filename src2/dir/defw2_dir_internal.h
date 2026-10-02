@@ -23,6 +23,8 @@
 
 #include <defw2/defw2_dir.h>
 
+#include "../core/defw2_arena.h"
+
 struct defw2_rt;
 
 /* The settings a store gets when the caller asks for the defaults. */
@@ -40,15 +42,10 @@ struct defw2_rt;
 /* --- string arena ---------------------------------------------------- */
 
 /*
- * A bag of allocations freed together. It is deliberately not a bump
- * allocator: the sizes here are small and irregular, and one pointer per
- * string is cheaper to get right than arithmetic on a block.
+ * The directory's arena is the shared one in core/defw2_arena.h. These names
+ * stay so the directory code reads as it did, over the one implementation.
  */
-typedef struct {
-	void	**blocks;
-	size_t	count;
-	size_t	cap;
-} defw2_dir_arena_t;
+typedef struct defw2_arena defw2_dir_arena_t;
 
 /*
  * Copy s into the arena and return the copy, or NULL when s is NULL so that
@@ -56,12 +53,23 @@ typedef struct {
  * which every caller treats as fatal for the whole decode, so the arena is
  * freed as a unit and no partial record escapes.
  */
-char *defw2_dir_arena_str(defw2_dir_arena_t *arena, const char *s);
+static inline char *defw2_dir_arena_str(defw2_dir_arena_t *arena,
+					const char *s)
+{
+	return defw2_arena_strdup(arena, s);
+}
 
 /* Zeroed storage of the given size, owned by the arena. */
-void *defw2_dir_arena_alloc(defw2_dir_arena_t *arena, size_t size);
+static inline void *defw2_dir_arena_alloc(defw2_dir_arena_t *arena,
+					  size_t size)
+{
+	return defw2_arena_alloc(arena, size);
+}
 
-void defw2_dir_arena_free(defw2_dir_arena_t *arena);
+static inline void defw2_dir_arena_free(defw2_dir_arena_t *arena)
+{
+	defw2_arena_free(arena);
+}
 
 /* --- the owned record ------------------------------------------------ */
 

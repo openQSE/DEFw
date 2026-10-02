@@ -88,7 +88,7 @@ static defw2_rc_t record_from_wire(const defw2_wire_record_t *wire,
 	record->selector.name = dir_str_in(wire->selector_name);
 	/*
 	 * The alias and resource arrays are const char *const * in the public
-	 * record and hg_string_t * on the wire, which is the same storage; the
+	 * record and defw2_str_t * on the wire, which is the same storage; the
 	 * cast says so rather than copying an array to change one qualifier.
 	 */
 	record->selector.aliases = (const char *const *)wire->aliases.items;
@@ -149,6 +149,11 @@ static void defw2_dir_register_ult(hg_handle_t handle)
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_register_in_t, &in);
 		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
 				      DEFW2_CAT_TRANSPORT,
 				      "could not decode the request");
@@ -156,7 +161,7 @@ static void defw2_dir_register_ult(hg_handle_t handle)
 		margo_destroy(handle);
 		return;
 	}
-	if (!defw2_hdr_compatible(&in.hdr))
+	if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION))
 		DIR_REFUSE(handle, out, in, DEFW2_ERR_VERSION,
 			   DEFW2_CAT_VERSION_MISMATCH,
 			   "the directory does not speak this wire version");
@@ -215,6 +220,11 @@ static void lease_ult(hg_handle_t handle, bool deregister)
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_lease_in_t, &in);
 		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
 				      DEFW2_CAT_TRANSPORT,
 				      "could not decode the request");
@@ -222,7 +232,7 @@ static void lease_ult(hg_handle_t handle, bool deregister)
 		margo_destroy(handle);
 		return;
 	}
-	if (!defw2_hdr_compatible(&in.hdr))
+	if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION))
 		DIR_REFUSE(handle, out, in, DEFW2_ERR_VERSION,
 			   DEFW2_CAT_VERSION_MISMATCH,
 			   "the directory does not speak this wire version");
@@ -281,16 +291,16 @@ static bool record_to_wire(const defw2_dir_record_t *record,
 	size_t i;
 
 	memset(wire, 0, sizeof(*wire));
-	wire->service_id = (hg_string_t)dir_str_out(record->service_id);
-	wire->service_type = (hg_string_t)dir_str_out(record->service_type);
-	wire->runtime_id = (hg_string_t)dir_str_out(record->runtime_id);
+	wire->service_id = (defw2_str_t)dir_str_out(record->service_id);
+	wire->service_type = (defw2_str_t)dir_str_out(record->service_type);
+	wire->runtime_id = (defw2_str_t)dir_str_out(record->runtime_id);
 	wire->generation = record->generation;
 	wire->state = (hg_uint32_t)record->state;
-	wire->address = (hg_string_t)dir_str_out(record->address);
-	wire->node_name = (hg_string_t)dir_str_out(record->endpoint.node_name);
-	wire->hostname = (hg_string_t)dir_str_out(record->endpoint.hostname);
+	wire->address = (defw2_str_t)dir_str_out(record->address);
+	wire->node_name = (defw2_str_t)dir_str_out(record->endpoint.node_name);
+	wire->hostname = (defw2_str_t)dir_str_out(record->endpoint.hostname);
 	wire->pid = record->endpoint.pid;
-	wire->selector_name = (hg_string_t)dir_str_out(record->selector.name);
+	wire->selector_name = (defw2_str_t)dir_str_out(record->selector.name);
 	wire->registered_at_ns = record->registered_at_ns;
 	wire->last_heartbeat_ns = record->last_heartbeat_ns;
 	wire->retention_deadline_ns = record->retention_deadline_ns;
@@ -302,7 +312,7 @@ static bool record_to_wire(const defw2_dir_record_t *record,
 			return false;
 		wire->aliases.count = (hg_uint32_t)record->selector.alias_count;
 		for (i = 0; i < record->selector.alias_count; i++)
-			wire->aliases.items[i] = (hg_string_t)dir_str_out(
+			wire->aliases.items[i] = (defw2_str_t)dir_str_out(
 				record->selector.aliases[i]);
 	}
 	if (record->selector.resource_count > 0) {
@@ -314,7 +324,7 @@ static bool record_to_wire(const defw2_dir_record_t *record,
 		wire->resources.count =
 			(hg_uint32_t)record->selector.resource_count;
 		for (i = 0; i < record->selector.resource_count; i++)
-			wire->resources.items[i] = (hg_string_t)dir_str_out(
+			wire->resources.items[i] = (defw2_str_t)dir_str_out(
 				record->selector.resources[i]);
 	}
 	if (record->binding_count > 0) {
@@ -326,9 +336,9 @@ static bool record_to_wire(const defw2_dir_record_t *record,
 		for (i = 0; i < record->binding_count; i++) {
 			defw2_wire_binding_t *b = &wire->bindings.items[i];
 
-			b->binding_name = (hg_string_t)dir_str_out(
+			b->binding_name = (defw2_str_t)dir_str_out(
 				record->bindings[i].binding_name);
-			b->api_id = (hg_string_t)dir_str_out(
+			b->api_id = (defw2_str_t)dir_str_out(
 				record->bindings[i].api_id);
 			b->api_version = record->bindings[i].api_version;
 			b->provider_id = record->bindings[i].provider_id;
@@ -344,9 +354,9 @@ static bool record_to_wire(const defw2_dir_record_t *record,
 		for (i = 0; i < record->property_count; i++) {
 			defw2_wire_property_t *p = &wire->properties.items[i];
 
-			p->name = (hg_string_t)dir_str_out(
+			p->name = (defw2_str_t)dir_str_out(
 				record->properties[i].name);
-			p->value = (hg_string_t)dir_str_out(
+			p->value = (defw2_str_t)dir_str_out(
 				record->properties[i].value);
 		}
 	}
@@ -396,6 +406,11 @@ static void resolve_ult(hg_handle_t handle, bool include_inactive)
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_resolve_in_t, &in);
 		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
 				      DEFW2_CAT_TRANSPORT,
 				      "could not decode the request");
@@ -403,7 +418,7 @@ static void resolve_ult(hg_handle_t handle, bool include_inactive)
 		margo_destroy(handle);
 		return;
 	}
-	if (!defw2_hdr_compatible(&in.hdr))
+	if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION))
 		DIR_REFUSE(handle, out, in, DEFW2_ERR_VERSION,
 			   DEFW2_CAT_VERSION_MISMATCH,
 			   "the directory does not speak this wire version");
@@ -541,6 +556,11 @@ static void defw2_dir_generation_ult(hg_handle_t handle)
 
 	hret = margo_get_input(handle, &in);
 	if (hret != HG_SUCCESS) {
+		/* A decode that fails part way still allocated the fields
+		 * before the one it refused. defw2_free_partial says why
+		 * this is not margo_free_input. */
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_generation_in_t, &in);
 		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
 				      DEFW2_CAT_TRANSPORT,
 				      "could not decode the request");
@@ -548,7 +568,7 @@ static void defw2_dir_generation_ult(hg_handle_t handle)
 		margo_destroy(handle);
 		return;
 	}
-	if (!defw2_hdr_compatible(&in.hdr))
+	if (!defw2_hdr_compatible(&in.hdr, DEFW2_API_VERSION))
 		DIR_REFUSE(handle, out, in, DEFW2_ERR_VERSION,
 			   DEFW2_CAT_VERSION_MISMATCH,
 			   "the directory does not speak this wire version");

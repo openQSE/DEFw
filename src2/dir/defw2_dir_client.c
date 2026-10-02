@@ -114,14 +114,14 @@ static bool wire_from_record(const defw2_dir_record_t *record,
 	size_t i;
 
 	memset(wire, 0, sizeof(*wire));
-	wire->service_id = (hg_string_t)dir_str_out(record->service_id);
-	wire->service_type = (hg_string_t)dir_str_out(record->service_type);
-	wire->runtime_id = (hg_string_t)dir_str_out(record->runtime_id);
-	wire->address = (hg_string_t)dir_str_out(record->address);
-	wire->node_name = (hg_string_t)dir_str_out(record->endpoint.node_name);
-	wire->hostname = (hg_string_t)dir_str_out(record->endpoint.hostname);
+	wire->service_id = (defw2_str_t)dir_str_out(record->service_id);
+	wire->service_type = (defw2_str_t)dir_str_out(record->service_type);
+	wire->runtime_id = (defw2_str_t)dir_str_out(record->runtime_id);
+	wire->address = (defw2_str_t)dir_str_out(record->address);
+	wire->node_name = (defw2_str_t)dir_str_out(record->endpoint.node_name);
+	wire->hostname = (defw2_str_t)dir_str_out(record->endpoint.hostname);
 	wire->pid = record->endpoint.pid;
-	wire->selector_name = (hg_string_t)dir_str_out(record->selector.name);
+	wire->selector_name = (defw2_str_t)dir_str_out(record->selector.name);
 	/*
 	 * The generation, the state and the timestamps are the directory's to
 	 * decide, so they go out zeroed however the caller left them. Sending
@@ -136,7 +136,7 @@ static bool wire_from_record(const defw2_dir_record_t *record,
 			return false;
 		wire->aliases.count = (hg_uint32_t)record->selector.alias_count;
 		for (i = 0; i < record->selector.alias_count; i++)
-			wire->aliases.items[i] = (hg_string_t)dir_str_out(
+			wire->aliases.items[i] = (defw2_str_t)dir_str_out(
 				record->selector.aliases[i]);
 	}
 	if (record->selector.resource_count > 0) {
@@ -148,7 +148,7 @@ static bool wire_from_record(const defw2_dir_record_t *record,
 		wire->resources.count =
 			(hg_uint32_t)record->selector.resource_count;
 		for (i = 0; i < record->selector.resource_count; i++)
-			wire->resources.items[i] = (hg_string_t)dir_str_out(
+			wire->resources.items[i] = (defw2_str_t)dir_str_out(
 				record->selector.resources[i]);
 	}
 	if (record->binding_count > 0) {
@@ -160,9 +160,9 @@ static bool wire_from_record(const defw2_dir_record_t *record,
 		for (i = 0; i < record->binding_count; i++) {
 			defw2_wire_binding_t *b = &wire->bindings.items[i];
 
-			b->binding_name = (hg_string_t)dir_str_out(
+			b->binding_name = (defw2_str_t)dir_str_out(
 				record->bindings[i].binding_name);
-			b->api_id = (hg_string_t)dir_str_out(
+			b->api_id = (defw2_str_t)dir_str_out(
 				record->bindings[i].api_id);
 			b->api_version = record->bindings[i].api_version;
 			b->provider_id = record->bindings[i].provider_id;
@@ -178,9 +178,9 @@ static bool wire_from_record(const defw2_dir_record_t *record,
 		for (i = 0; i < record->property_count; i++) {
 			defw2_wire_property_t *p = &wire->properties.items[i];
 
-			p->name = (hg_string_t)dir_str_out(
+			p->name = (defw2_str_t)dir_str_out(
 				record->properties[i].name);
-			p->value = (hg_string_t)dir_str_out(
+			p->value = (defw2_str_t)dir_str_out(
 				record->properties[i].value);
 		}
 	}
@@ -228,7 +228,7 @@ defw2_rc_t defw2_dir_register(defw2_dir_t *dir,
 	}
 
 	defw2_trace_begin(dir->rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
-	defw2_hdr_fill(dir->rt, &in.hdr,
+	defw2_hdr_fill(dir->rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 
 	hret = margo_provider_forward_timed(dir->binding->provider_id, handle,
@@ -237,8 +237,14 @@ defw2_rc_t defw2_dir_register(defw2_dir_t *dir,
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_register_out_t, &out);
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
@@ -274,8 +280,8 @@ static defw2_rc_t lease_call(defw2_dir_t *dir, const char *rpc_name,
 		return DEFW2_ERR_INVALID;
 
 	memset(&in, 0, sizeof(in));
-	in.service_id = (hg_string_t)dir_str_out(service_id);
-	in.runtime_id = (hg_string_t)dir_str_out(runtime_id);
+	in.service_id = (defw2_str_t)dir_str_out(service_id);
+	in.runtime_id = (defw2_str_t)dir_str_out(runtime_id);
 	in.generation = generation;
 
 	id = defw2_rpc_lookup(dir->rt, rpc_name,
@@ -286,7 +292,7 @@ static defw2_rc_t lease_call(defw2_dir_t *dir, const char *rpc_name,
 		return defw2_rc_from_hg(hret, NULL);
 
 	defw2_trace_begin(dir->rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
-	defw2_hdr_fill(dir->rt, &in.hdr,
+	defw2_hdr_fill(dir->rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 
 	hret = margo_provider_forward_timed(dir->binding->provider_id, handle,
@@ -295,8 +301,14 @@ static defw2_rc_t lease_call(defw2_dir_t *dir, const char *rpc_name,
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_lease_out_t, &out);
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
@@ -442,19 +454,19 @@ static void query_to_wire(const defw2_dir_query_t *query,
 	size_t i;
 
 	memset(wire, 0, sizeof(*wire));
-	wire->service_id = (hg_string_t)dir_str_out(query->service_id);
-	wire->service_type = (hg_string_t)dir_str_out(query->service_type);
-	wire->selector_name = (hg_string_t)dir_str_out(query->selector_name);
-	wire->resource = (hg_string_t)dir_str_out(query->resource);
-	wire->binding_name = (hg_string_t)dir_str_out(query->binding_name);
+	wire->service_id = (defw2_str_t)dir_str_out(query->service_id);
+	wire->service_type = (defw2_str_t)dir_str_out(query->service_type);
+	wire->selector_name = (defw2_str_t)dir_str_out(query->selector_name);
+	wire->resource = (defw2_str_t)dir_str_out(query->resource);
+	wire->binding_name = (defw2_str_t)dir_str_out(query->binding_name);
 	wire->api_version = query->api_version;
 	wire->include_inactive = query->include_inactive ? 1u : 0u;
 	wire->limit = query->limit;
 	if (query->filter_count > 0 && filters != NULL) {
 		for (i = 0; i < query->filter_count; i++) {
-			filters[i].name = (hg_string_t)dir_str_out(
+			filters[i].name = (defw2_str_t)dir_str_out(
 				query->filters[i].name);
-			filters[i].value = (hg_string_t)dir_str_out(
+			filters[i].value = (defw2_str_t)dir_str_out(
 				query->filters[i].value);
 			filters[i].match = (hg_uint32_t)query->filters[i].match;
 		}
@@ -509,7 +521,7 @@ static defw2_rc_t resolve_call(defw2_dir_t *dir, const char *rpc_name,
 	}
 
 	defw2_trace_begin(dir->rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
-	defw2_hdr_fill(dir->rt, &in.hdr,
+	defw2_hdr_fill(dir->rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 
 	hret = margo_provider_forward_timed(dir->binding->provider_id, handle,
@@ -518,8 +530,14 @@ static defw2_rc_t resolve_call(defw2_dir_t *dir, const char *rpc_name,
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_resolve_out_t, &out);
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
@@ -600,7 +618,7 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 		return DEFW2_ERR_INVALID;
 
 	memset(&in, 0, sizeof(in));
-	in.service_id = (hg_string_t)dir_str_out(service_id);
+	in.service_id = (defw2_str_t)dir_str_out(service_id);
 
 	id = defw2_rpc_lookup(dir->rt, DEFW2_RPC_DIR_GENERATION,
 			      hg_proc_defw2_dir_generation_in_t,
@@ -610,7 +628,7 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 		return defw2_rc_from_hg(hret, NULL);
 
 	defw2_trace_begin(dir->rt, &trace, DEFW2_SPAN_CLIENT, trace_of(opts));
-	defw2_hdr_fill(dir->rt, &in.hdr,
+	defw2_hdr_fill(dir->rt, &in.hdr, DEFW2_API_VERSION,
 		       trace.recording ? trace.traceparent : trace_of(opts));
 
 	hret = margo_provider_forward_timed(dir->binding->provider_id, handle,
@@ -619,8 +637,14 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}
+	/* Zeroed, so the free after a decode that fails part way only
+	 * touches the fields it actually decoded. defw2_free_partial
+	 * says why that free is not margo_free_output. */
+	memset(&out, 0, sizeof(out));
 	hret = margo_get_output(handle, &out);
 	if (hret != HG_SUCCESS) {
+		defw2_free_partial(margo_hg_handle_get_instance(handle),
+				   hg_proc_defw2_dir_generation_out_t, &out);
 		rc = defw2_rc_from_hg(hret, NULL);
 		goto out;
 	}

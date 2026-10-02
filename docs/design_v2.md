@@ -705,42 +705,71 @@ form `defw2.<api>.<method>`. The prototype types the hot path.
 | `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit` |
 | `qfw.echo` | `echo`, `echo_bulk`, used by the benchmarks |
 
-The execution request shows the shape.
+The execution request shows the shape. The public structures are plain C
+and the stubs take them whole, so a caller never sees Mercury. The wire
+structures that mirror them live inside `libdefw2`.
 
 ```c
-MERCURY_GEN_PROC(defw2_qpm_async_run_in_t,
-    ((defw2_hdr_t)(hdr))
-    ((hg_uint64_t)(reservation_id))
-    ((hg_const_string_t)(token))
-    ((hg_const_string_t)(qasm))
-    ((hg_uint32_t)(num_qubits))
-    ((hg_uint32_t)(num_shots))
-    ((hg_const_string_t)(compiler))
-    ((defw2_u32_list_t)(qubit_mapping))
-    ((hg_uint8_t)(return_statevector))
-    ((defw2_bulk_desc_t)(result_buffer)))
+typedef struct {
+    defw2_qpm_ctx_t      ctx;          /* reservation_id and token, every call */
+    defw2_qpm_circuit_t  circuit;      /* format, then OpenQASM text or QPY bytes */
+    uint32_t             num_qubits;
+    uint32_t             num_shots;
+    const char          *compiler;
+    bool                 return_statevector;
+    bool                 has_timeout;  /* a zero timeout is not "none" */
+    uint64_t             timeout_ms;
+    bool                 cancel_on_timeout;
+    const char          *extra;        /* JSON: the rest of v1's info dict */
+} defw2_qpm_run_req_t;
 
-MERCURY_GEN_PROC(defw2_qpm_async_run_out_t,
-    ((defw2_status_t)(status))
-    ((hg_uint64_t)(circuit_id))
-    ((hg_uint64_t)(queue_position)))
-```
+typedef struct {
+    const char     *outcome;           /* "ACCEPTED", "INVALID_RESERVATION", ... */
+    const char     *lifecycle_state;
+    const char     *cid;               /* a UUID string in QFw */
+    uint64_t        qtask_id;
+    uint64_t        reservation_id;
+    const char     *reason, *message;
+    bool            completion_ready;
+    defw2_tensor_t  statevector;       /* described whether or not it arrived */
+    bool            statevector_delivered;
+    const char     *extra;             /* JSON: the rest of v1's answer */
+    void           *arena;
+} defw2_qpm_task_t;
 
-The client stub is a plain C function.
-
-```c
 defw2_rc_t defw2_qpm_async_run(defw2_binding_t *qpm,
-                               const defw2_qpm_async_run_in_t *in,
-                               defw2_qpm_async_run_out_t *out,
-                               uint32_t timeout_ms);
-void defw2_qpm_async_run_out_free(defw2_qpm_async_run_out_t *out);
+                               const defw2_qpm_run_req_t *req,
+                               const defw2_call_opts_t *opts,
+                               defw2_qpm_task_t *out, defw2_status_t *status);
+void defw2_qpm_task_free(defw2_qpm_task_t *task);
 ```
 
-Inside, the stub fills the header, creates a Margo handle for the binding's
-address and provider identifier, calls `margo_provider_forward_timed`, copies
-the output and records the profiling sample. A timeout cancels the request
-and returns the timeout category. Every out structure has a generated free
-function, which is the whole ownership rule for callers.
+Every answer has two layers. The typed fields are what a C caller branches
+on. `extra` is a JSON object carrying everything else the service said, so
+the provider-shaped parts of a QPM's answer, such as a result's counts and
+metadata or a reservation decision's estimates, travel without a schema per
+provider, and the compatibility layer can rebuild the exact dictionary a v1
+caller expects. Outcomes are data and failures are status: a task whose
+reservation does not match comes back as outcome `INVALID_RESERVATION` with
+a status of OK, as v1 callers expect, while a service that cannot answer at
+all fails the status. JSON rather than CBOR for `extra`, because json-c and
+Python's `json` are already present and nothing in C parses it.
+
+Building the QPM tier corrected three things in the first sketch of this
+section. A circuit is a format and bytes, because QFw sends QPY as well as
+OpenQASM. A circuit identifier is a string, because QFw's is a UUID.
+`qubit_mapping` travels in `extra`, because QFw's is a map from logical
+qubit to a physical qubit's name rather than a list of integers.
+
+Inside, every stub takes the same path: fill the header, create a Margo
+handle for the binding's address and provider identifier, call
+`margo_provider_forward_timed`, copy the answer into an arena the caller
+frees, and record the profiling sample. The provider side is one path too:
+decode, check the version, run the service, push any bulk result, check the
+answer fits the wire, encode, record. A method costs only its own
+conversions. A timeout cancels the request and returns the timeout category.
+Every answer has one free function, which is the whole ownership rule for
+callers.
 
 Requests and responses follow the constraints in the C-centric requirements:
 fixed-width scalars, counted arrays, strings with explicit lengths on the
@@ -806,13 +835,18 @@ Mercury bulk transfers described by a small descriptor in the typed
 structure.
 
 ```c
-MERCURY_GEN_PROC(defw2_bulk_desc_t,
-    ((hg_uint8_t)(present))
-    ((hg_uint8_t)(dtype))          /* DEFW2_DTYPE_* : u8, i32, f64, c128, ... */
-    ((hg_uint8_t)(rank))
-    ((hg_uint64_t)(nbytes))
-    ((defw2_u64_list_t)(shape))
-    ((hg_bulk_t)(handle)))
+typedef struct {                   /* what a request lends */
+    hg_uint64_t  capacity;
+    hg_bulk_t    handle;           /* null when nothing is lent */
+} defw2_wire_result_t;
+
+typedef struct {                   /* what an answer describes */
+    hg_uint32_t  dtype;            /* DEFW2_DTYPE_* : u8, i32, f64, c128, ... */
+    hg_uint32_t  rank;             /* at most DEFW2_TENSOR_RANK_MAX */
+    hg_uint64_t  shape[DEFW2_TENSOR_RANK_MAX];
+    hg_uint64_t  nbytes;
+    hg_uint8_t   delivered;
+} defw2_wire_tensor_t;
 ```
 
 Two directions are supported.
@@ -824,13 +858,22 @@ Two directions are supported.
   parameter array costs no extra round trip and a 64 MiB statevector uses
   registered memory, with no threshold to tune in DEFw.
 - **Result payloads.** When the client knows the result size, as it does for
-  a statevector from `num_qubits`, it registers a writable buffer and passes
-  it in the request as `result_buffer`. The handler pushes the result into it
-  and the response carries only the descriptor metadata. When the size is
-  unknown, the response carries a server-owned bulk handle and the client
-  pulls, then calls `defw2.bulk.release` so the server can drop its
-  registration. This is the same shape as the phase 3 acknowledgement in v1,
-  implemented with library calls rather than a custom message type.
+  a statevector from `num_qubits`, it registers a writable buffer and lends it
+  with the call that collects the result: `read_cq`, `peek_cq` or
+  `sync_run`. The handler pushes the result into it and the answer carries
+  only the descriptor. The buffer is not lent with `async_run`, because the
+  result exists only once the task completes, after `async_run` has
+  returned, and the thread that sees a Python task complete cannot drive a
+  Margo transfer. A buffer that is missing or too small gets the size it
+  needs back, and `read_cq` leaves the completion queued for the retry, so
+  a caller that does not know the size asks once without a buffer and then
+  again with one.
+  When the size is unknown and the service cannot hold the result, the
+  response could carry a server-owned bulk handle for the client to pull,
+  followed by a `defw2.bulk.release` so the server can drop its
+  registration. That is the shape of the phase 3 acknowledgement in v1,
+  implemented with library calls rather than a custom message type. Nothing
+  needs it yet, so it is not built.
 
 The two result forms are worth seeing side by side, because they differ in who
 owns the memory and who releases it.
@@ -1254,6 +1297,31 @@ strings and numbers and nothing else. Every handler validates counts,
 lengths, bulk sizes and reservation context before it uses a payload. That is
 what requirement CWIRE-008 of Amir's C-centric requirements asks of a server
 before it invokes an implementation.
+
+Mercury's own decoders are not enough for that, which building the QPM tier
+showed. At 2.4.1 the string decoder allocates whatever length a message
+claims before checking that the bytes are there, and when they are not,
+Mercury grows its buffer and copies uninitialised memory into the string
+rather than failing. It never checks for the terminator either, so a sender
+that leaves the NUL off hands the receiver a string that `strlen` reads
+straight past. The bulk-handle decoder reserves a claimed size the same way.
+v2 therefore carries every string, counted payload, tensor shape and lent
+buffer through procs of its own, which refuse a length beyond the field's
+bound or beyond the bytes actually received, and a string whose last byte
+is not its only NUL, before anything reads it. A provider also checks its
+own answer before encoding it, so an answer too large for the wire becomes a
+provider failure rather than a reply that never arrives.
+
+A request that fails to decode part way is answered with the
+invalid-argument category, and what it decoded before failing is freed.
+Mercury's `HG_Free_input` would free it, but it also releases a reference on
+the handle that only a successful decode takes, and Mercury then recycles the
+handle while the handler still holds it. v2 walks the fields with a proc of
+its own instead. Both properties are tested against a live provider with
+hostile requests, and the absence of a leak is measured across a thousand of
+them rather than left to the leak sanitizer, which cannot see it: the decoded
+structure lives on a handler stack that Argobots keeps pooled, so a stale
+pointer to the stranded string survives and counts as a reference.
 
 Authentication is not in the prototype. The RPC header has room for a token
 and the status model has a category for authorization failure, so the QFw
