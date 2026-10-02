@@ -593,10 +593,12 @@ class QPM:
 class Request:
 	"""A typed call's request, as plain Python values.
 
-	Every request has reservation_id, token and result_capacity, the
-	bytes the caller lent for a bulk result, 0 when it lent none. The
-	rest depends on the method. extra is the request's JSON parsed, and
-	extra_json the text it came as.
+	Every request has reservation_id, token, result_capacity, the
+	bytes the caller lent for a bulk result, 0 when it lent none, and
+	traceparent, the W3C context the service's own work belongs under,
+	None when the caller sent none. The rest depends on the method.
+	extra is the request's JSON parsed, and extra_json the text it came
+	as.
 	"""
 
 	def __init__(self, method, values, extra_json=None):
@@ -868,6 +870,7 @@ def read_request(api, method, call):
 	pointer = lib.defw2_call_request(call, length)
 	values, extra_json = codec[0](pointer)
 	values['result_capacity'] = lib.defw2_call_result_capacity(call)
+	values['traceparent'] = _text(lib.defw2_call_traceparent(call))
 	return Request(method, values, extra_json)
 
 

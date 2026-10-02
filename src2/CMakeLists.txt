@@ -117,6 +117,9 @@ if(DEFW2_HAVE_CFFI)
 		COMMAND "${CMAKE_COMMAND}" -E copy_directory
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2"
 			"${DEFW2_PYTHON_DIR}/defw2"
+		COMMAND "${CMAKE_COMMAND}" -E copy
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2-python"
+			"${DEFW2_PYTHON_DIR}/defw2-python"
 		COMMAND "${Python3_EXECUTABLE}"
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/cffi_build.py"
 			--include "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -261,5 +264,19 @@ if(BUILD_TESTING)
 			PROPERTIES
 				ENVIRONMENT
 					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
+
+		# v1 QFw code on v2: a v1 QPM module served by defw2-python
+		# --serve and a v1 client run by defw2-python, compared call
+		# for call with v1's answers. The v1 modules compat reuses
+		# come from this repository's python tree.
+		add_test(NAME defw2_compat_smoke
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_compat_smoke.py"
+				--dirsvc $<TARGET_FILE:defw2-dirsvc>
+				--launcher "${DEFW2_PYTHON_DIR}/defw2-python")
+		set_tests_properties(defw2_compat_smoke
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR};DEFW2_PYTHON=${Python3_EXECUTABLE};DEFW_PATH=${CMAKE_CURRENT_SOURCE_DIR}/..")
 	endif()
 endif()
