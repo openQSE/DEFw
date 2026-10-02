@@ -181,13 +181,15 @@ class ServiceHost:
 	# --- the directory
 
 	def register(self, directory=None, selector=None, properties=None,
-		     binding_names=None, interval_ms=0):
+		     binding_names=None, interval_ms=0, service_id=None):
 		"""Register in the directory and stay there until close().
 
 		The C agent registers the record, heartbeats on a Margo timer,
 		registers again if the directory forgets it, and deregisters
 		on close. properties are stringified, since the directory
-		keeps names and values and defines neither.
+		keeps names and values and defines neither. service_id names
+		the record when it is not the host's own, for a service that
+		only knows its name once it is serving, as a v1 QPM does.
 		"""
 		if self._agent is not None:
 			raise RuntimeError('this host is already registered')
@@ -200,8 +202,8 @@ class ServiceHost:
 			     e.provider_id) for e in self._endpoints]
 		kept = _Kept()
 		record = build_record(
-			kept, self.service_id, self.service_type, bindings,
-			selector,
+			kept, service_id or self.service_id, self.service_type,
+			bindings, selector,
 			{key: str(value)
 			 for key, value in (properties or {}).items()})
 		out = ffi.new('defw2_dir_agent_t **')

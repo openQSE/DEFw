@@ -41,6 +41,7 @@ struct defw2_call {
 	void			*bulk;		/* a bulk reply, owned */
 	uint64_t		bulk_len;
 	uint64_t		result_capacity; /* lent by the caller, 0 for none */
+	const char		*traceparent;	/* borrowed, or NULL */
 };
 
 /*

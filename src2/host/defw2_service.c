@@ -432,6 +432,11 @@ uint64_t defw2_call_result_capacity(const defw2_call_t *call)
 	return call != NULL ? call->result_capacity : 0;
 }
 
+const char *defw2_call_traceparent(const defw2_call_t *call)
+{
+	return call != NULL ? call->traceparent : NULL;
+}
+
 void defw2_call_release(struct defw2_call *call)
 {
 	if (call == NULL)

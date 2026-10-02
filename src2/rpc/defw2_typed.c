@@ -270,6 +270,11 @@ void defw2_typed_serve(hg_handle_t handle, const struct defw2_method *method,
 		mark = defw2_mono_ns();
 		trace.span.decode_ns = mark - arrived_mono;
 	}
+	/* What the handler's own work belongs under: this span when it is
+	 * recorded, and the caller's otherwise, so a service that traces by
+	 * itself still joins the caller's trace. */
+	served.call.traceparent = trace.recording ? trace.traceparent :
+		((defw2_hdr_t *)in)->traceparent;
 
 	if (served.bound == NULL)
 		defw2_served_fail(&served, DEFW2_ERR_NOT_FOUND,

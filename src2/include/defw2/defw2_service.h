@@ -127,6 +127,14 @@ const void *defw2_call_request(const defw2_call_t *call, size_t *len);
 void *defw2_call_response(defw2_call_t *call);
 
 /*
+ * The W3C traceparent a typed call's work belongs under: the server span's
+ * own when this process records spans, so what the consumer records nests
+ * inside it, and the caller's otherwise. NULL when the caller sent none,
+ * and for bytes. It lasts until the call is answered.
+ */
+const char *defw2_call_traceparent(const defw2_call_t *call);
+
+/*
  * Answer it. reply is copied, so the caller keeps nothing. A failure's
  * message is copied too, and cut to DEFW2_STR_MAX if it is longer.
  */
