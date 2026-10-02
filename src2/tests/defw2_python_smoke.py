@@ -108,6 +108,31 @@ def check_close_does_not_free_under_a_worker():
 	server.close()
 
 
+def check_host_names_resolve():
+	"""An ofi+tcp address may name its host, as v1 deployments do.
+
+	Mercury's OFI plugins look up numeric addresses only, so the binding
+	resolves a name first. Without that, the directory address v2 composes
+	from DEFW_PARENT_HOSTNAME cannot be reached.
+	"""
+	server = defw2.Runtime(role='server', address='ofi+tcp://127.0.0.1',
+			       node_name='py-tcp-service')
+	host = defw2.ServiceHost(server, 'py-tcp-echo')
+	host.start(Reverser())
+	named = host.address.replace('127.0.0.1', 'localhost')
+	client = defw2.Runtime(role='client', address='ofi+tcp://127.0.0.1',
+			       node_name='py-tcp-client')
+	try:
+		with defw2.Echo(client, named) as echo:
+			ok = echo.echo(PAYLOAD) == PAYLOAD[::-1]
+	except defw2.DefwError:
+		ok = False
+	check('an ofi+tcp address may name its host, {}'.format(named), ok)
+	client.close()
+	host.close()
+	server.close()
+
+
 def main():
 	print('defw2', defw2.version())
 
@@ -161,6 +186,7 @@ def main():
 	server.close()
 
 	check_close_does_not_free_under_a_worker()
+	check_host_names_resolve()
 
 	print('PYTHON SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0
