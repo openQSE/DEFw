@@ -57,9 +57,14 @@ target_link_libraries(defw2
 		Threads::Threads
 		"${UUID_LIBRARY}")
 
+# An install finds its own libdefw2 through $ORIGIN, and Margo, Argobots and
+# libfabric through the directories the build linked them from, so it runs
+# with nothing on LD_LIBRARY_PATH. A process started over ssh gets a bare
+# environment, which is exactly when that matters.
 set_target_properties(defw2
 	PROPERTIES
-		INSTALL_RPATH "$ORIGIN")
+		INSTALL_RPATH "$ORIGIN"
+		INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # The echo tool serves the reference service and calls it, which is what
 # makes the RPC path usable from a shell and across two nodes. The benchmark
@@ -69,7 +74,8 @@ target_link_libraries(defw2-echo PRIVATE defw2)
 target_compile_options(defw2-echo PRIVATE -Wall -Wextra)
 set_target_properties(defw2-echo
 	PROPERTIES
-		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+		INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # The directory. One process, one provider, and the one address that cannot
 # be resolved and so has to be announced: on stdout, and optionally to a file
@@ -79,7 +85,8 @@ target_link_libraries(defw2-dirsvc PRIVATE defw2 Threads::Threads)
 target_compile_options(defw2-dirsvc PRIVATE -Wall -Wextra)
 set_target_properties(defw2-dirsvc
 	PROPERTIES
-		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+		INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # The measured client. The launcher beside it, bench/v2/defw2_bench.py, runs
 # as many of these as the workload asks for and writes the report.
@@ -88,7 +95,8 @@ target_link_libraries(defw2-bench PRIVATE defw2)
 target_compile_options(defw2-bench PRIVATE -Wall -Wextra)
 set_target_properties(defw2-bench
 	PROPERTIES
-		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+		INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 install(TARGETS defw2 defw2-echo defw2-dirsvc defw2-bench
 	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
@@ -113,20 +121,51 @@ endif()
 
 if(DEFW2_HAVE_CFFI)
 	message(STATUS "DEFw v2: building the Python binding with cffi")
+	set(DEFW2_PYTHON_INSTALL_DIR
+		"${CMAKE_INSTALL_LIBDIR}/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages"
+		CACHE STRING
+		"Where the defw2 Python package installs, under the prefix")
+	# The installed copy is built apart, so its extension finds libdefw2
+	# only relative to itself: the install can move, and never reaches
+	# back into the build tree.
+	set(DEFW2_PYTHON_STAGE "${CMAKE_CURRENT_BINARY_DIR}/python-install")
+	file(RELATIVE_PATH DEFW2_PYTHON_TO_LIBDIR
+		"${CMAKE_INSTALL_PREFIX}/${DEFW2_PYTHON_INSTALL_DIR}/defw2"
+		"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+	configure_file(bindings/python/defw2-python.in
+		"${CMAKE_CURRENT_BINARY_DIR}/defw2-python" @ONLY)
 	add_custom_target(defw2-python ALL
 		COMMAND "${CMAKE_COMMAND}" -E copy_directory
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2"
 			"${DEFW2_PYTHON_DIR}/defw2"
 		COMMAND "${CMAKE_COMMAND}" -E copy
-			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2-python"
+			"${CMAKE_CURRENT_BINARY_DIR}/defw2-python"
 			"${DEFW2_PYTHON_DIR}/defw2-python"
 		COMMAND "${Python3_EXECUTABLE}"
 			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/cffi_build.py"
 			--include "${CMAKE_CURRENT_SOURCE_DIR}/include"
 			--library "$<TARGET_FILE_DIR:defw2>"
 			--out "${DEFW2_PYTHON_DIR}"
+		COMMAND "${CMAKE_COMMAND}" -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/defw2"
+			"${DEFW2_PYTHON_STAGE}/defw2"
+		COMMAND "${Python3_EXECUTABLE}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/cffi_build.py"
+			--include "${CMAKE_CURRENT_SOURCE_DIR}/include"
+			--library "$<TARGET_FILE_DIR:defw2>"
+			--rpath "\$ORIGIN/${DEFW2_PYTHON_TO_LIBDIR}"
+			--out "${DEFW2_PYTHON_STAGE}"
 		DEPENDS defw2
-		COMMENT "Building the defw2 Python binding")
+		COMMENT "Building the defw2 Python binding"
+		VERBATIM)
+	install(DIRECTORY "${DEFW2_PYTHON_STAGE}/defw2"
+		DESTINATION "${DEFW2_PYTHON_INSTALL_DIR}"
+		USE_SOURCE_PERMISSIONS
+		PATTERN "__pycache__" EXCLUDE
+		PATTERN "*.c" EXCLUDE
+		PATTERN "*.o" EXCLUDE)
+	install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/defw2-python"
+		DESTINATION "${CMAKE_INSTALL_BINDIR}")
 else()
 	message(STATUS "DEFw v2: no cffi, skipping the Python binding")
 endif()
@@ -278,5 +317,18 @@ if(BUILD_TESTING)
 			PROPERTIES
 				ENVIRONMENT
 					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR};DEFW2_PYTHON=${Python3_EXECUTABLE};DEFW_PATH=${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+		# The same compat test again, from an install of src2 into a
+		# scratch prefix, with no LD_LIBRARY_PATH and no PYTHONPATH.
+		add_test(NAME defw2_install_smoke
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_install_smoke.py"
+				--build "${CMAKE_CURRENT_BINARY_DIR}"
+				--cmake "${CMAKE_COMMAND}"
+				--python "${Python3_EXECUTABLE}")
+		set_tests_properties(defw2_install_smoke
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;DEFW_PATH=${CMAKE_CURRENT_SOURCE_DIR}/..")
 	endif()
 endif()
