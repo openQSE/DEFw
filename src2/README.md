@@ -36,7 +36,7 @@ cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-dirsvc \
 ctest --test-dir build -R defw2
 ```
 
-That prints sixteen passing tests. Each line of it is doing something, so
+That prints seventeen passing tests. Each line of it is doing something, so
 changing one of them tends to be how a build goes wrong:
 
 - **The paths are set by hand rather than with `module load`.** The image
@@ -62,6 +62,17 @@ changing one of them tends to be how a build goes wrong:
 
 Outside that image, point `PKG_CONFIG_PATH` at whatever provides Margo and
 `-DPython3_EXECUTABLE` at a Python with cffi.
+
+`cmake --install build` installs `libdefw2`, the headers, `defw2-dirsvc`,
+`defw2-echo`, `defw2-bench`, the `defw2` package under
+`DEFW2_PYTHON_INSTALL_DIR` (the prefix's `lib/pythonX.Y/site-packages` by
+default) and `defw2-python`. An install runs with nothing on
+`LD_LIBRARY_PATH` or `PYTHONPATH`: the binaries carry RPATHs to Margo and
+libfabric, the extension finds `libdefw2` relative to itself, and the
+launcher finds the package the install put under the prefix. A process
+started over ssh gets that bare environment. `tests/defw2_install_smoke.py`
+installs into a scratch prefix and runs the compat test from there to hold
+it to that.
 
 Build trees are not relocatable: a configured `build/` holds absolute
 paths, so copying a source tree that contains one and building in the copy
