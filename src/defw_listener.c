@@ -349,6 +349,7 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 {
 	defw_msg_session_t *hb = (defw_msg_session_t *)msg;
 	bool learned_runtime_id = false;
+	defw_rc_t rc;
 	/*
 	char uuid[UUID_STR_LEN];
 	char uuid2[UUID_STR_LEN];
@@ -382,10 +383,30 @@ static defw_rc_t process_msg_hb(char *msg, defw_agent_blk_t *agent)
 	 * learn it here so we can reach it over the fabric
 	 */
 	maybe_insert_ofi_addr(agent, hb);
+	/* A heartbeat only ever goes to a peer the sender already knows by
+	 * uuid, and by then the sender also has our OFI address: our session
+	 * info carried it if we connected to the sender, our heartbeat if the
+	 * sender connected to us. So from the first heartbeat on, the sender
+	 * can name us in a fabric message, and the fabric can carry our RPCs
+	 * to it.
+	 */
+	if (agent->state & DEFW_AGENT_OFI_ADDR_VALID)
+		set_agent_state(agent, DEFW_AGENT_OFI_READY);
 	agent->last_heartbeat_rx = agent->time_stamp;
 	agent->last_control_activity = agent->time_stamp;
-	if (learned_runtime_id)
+	if (learned_runtime_id) {
+		/* The peer uses the fabric to reach us only once a heartbeat
+		 * from us arrives. Send one now rather than leave the peer on
+		 * TCP until the periodic heartbeat, which can be seconds away.
+		 */
+		if (defw_transport_ofi_active()) {
+			rc = defw_send_hb(agent);
+			if (rc != EN_DEFW_RC_OK)
+				PERROR("Failed to send identity to %s: %s",
+				       agent->name, defw_rc2str(rc));
+		}
 		defw_agent_report_peer_ready(agent, "remote-identity-ready");
+	}
 
 	return EN_DEFW_RC_OK;
 }
@@ -520,7 +541,11 @@ defw_rc_t defw_ofi_dispatch(char *buf, size_t buflen)
 	uuid_copy(id.remote_uuid, hdr->sender_uuid);
 	agent = defw_find_agent_by_uuid_global(&id);
 	if (!agent) {
-		PERROR("OFI msg from an unknown agent");
+		char sender[UUID_STR_LEN];
+
+		uuid_unparse_lower(hdr->sender_uuid, sender);
+		PERROR("OFI msg type %u from an unknown agent %s, dropped",
+		       type, sender);
 		free(buf);
 		return EN_DEFW_RC_AGENT_NOT_FOUND;
 	}

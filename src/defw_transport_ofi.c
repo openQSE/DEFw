@@ -214,18 +214,25 @@ out:
 /*
  * Active-transport send. The control channel (session info + heartbeats)
  * always stays on TCP: it bootstraps the OFI addresses and is the liveness
- * signal. RPC traffic goes over the fabric once we have learned the peer's
- * OFI address (DEFW_AGENT_OFI_ADDR_VALID); until then, or for a TCP-only
- * peer, it falls back to TCP.
+ * signal. RPC traffic goes over the fabric once the peer is ready for it
+ * (DEFW_AGENT_OFI_READY): we have its OFI address, and it has sent us a
+ * heartbeat, so it knows ours and can tell who a fabric message is from.
+ * Until then, or for a TCP-only peer, RPC falls back to TCP.
+ *
+ * Knowing the peer's address is not enough on its own. A peer that connected
+ * to us learns who we are from our heartbeat, which travels on TCP and is
+ * read by its listener thread, while a fabric message is read by its OFI
+ * progress thread. Nothing orders the two, and a fabric message that wins
+ * arrives from a sender the peer cannot name, so it is dropped.
  */
 static defw_rc_t ofi_send(defw_agent_blk_t *agent, defw_channel_t ch,
 			  char *buf, size_t len, defw_msg_type_t type)
 {
 	/* control channel always on TCP; RPC on the fabric only once the
-	 * endpoint is up and we know the peer's OFI address, otherwise TCP
+	 * endpoint is up and the peer is ready for it, otherwise TCP
 	 */
 	if (ch == EN_DEFW_CHANNEL_CTRL || !g_ofi.up ||
-	    !(agent->state & DEFW_AGENT_OFI_ADDR_VALID))
+	    !(agent->state & DEFW_AGENT_OFI_READY))
 		return defw_transport_tcp_ops()->send(agent, ch, buf, len, type);
 
 	/*
@@ -450,6 +457,11 @@ static void ofi_mr_release_all(void)
 
 	if (n)
 		PDEBUG("OFI released %d outstanding memory region(s)", n);
+}
+
+bool defw_transport_ofi_active(void)
+{
+	return g_ofi.up;
 }
 
 bool defw_transport_ofi_rma_capable(void)
@@ -883,6 +895,11 @@ defw_rc_t defw_transport_ofi_init(const char *provider)
 	(void)provider;
 	PERROR("libfabric support was not built into DEFw");
 	return EN_DEFW_RC_FAIL;
+}
+
+bool defw_transport_ofi_active(void)
+{
+	return false;
 }
 
 defw_rc_t defw_transport_ofi_local_addr(void *buf, size_t *len)
