@@ -363,7 +363,7 @@ exist in C, once. The table applies that rule to v1's Python infrastructure.
 | `defw_peers` | Peer table driven by C lifecycle events | Binding cache inside the directory client | Peer liveness collapses into binding validity. |
 | `defw_agent.Endpoint`, `defw.Myself` | Endpoint identity, local host facts | `defw2_identity_t` and the record's endpoint block | Address is a Margo address string. |
 | `defw_attachments` | Transparent large-buffer detection, base64 inline, RMA descriptors | Bulk handles inside typed structs, tensor descriptors | Mercury owns eager versus bulk. |
-| `api_events`, `defw_event_baseapi` | Server-to-client events over `PY_EVENT` | Event sinks and reverse RPC in C | See [Events and Completion Notification](#events-and-completion-notification). |
+| `api_events`, `defw_event_baseapi` | Server-to-client events, each a blocking remote call to a `BaseEventAPI` object in the client. v1's `PY_EVENT` message type is never sent | Event sinks and a publisher in C | See [Events and Completion Notification](#events-and-completion-notification). |
 | `defw.configure_defw`, YAML role configs | Configuration from YAML and `DEFW_*` environment | C configuration reader for the same environment names plus a Margo JSON file | QFw's launcher contract is preserved. See [Configuration and Deployment](#configuration-and-deployment). |
 | `defw_exception` | Error classes | `defw2_status_t` with categories | Structured errors cross the wire as codes and text. |
 | `defw_common_def` registries | Class and singleton registries | Not needed | Providers are singletons by construction. |
@@ -916,40 +916,70 @@ the fallback. v2 supports both.
 
 **Pull.** `read_cq` and `peek_cq` are typed RPCs. They need nothing new.
 
-**Push.** A client that wants notifications creates an event sink, which
-registers a `defw2.event.deliver` handler on the client's own Margo instance
-and returns the sink's address and provider identifier. The client passes
-that pair in `register_event_notification`. The service forwards
-`defw2.event.deliver` to the sink when the event occurs. Delivery is
-at-most-once with a bounded timeout, and the completion queue remains the
-recovery path, which is exactly the QFw requirement.
+**Push.** A caller that wants notifications creates an event sink. A sink is
+a provider on the caller's own Margo instance, so the caller's runtime
+listens, and it serves one RPC, `defw2.event.deliver`. The caller passes the
+sink's address, its provider identifier and a tag of its own in
+`register_event_notification`. The service keeps its registrations and
+decides which events match them, as v1's QPM does, and sends each event
+through a publisher.
+
+A publisher copies the event and returns at once, so the service's own
+thread never waits on the network. It delivers from an execution stream it
+adds to Margo for itself: to every target at once, each target's events in
+order, and each delivery within a time limit. A sink acknowledges an event
+when it has queued it, before anything reads it, so a slow consumer costs
+only itself. A delivery that fails drops whatever waits for that target and
+fails the next publish to it, and the service drops the registration, as v1
+dropped one whose call failed. Delivery is at most once, and the completion
+queue remains the recovery path, which is the QFw requirement.
+
+v1 delivered events differently, and openQSE/QFw#64 records what it cost. A
+v1 service delivered an event by calling `put` on the client's event object,
+an ordinary remote method call that waited for the client's answer. It
+called each client in turn, and the event carried the whole completion,
+statevector included, as YAML text. For 20 qubits that is a 40 MiB message,
+so one client decoding it held up the events of every client behind it.
+v2's completion event carries the task record `read_cq` answers with, except
+that it describes the statevector rather than carrying it. A caller that
+wants the statevector lends `read_cq` or `peek_cq` a buffer of the size the
+description gives, which is the result path the typed API already has.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant App as Application
-    participant Lib as libdefw2 (client)
+    participant Sink as Sink in the application
     participant QPM as QPM service
+    participant Pub as Publisher in the QPM
 
-    App->>Lib: defw2_event_sink_create(callback)
-    Lib-->>App: sink address + provider_id
-    App->>QPM: register_event_notification(sink, evtype)
+    App->>Sink: defw2_event_sink_create, accept QPM events
+    App->>QPM: register_event_notification(sink, provider, tag)
     App->>QPM: async_run(...)
     QPM-->>App: circuit_id
-    Note over QPM: task completes
-    QPM->>Lib: defw2.event.deliver(circuit_id, outcome)
-    Lib->>App: callback on the delivery thread, or queued to Python
-    App->>QPM: read_cq(circuit_id) if the callback did not carry the result
+    Note over QPM: task completes and its completion is queued
+    QPM->>Pub: publish the completion, which returns at once
+    Pub->>Sink: defw2.event.deliver(task record)
+    Sink-->>Pub: queued
+    Sink->>App: callback on the sink's thread, or next for Python
+    App->>QPM: read_cq(circuit_id) with a buffer, for the statevector
 ```
 
-For a C caller the callback runs on a `libdefw2` delivery thread, never on a
-Margo handler thread, so the caller may block. For Python the event is queued
-to the binding's handler thread, as described next.
+One RPC carries every API's events. Its request is an envelope, which names
+the API and the event, followed by the payload as that API's own wire
+structure. A sink decodes only the kinds its owner accepted, and refuses any
+other before allocating anything for it, so a payload is as checked as any
+typed answer.
 
-Until phase 3 builds this, `defw2.compat` gives a v1 caller its completion
-events by peeking the completion queue instead, as the Python section
-describes. The pull path is the same one the push path falls back to, so
-nothing a v1 caller sees changes when push arrives.
+For a C caller the callback runs on the sink's own thread, never on a Margo
+handler thread, so the caller may block. A Python caller takes events from
+the sink with `defw2_event_sink_next`, as a Python service takes calls from
+its queue.
+
+Until `defw2.compat` uses sinks, it gives a v1 caller its completion events
+by peeking the completion queue instead, as the Python section describes.
+The pull path is the same one the push path falls back to, so nothing a v1
+caller sees changes when push arrives.
 
 ## Language Bindings
 
