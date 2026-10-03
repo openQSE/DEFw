@@ -119,6 +119,32 @@ void defw2_served_fail(struct defw2_served *served, defw2_rc_t code,
 	defw2_wire_status_set(served->status, code, category, message);
 }
 
+bool defw2_served_queued(const struct defw2_served *served)
+{
+	return served->bound != NULL &&
+	       defw2_service_queued(served->bound->svc);
+}
+
+defw2_rc_t defw2_served_queue(struct defw2_served *served)
+{
+	defw2_rc_t rc;
+
+	rc = defw2_service_dispatch_call(served->bound->svc, &served->call,
+					 &served->queue_ns);
+	if (rc == DEFW2_ERR_BUSY) {
+		defw2_call_set_status(&served->call, rc,
+				      DEFW2_CAT_PENDING_CAPACITY,
+				      "the service is at capacity");
+		return rc;
+	}
+	if (rc != DEFW2_OK) {
+		defw2_call_set_status(&served->call, rc, DEFW2_CAT_NOT_FOUND,
+				      "the service is not serving");
+		return rc;
+	}
+	return served->call.status.code;
+}
+
 bool defw2_served_finish(struct defw2_served *served, defw2_rc_t rc)
 {
 	defw2_status_t *status = &served->call.status;
@@ -244,6 +270,11 @@ void defw2_typed_serve(hg_handle_t handle, const struct defw2_method *method,
 		mark = defw2_mono_ns();
 		trace.span.decode_ns = mark - arrived_mono;
 	}
+	/* What the handler's own work belongs under: this span when it is
+	 * recorded, and the caller's otherwise, so a service that traces by
+	 * itself still joins the caller's trace. */
+	served.call.traceparent = trace.recording ? trace.traceparent :
+		((defw2_hdr_t *)in)->traceparent;
 
 	if (served.bound == NULL)
 		defw2_served_fail(&served, DEFW2_ERR_NOT_FOUND,
@@ -258,6 +289,13 @@ void defw2_typed_serve(hg_handle_t handle, const struct defw2_method *method,
 
 	if (trace.recording) {
 		trace.span.handler_ns = defw2_mono_ns() - mark;
+		/* The wait for a consumer is not the service's own time, so
+		 * the two are reported apart. */
+		if (served.queue_ns > 0 &&
+		    served.queue_ns < trace.span.handler_ns) {
+			trace.span.queue_ns = served.queue_ns;
+			trace.span.handler_ns -= served.queue_ns;
+		}
 		mark = defw2_mono_ns();
 	}
 

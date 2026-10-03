@@ -15,8 +15,9 @@
  *	defw2_service_destroy(svc);
  *
  * Each API binds its own operations table, which is what keeps the host free
- * of any knowledge of a particular API. Directory registration, heartbeats
- * and the Python call queue join this in later phases.
+ * of any knowledge of a particular API. Directory registration and
+ * heartbeats are the agent's, in defw2_dir.h, and a service in another
+ * language serves from the call queue below.
  *
  * Handlers run on Margo's handler pool. A handler may block on a provider
  * call, because the progress loop has its own execution stream. A handler
@@ -81,6 +82,14 @@ void defw2_service_shutdown(defw2_service_t *svc);
  * A call handle belongs to the parked handler, not to the caller of
  * next_call, and it is spent the moment it is answered. Nothing may touch
  * it after that.
+ *
+ * A typed method's call is answered the same way, but its request is the
+ * method's public request structure rather than bytes, and its answer is a
+ * structure too: defw2_call_response returns it, the consumer fills it in
+ * with storage from defw2_call_strdup and its relatives, and then calls
+ * defw2_service_respond with no reply bytes. The method name says which
+ * structures they are, so a binding knows how to read and fill them
+ * without any encoding in between.
  */
 typedef struct defw2_call defw2_call_t;
 
@@ -113,6 +122,17 @@ defw2_rc_t defw2_service_next_call(defw2_service_t *svc, uint32_t timeout_ms,
 const char *defw2_call_api(const defw2_call_t *call);
 const char *defw2_call_method(const defw2_call_t *call);
 const void *defw2_call_request(const defw2_call_t *call, size_t *len);
+
+/* A typed call's answer, for the consumer to fill. NULL for bytes. */
+void *defw2_call_response(defw2_call_t *call);
+
+/*
+ * The W3C traceparent a typed call's work belongs under: the server span's
+ * own when this process records spans, so what the consumer records nests
+ * inside it, and the caller's otherwise. NULL when the caller sent none,
+ * and for bytes. It lasts until the call is answered.
+ */
+const char *defw2_call_traceparent(const defw2_call_t *call);
 
 /*
  * Answer it. reply is copied, so the caller keeps nothing. A failure's

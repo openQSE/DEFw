@@ -11,9 +11,9 @@ sink, bindings and typed stubs, the service host with its call queue,
 `qfw.echo` as the reference service with its eager and bulk methods, the
 directory service with its client, agent and binding cache, the QPM's
 control, admission and execution APIs typed in C, the spans and histograms
-the comparison reads, a `defw2` Python package that both calls and serves,
-and the benchmarks that measure the lot against v1. The document tier and
-events are still to come, and so is the QPM's Python side.
+the comparison reads, a `defw2` Python package that calls and serves all of
+it, and the benchmarks that measure the lot against v1. The document tier
+and events are still to come.
 
 ## Building
 
@@ -36,7 +36,7 @@ cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-dirsvc \
 ctest --test-dir build -R defw2
 ```
 
-That prints fourteen passing tests. Each line of it is doing something, so
+That prints seventeen passing tests. Each line of it is doing something, so
 changing one of them tends to be how a build goes wrong:
 
 - **The paths are set by hand rather than with `module load`.** The image
@@ -62,6 +62,17 @@ changing one of them tends to be how a build goes wrong:
 
 Outside that image, point `PKG_CONFIG_PATH` at whatever provides Margo and
 `-DPython3_EXECUTABLE` at a Python with cffi.
+
+`cmake --install build` installs `libdefw2`, the headers, `defw2-dirsvc`,
+`defw2-echo`, `defw2-bench`, the `defw2` package under
+`DEFW2_PYTHON_INSTALL_DIR` (the prefix's `lib/pythonX.Y/site-packages` by
+default) and `defw2-python`. An install runs with nothing on
+`LD_LIBRARY_PATH` or `PYTHONPATH`: the binaries carry RPATHs to Margo and
+libfabric, the extension finds `libdefw2` relative to itself, and the
+launcher finds the package the install put under the prefix. A process
+started over ssh gets that bare environment. `tests/defw2_install_smoke.py`
+installs into a scratch prefix and runs the compat test from there to hold
+it to that.
 
 Build trees are not relocatable: a configured `build/` holds absolute
 paths, so copying a source tree that contains one and building in the copy
@@ -180,6 +191,22 @@ into a structure whose strings come from the call, through
 `defw2_call_strdup` and its relatives, and the provider frees all of it once
 the reply is on the wire.
 
+A Python service answers the same calls through the call queue, as a typed
+call: the consumer reads the call's request structure, fills its answer
+structure, and responds with no reply bytes, so nothing is encoded between
+C and Python in either direction. `defw2_qpm_smoke --serve` and
+`tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
+the C checks and the Python checks pass against both.
+
+## v1 code on v2
+
+`defw2-python`, beside the built package, runs v1 Python on v2: a v1
+client as `defw2-python script.py`, and a v1 QPM service module as
+`defw2-python --serve svc_fake_iqm_qpm`. QFw's code runs under it
+unchanged. `bindings/python/README.md` says what it provides, and
+`tests/defw2_compat_smoke.py` checks a v1 QPM and a v1 client against v1's
+own answers.
+
 ## What the wire refuses
 
 Mercury's own string decoder trusts the sender twice: it allocates whatever
@@ -283,8 +310,11 @@ section. The names v2 adds:
 | `DEFW2_RPC_THREADS` | 2 for a server, 0 for a client | Handler execution streams |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
 | `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
+| `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
+| `DEFW2_COMPAT_POLL_MS` | 10 | How often `defw2.compat` peeks for a v1 caller's completion events |
 
-It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,
+`defw2-python` finds the v1 tree it reuses at `DEFW_PATH`, as v1's launcher
+did. It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,
 `DEFW_AGENT_TYPE` (`service` and `dirsvc` are servers), `DEFW_LOG_DIR`,
 `DEFW_LOG_LEVEL` (`error`, `warning`, `message`, `debug`, `all`),
 `DEFW_LISTEN_PORT` for `ofi+tcp`, and `DEFW_DISABLE_DIRSVC`.

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Run v1 Python on DEFw v2, as v1's defw-python ran it on v1:
+#
+#	defw2-python SCRIPT [ARGS...]
+#	defw2-python -m MODULE [ARGS...]
+#	defw2-python --serve MODULE [--execution-workers N]
+#
+# It runs python3 -m defw2.compat with the defw2 package first on the path:
+# the one beside this script in a build tree, or the one an install put
+# under @DEFW2_PYTHON_INSTALL_DIR@. The interpreter is DEFW2_PYTHON when that
+# is set, the active virtual environment's python when there is one, and
+# python3 otherwise. The v1 tree comes from DEFW_PATH, which defaults to this
+# prefix when the prefix holds one.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+prefix="$(cd "${here}/.." && pwd)"
+if [[ -d "${here}/defw2" ]]; then
+	package_dir="${here}"
+elif [[ -d "${prefix}/@DEFW2_PYTHON_INSTALL_DIR@/defw2" ]]; then
+	package_dir="${prefix}/@DEFW2_PYTHON_INSTALL_DIR@"
+else
+	package_dir=""
+fi
+if [[ -n "${package_dir}" ]]; then
+	export PYTHONPATH="${package_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+if [[ -z "${DEFW_PATH:-}" && -d "${prefix}/python/infra" ]]; then
+	export DEFW_PATH="${prefix}"
+fi
+
+if [[ -n "${DEFW2_PYTHON:-}" ]]; then
+	python="${DEFW2_PYTHON}"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+	python="${VIRTUAL_ENV}/bin/python"
+else
+	python="$(command -v python3)"
+fi
+
+exec "${python}" -m defw2.compat "$@"

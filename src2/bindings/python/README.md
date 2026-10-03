@@ -41,6 +41,12 @@ cmake --build build --target defw2-python
 PYTHONPATH=build/src2/python python3 -c "import defw2; print(defw2.version())"
 ```
 
+An install puts the package under `DEFW2_PYTHON_INSTALL_DIR`, the prefix's
+`lib/pythonX.Y/site-packages` unless set, and `defw2-python` in `bin`. The
+installed extension is built apart from the build tree's, with an RPATH
+relative to itself and nothing else, so an install can move and never
+loads a build tree's library by accident.
+
 ## Calling
 
 ```python
@@ -58,6 +64,40 @@ the status category. A call that never arrived raises with the transport
 category. That is the same two-step the C API has, with the second step
 turned into an exception because that is what Python callers expect.
 
+The QPM's three APIs work the same way through `defw2.QPM`, which calls the
+C stubs, so a Python caller and a C caller send the same bytes:
+
+```python
+with defw2.Runtime() as rt:
+	with defw2.Directory(rt) as directory:
+		record = directory.resolve(service_type='qfw.qpm')[0]
+	with defw2.QPM.from_record(rt, record) as qpm:
+		task = qpm.async_run(qasm, num_qubits=20, num_shots=1024,
+				     return_statevector=True,
+				     reservation_id=rid)
+		done = qpm.read_cq(cid=task.cid, reservation_id=rid,
+				   result=numpy.empty(1 << 20, numpy.complex128))
+		amplitudes = done.statevector_data
+```
+
+Answers are objects with the typed fields as attributes. `extra` is the
+service's JSON, parsed when it is first read, and `extra_json` the text it
+came as. An outcome such as `INVALID_RESERVATION` is in the answer, and a
+failed call raises. A result buffer is anything writable, a numpy array
+included, and the statevector lands in it directly: `statevector_data` is a
+view of that buffer shaped by the answer's descriptor, so nothing is copied
+after the push. A buffer that is too small comes back undelivered with
+`statevector.nbytes` saying what a retry needs.
+
+### Threads
+
+Any thread may call. A client object keeps nothing per call on itself, so
+one may be shared. This works because the runtime always runs Margo's
+progress loop on its own execution stream: a thread Argobots has never seen
+waits for its reply on an eventual, which Argobots 1.2 allows, while the
+progress stream does the network work. Eight threads sharing one `QPM` are
+part of the tests.
+
 ## Serving
 
 ```python
@@ -73,10 +113,42 @@ with defw2.Runtime(role='server') as rt:
 A handler is either an object whose method names match the API's or a
 callable taking `(method, request)`. A handler that raises becomes a status
 with the `provider-failure` category, so a caller is never left waiting on a
-service that gave up.
+service that gave up. One that raises `defw2.ServiceError` chooses the
+category instead, such as `'invalid-reservation'`.
 
 `serve` blocks until `stop()`, which a signal handler may call. `start()` is
 the same thing on background threads.
+
+A host can serve several APIs of one service, each on its own provider with
+its own queue and its own workers. That is how a QPM is served, and it is
+why its `is_ready` is never stuck behind a backlog of `async_run`:
+
+```python
+class FakeQPM:
+	def is_ready(self, request):
+		return {'state': 'running', 'ready': True}
+
+	def async_run(self, request):
+		# request.circuit, request.num_qubits, request.extra, ...
+		return {'outcome': 'ACCEPTED', 'cid': 'cid-1', 'qtask_id': 1}
+
+host = defw2.ServiceHost.from_environment(
+	'qpm:fake:fake-20q', 'qfw.qpm', apis=defw2.QPM_APIS,
+	selector={'name': 'fake-20q', 'resources': ['FAKE-20q']})
+host.serve(FakeQPM(), workers={defw2.API_QPM_EXECUTION: 4})
+```
+
+A typed method takes a `Request`, the C request structure read into plain
+Python values with no encoding in between, and returns a dict that is
+written straight into the C answer the same way. A statevector answers as
+`statevector`, bytes or a numpy array, and a service that will not consume
+a completion its caller cannot hold answers with `statevector_shape` alone.
+`request.result_capacity` says what the caller lent.
+
+`register`, which `from_environment` calls when `DEFW2_DIRSVC` names a
+directory, starts the C agent that keeps the record alive with heartbeats.
+`close` stops it first, so the service deregisters before anything else
+goes.
 
 ### How a call reaches Python
 
@@ -94,6 +166,35 @@ The cost is one hand-off per call. The server's span reports it as its
 `queue` event, separately from the time the service itself took, so the two
 can be told apart in a report.
 
+## v1 code on v2
+
+QFw's QPM services and its Qiskit backend are written against v1. They run
+on v2 unchanged under `defw2-python`, the launcher `defw2.compat` provides,
+which does for v2 what v1's `defw-python` did for v1:
+
+```bash
+defw2-python test_qiskit_simple.py 4 fake-iqm   # a v1 client
+defw2-python --serve svc_fake_iqm_qpm           # a v1 QPM service module
+```
+
+Before anything else loads, it makes the v1 module names importable.
+`cdefw_global`, `defw`, `defw_app_util`, `defw_remote` and `defw_workers`
+are compat's own, because they were v1's runtime. `api_events`, `defw_cmd`,
+`defw_common_def`, `defw_event_baseapi`, `defw_exception`, `defw_trace`,
+`defw_util` and `svc_launcher` are v1's own files, loaded unchanged from the
+v1 tree that `DEFW_PATH` names. Any other v1 name fails to import with an
+error that says it has no v2 counterpart.
+
+A served v1 QPM answers the typed QPM APIs through `QPMAdapter`, so C and
+Python v2 callers reach it as they reach any QPM. A v1 client's API classes
+send the fourteen typed QPM methods over the same APIs, and the dictionary
+the service returned comes back key for key, its exceptions as the same v1
+classes, and a statevector through the bulk path, put back into the v1
+payload. A v1 client's `register_event_notification` is answered by peeking
+the completion queue until phase 3 brings events. `_mapping.py` says
+exactly what moves into a typed field and what stays in `extra`, and the
+design document's Python section says why.
+
 ## Layout
 
 | Path | Contents |
@@ -101,7 +202,23 @@ can be told apart in a report.
 | `cffi_build.py` | The declarations, compiled against the real headers |
 | `defw2/_runtime.py` | `Runtime`, `Status`, `DefwError`, telemetry, process stats |
 | `defw2/_echo.py` | The `qfw.echo` client |
-| `defw2/_service.py` | `ServiceHost` and the queue workers |
+| `defw2/_qpm.py` | The QPM client, its answers, and the codecs that read a typed call's request and write its answer |
+| `defw2/_dir.py` | The directory client, records as dictionaries, and the record a host registers |
+| `defw2/_service.py` | `ServiceHost`: one provider, queue and set of workers per API, and directory registration |
+| `defw2/compat/__init__.py` | `install`, which makes the v1 names importable, and the finder that refuses the rest |
+| `defw2/compat/_mapping.py` | How a v1 QPM's dictionaries cross the typed APIs, both ways |
+| `defw2/compat/_adapter.py` | `QPMAdapter`, a `ServiceHost` handler over a v1 QPM object |
+| `defw2/compat/_remote.py` | Remote objects for v1 callers, v1 exceptions, and completion events by peeking |
+| `defw2/compat/_directory.py` | `defw.dirsvc`: v1 registration and resolution over the v2 directory |
+| `defw2/compat/_serve.py`, `__main__.py` | `defw2-python` and its `--serve` |
+| `defw2/compat/_v1/` | The five v1 modules compat provides itself |
+| `defw2-python.in` | The launcher, configured beside the built package and for the install |
 
-`src2/tests/defw2_python_smoke.py` exercises all of it, including the
-interpreter-lock property, and runs under ctest when cffi is present.
+`src2/tests/defw2_python_smoke.py` exercises echo and the host, including
+the interpreter-lock property. `src2/tests/defw2_python_qpm_smoke.py` holds
+the QPM to the same checks as the C test from both languages, against a C
+service and a Python one, with the control queue under an execution backlog
+and a Python QPM in the directory. `src2/tests/defw2_compat_smoke.py` runs
+a v1 QPM and a v1 client, both written against v1 alone, on v2, and holds
+every answer to what v1 gave. All three run under ctest when cffi is
+present.

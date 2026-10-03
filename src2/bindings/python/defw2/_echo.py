@@ -2,7 +2,7 @@
 
 One typed method, bound one to one, which is the shape every typed method
 takes. Anything without a typed stub goes through the document tier, which
-is not built yet.
+is not built yet. A client may be shared between threads.
 """
 
 from ._defw2 import ffi, lib
@@ -39,21 +39,26 @@ class Echo:
 			lib.defw2_binding_address(self._binding)).decode()
 
 	def _options(self, timeout_ms, traceparent):
+		"""The call's options, and the string they point at.
+
+		The caller holds both until the call returns. Keeping the
+		string on the client instead would let a second thread's call
+		replace it, and free it, while the first is still using it.
+		"""
 		opts = ffi.new('defw2_call_opts_t *')
 		opts.timeout_ms = (self._timeout_ms if timeout_ms is None
 				   else timeout_ms)
+		trace = ffi.NULL
 		if traceparent:
-			self._trace = ffi.new('char[]', traceparent.encode())
-			opts.traceparent = self._trace
-		else:
-			opts.traceparent = ffi.NULL
-		return opts
+			trace = ffi.new('char[]', traceparent.encode())
+		opts.traceparent = trace
+		return opts, trace
 
 	def echo(self, payload, timeout_ms=None, traceparent=None):
 		"""Send bytes and get them back. Raises on a failed call."""
 		if isinstance(payload, str):
 			payload = payload.encode()
-		opts = self._options(timeout_ms, traceparent)
+		opts, trace = self._options(timeout_ms, traceparent)
 		reply = ffi.new('defw2_buffer_t *')
 		holder = _status_out()
 
@@ -79,7 +84,7 @@ class Echo:
 		"""
 		if isinstance(payload, str):
 			payload = payload.encode()
-		opts = self._options(timeout_ms, traceparent)
+		opts, trace = self._options(timeout_ms, traceparent)
 		source = ffi.new('char[]', payload)
 		sink = ffi.new('char[]', len(payload))
 		moved = ffi.new('uint64_t *')

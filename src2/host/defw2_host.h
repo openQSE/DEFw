@@ -41,6 +41,7 @@ struct defw2_call {
 	void			*bulk;		/* a bulk reply, owned */
 	uint64_t		bulk_len;
 	uint64_t		result_capacity; /* lent by the caller, 0 for none */
+	const char		*traceparent;	/* borrowed, or NULL */
 };
 
 /*
@@ -67,6 +68,18 @@ struct defw2_service {
 	uint16_t		provider_id;
 	struct defw2_queue	*queue;		/* NULL until opened */
 };
+
+/*
+ * Queue a call the handler built and park until it is answered. This is the
+ * whole of the hand-off, and what a typed method uses: its call already
+ * carries the request structure, the answer to fill and the storage for it,
+ * so the consumer answers straight into the handler's own call. Returns
+ * DEFW2_ERR_BUSY for a full queue and DEFW2_ERR_NOT_FOUND for a closed one,
+ * and otherwise DEFW2_OK with the consumer's outcome in call->status.
+ */
+defw2_rc_t defw2_service_dispatch_call(struct defw2_service *svc,
+				       struct defw2_call *call,
+				       uint64_t *queue_ns);
 
 /*
  * Hand a decoded request to the queue and wait for the answer. This is

@@ -49,14 +49,26 @@ static void call_frame(struct defw2_served *served, const void *req,
 	served->call.response = answer;
 }
 
+/*
+ * A method this service does not serve. A service answering from its queue
+ * decides that for itself, since its operations live in another language.
+ */
 static bool unserved(struct defw2_served *served, const void *op)
 {
-	if (op != NULL)
+	if (op != NULL || defw2_served_queued(served))
 		return false;
 	defw2_served_fail(served, DEFW2_ERR_NOT_FOUND, DEFW2_CAT_NOT_FOUND,
 			  "this QPM does not serve that method");
 	return true;
 }
+
+/*
+ * Run the operation, or hand the call to the queue when the service answers
+ * from another language. Either way the answer lands in the call's frame.
+ */
+#define QPM_RUN(served, op, ...)					\
+	(defw2_served_queued(served) ? defw2_served_queue(served)	\
+				     : (op)(__VA_ARGS__))
 
 /* --- answers onto the wire ------------------------------------------- */
 
@@ -216,14 +228,16 @@ static void serve_control(struct defw2_served *served,
 	struct qpm_control_bound *b = (struct qpm_control_bound *)served->bound;
 	defw2_qpm_service_status_t answer;
 	defw2_qpm_ctx_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)op))
 		return;
 	memset(&answer, 0, sizeof(answer));
 	ctx_from_wire(&in->ctx, &req);
 	call_frame(served, &req, sizeof(req), &answer);
-	if (defw2_served_finish(served, op(b->ops.ctx, &served->call, &req,
-					   &answer)))
+	rc = QPM_RUN(served, op, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (defw2_served_finish(served, rc))
 		status_to_wire(served, &answer, out);
 }
 
@@ -251,6 +265,7 @@ static void serve_reserve(struct defw2_served *served, void *vin, void *vout)
 	defw2_qpm_reserve_in_t *in = vin;
 	defw2_qpm_decision_t answer;
 	defw2_qpm_reserve_req_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)b->ops.reserve))
 		return;
@@ -282,9 +297,9 @@ static void serve_reserve(struct defw2_served *served, void *vin, void *vout)
 	}
 	req.extra = in->extra;
 	call_frame(served, &req, sizeof(req), &answer);
-	if (defw2_served_finish(served, b->ops.reserve(b->ops.ctx,
-						       &served->call, &req,
-						       &answer)))
+	rc = QPM_RUN(served, b->ops.reserve, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (defw2_served_finish(served, rc))
 		decision_to_wire(served, &answer, vout);
 }
 
@@ -295,6 +310,7 @@ static void serve_renew(struct defw2_served *served, void *vin, void *vout)
 	defw2_qpm_renew_in_t *in = vin;
 	defw2_qpm_decision_t answer;
 	defw2_qpm_renew_req_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)b->ops.renew))
 		return;
@@ -304,9 +320,9 @@ static void serve_renew(struct defw2_served *served, void *vin, void *vout)
 	req.ttl_ns = in->ttl_ns;
 	req.extra = in->extra;
 	call_frame(served, &req, sizeof(req), &answer);
-	if (defw2_served_finish(served, b->ops.renew(b->ops.ctx,
-						     &served->call, &req,
-						     &answer)))
+	rc = QPM_RUN(served, b->ops.renew, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (defw2_served_finish(served, rc))
 		decision_to_wire(served, &answer, vout);
 }
 
@@ -322,6 +338,7 @@ static void serve_close(struct defw2_served *served,
 		(struct qpm_admission_bound *)served->bound;
 	defw2_qpm_decision_t answer;
 	defw2_qpm_close_req_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)op))
 		return;
@@ -330,8 +347,9 @@ static void serve_close(struct defw2_served *served,
 	ctx_from_wire(&in->ctx, &req.ctx);
 	req.reason_code = in->reason_code;
 	call_frame(served, &req, sizeof(req), &answer);
-	if (defw2_served_finish(served, op(b->ops.ctx, &served->call, &req,
-					   &answer)))
+	rc = QPM_RUN(served, op, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (defw2_served_finish(served, rc))
 		decision_to_wire(served, &answer, out);
 }
 
@@ -359,16 +377,16 @@ static void serve_get_reservation(struct defw2_served *served, void *vin,
 	defw2_qpm_ctx_in_t *in = vin;
 	defw2_qpm_reservation_t answer;
 	defw2_qpm_ctx_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)b->ops.get_reservation))
 		return;
 	memset(&answer, 0, sizeof(answer));
 	ctx_from_wire(&in->ctx, &req);
 	call_frame(served, &req, sizeof(req), &answer);
-	if (defw2_served_finish(served,
-				b->ops.get_reservation(b->ops.ctx,
-						       &served->call, &req,
-						       &answer)))
+	rc = QPM_RUN(served, b->ops.get_reservation, b->ops.ctx,
+		     &served->call, &req, &answer);
+	if (defw2_served_finish(served, rc))
 		reservation_to_wire(served, &answer, vout);
 }
 
@@ -385,6 +403,7 @@ static void serve_run(struct defw2_served *served, defw2_qpm_run_in_t *in,
 		(struct qpm_execution_bound *)served->bound;
 	defw2_qpm_task_t answer;
 	defw2_qpm_run_req_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)op))
 		return;
@@ -412,8 +431,9 @@ static void serve_run(struct defw2_served *served, defw2_qpm_run_in_t *in,
 	if (lends)
 		lent(served, &in->result);
 	call_frame(served, &req, sizeof(req), &answer);
-	if (!defw2_served_finish(served, op(b->ops.ctx, &served->call, &req,
-					    &answer)))
+	rc = QPM_RUN(served, op, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (!defw2_served_finish(served, rc))
 		return;
 	if (task_to_wire(served, &answer, out) && lends)
 		deliver(served, &answer, &in->result, out);
@@ -446,6 +466,7 @@ static void serve_task(struct defw2_served *served, defw2_qpm_task_in_t *in,
 		(struct qpm_execution_bound *)served->bound;
 	defw2_qpm_task_t answer;
 	defw2_qpm_task_req_t req;
+	defw2_rc_t rc;
 
 	if (unserved(served, (const void *)op))
 		return;
@@ -458,8 +479,9 @@ static void serve_task(struct defw2_served *served, defw2_qpm_task_in_t *in,
 	if (lends)
 		lent(served, &in->result);
 	call_frame(served, &req, sizeof(req), &answer);
-	if (!defw2_served_finish(served, op(b->ops.ctx, &served->call, &req,
-					    &answer)))
+	rc = QPM_RUN(served, op, b->ops.ctx, &served->call, &req,
+		     &answer);
+	if (!defw2_served_finish(served, rc))
 		return;
 	if (task_to_wire(served, &answer, out) && lends)
 		deliver(served, &answer, &in->result, out);

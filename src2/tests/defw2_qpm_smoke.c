@@ -17,6 +17,16 @@
  * Given a directory, both runtimes profile into it, which is how the spans
  * the shared typed code records get checked: defw2_otlp_check.py reads them
  * back as a second test.
+ *
+ * The fake and the checks also run apart, which is how the same checks hold
+ * a QPM in another language to the same answers:
+ *
+ *	defw2_qpm_smoke --serve		serve the fake, print its address,
+ *					and stop when stdin closes
+ *	defw2_qpm_smoke --remote ADDR	run the checks against ADDR
+ *
+ * tests/defw2_qpm_fake.py is the same fake in Python, and the Python
+ * checks in tests/defw2_qpm_client_check.py run against either.
  */
 #include <inttypes.h>
 #include <pthread.h>
@@ -32,12 +42,16 @@
 #define FP_LEN		4096
 #define BIG_EXTRA	(200u * 1024u)
 #define BIG_CIRCUIT	(1024u * 1024u)
+#define QUEUED		64
 
 static int failures;
 
+/* Where checks report. A server keeps stdout for its address alone. */
+static FILE *report;
+
 static void check(const char *what, bool ok)
 {
-	printf("%-58s %s\n", what, ok ? "ok" : "FAILED");
+	fprintf(report, "%-58s %s\n", what, ok ? "ok" : "FAILED");
 	if (!ok)
 		failures++;
 }
@@ -155,7 +169,7 @@ struct completion {
 
 static struct {
 	pthread_mutex_t		lock;
-	struct completion	done[8];
+	struct completion	done[QUEUED];
 	uint64_t		next_qtask;
 	char			big_extra[BIG_EXTRA];
 } fake = { .lock = PTHREAD_MUTEX_INITIALIZER, .next_qtask = 1 };
@@ -299,7 +313,7 @@ static defw2_rc_t fake_async_run(void *ctx, defw2_call_t *call,
 
 	(void)ctx;
 	pthread_mutex_lock(&fake.lock);
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < QUEUED; i++) {
 		if (!fake.done[i].queued) {
 			c = &fake.done[i];
 			break;
@@ -347,7 +361,7 @@ static struct completion *find(const defw2_qpm_task_req_t *req)
 {
 	int i;
 
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < QUEUED; i++) {
 		struct completion *c = &fake.done[i];
 
 		if (!c->queued)
@@ -728,9 +742,23 @@ static void execution_calls(defw2_binding_t *execution)
 	defw2_status_free(&status);
 }
 
+/* Serve until whoever started us closes our stdin. */
+static void serve_until_stdin_closes(defw2_rt_t *rt)
+{
+	char discard[256];
+
+	printf("%s\n", defw2_address(rt));
+	fflush(stdout);
+	while (fread(discard, 1, sizeof(discard), stdin) > 0)
+		;
+}
+
 int main(int argc, char **argv)
 {
-	const char *telemetry = argc > 1 ? argv[1] : NULL;
+	const char *telemetry = NULL;
+	const char *remote = NULL;
+	bool serve = false;
+	int i;
 	static const defw2_qpm_control_ops_t control_ops = {
 		.is_ready = fake_is_ready,
 		.get_service_status = fake_service_status,
@@ -757,10 +785,27 @@ int main(int argc, char **argv)
 	defw2_binding_t *control = NULL, *admission = NULL;
 	defw2_binding_t *execution = NULL;
 
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--serve") == 0) {
+			serve = true;
+		} else if (strcmp(argv[i], "--remote") == 0 && i + 1 < argc) {
+			remote = argv[++i];
+		} else if (argv[i][0] == '-') {
+			fprintf(stderr, "usage: defw2_qpm_smoke [telemetry-dir] "
+				"[--serve | --remote address]\n");
+			return EXIT_FAILURE;
+		} else {
+			telemetry = argv[i];
+		}
+	}
+
+	report = serve ? stderr : stdout;
 	memset(fake.big_extra, 'e', BIG_EXTRA - 1);
 	fake.big_extra[BIG_EXTRA - 1] = '\0';
 	if (telemetry != NULL)
 		setenv("DEFW2_TELEMETRY_DIR", telemetry, 1);
+	if (remote != NULL)
+		goto client;
 
 	memset(&server_cfg, 0, sizeof(server_cfg));
 	server_cfg.address = "na+sm://";
@@ -792,6 +837,12 @@ int main(int argc, char **argv)
 	      defw2_qpm_execution_bind(execution_svc, &execution_ops) ==
 	      DEFW2_OK);
 
+	if (serve) {
+		serve_until_stdin_closes(server_rt);
+		goto server_down;
+	}
+
+client:
 	memset(&client_cfg, 0, sizeof(client_cfg));
 	client_cfg.address = "na+sm://";
 	client_cfg.node_name = "qpm-client";
@@ -802,14 +853,16 @@ int main(int argc, char **argv)
 		fprintf(stderr, "cannot start the client runtime\n");
 		return EXIT_FAILURE;
 	}
+	if (remote == NULL)
+		remote = defw2_address(server_rt);
 	check("the client binds all three",
-	      defw2_binding_create(client_rt, defw2_address(server_rt),
+	      defw2_binding_create(client_rt, remote,
 				   DEFW2_PROVIDER_QPM_CONTROL, &control) ==
 	      DEFW2_OK &&
-	      defw2_binding_create(client_rt, defw2_address(server_rt),
+	      defw2_binding_create(client_rt, remote,
 				   DEFW2_PROVIDER_QPM_ADMISSION,
 				   &admission) == DEFW2_OK &&
-	      defw2_binding_create(client_rt, defw2_address(server_rt),
+	      defw2_binding_create(client_rt, remote,
 				   DEFW2_PROVIDER_QPM_EXECUTION,
 				   &execution) == DEFW2_OK);
 
@@ -847,12 +900,17 @@ int main(int argc, char **argv)
 	defw2_binding_free(admission);
 	defw2_binding_free(execution);
 	defw2_finalize(client_rt);
+	if (server_rt == NULL)
+		goto done;
+server_down:
 	defw2_service_shutdown(control_svc);
 	defw2_service_destroy(control_svc);
 	defw2_service_destroy(admission_svc);
 	defw2_service_destroy(execution_svc);
 	defw2_finalize(server_rt);
-
+	if (serve)
+		return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+done:
 	printf("\n%s\n", failures == 0 ? "qpm smoke passed"
 				       : "qpm smoke FAILED");
 	return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
