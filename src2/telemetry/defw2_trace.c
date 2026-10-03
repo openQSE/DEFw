@@ -59,6 +59,7 @@ struct defw2_telemetry {
 	struct defw2_histogram	duration;
 	struct defw2_histogram	bytes;
 	bool			histograms;
+	bool			closed;		/* written out, now idle */
 
 	pthread_mutex_t		lock;
 };
@@ -539,6 +540,13 @@ defw2_rc_t defw2_telemetry_open(struct defw2_rt *rt,
 	return DEFW2_OK;
 }
 
+/*
+ * Write everything out and stop recording, but keep the recorder. A ULT can
+ * still be finishing a call when the runtime closes its telemetry, which it
+ * does before Margo stops so that a hang there loses nothing, and that ULT
+ * ends its span against this recorder. With the buffer and the histograms
+ * gone, trace_end drops the span rather than writing to freed memory.
+ */
 void defw2_telemetry_close(struct defw2_rt *rt)
 {
 	struct defw2_telemetry *telemetry = rt->telemetry;
@@ -548,17 +556,35 @@ void defw2_telemetry_close(struct defw2_rt *rt)
 
 	defw2_telemetry_run_end(rt, NULL);
 	pthread_mutex_lock(&telemetry->lock);
+	if (telemetry->closed) {
+		pthread_mutex_unlock(&telemetry->lock);
+		return;
+	}
 	flush_spans(telemetry);
-	pthread_mutex_unlock(&telemetry->lock);
 	write_metrics(rt);
-
 	if (telemetry->spans != NULL)
 		fclose(telemetry->spans);
-	defw2_attrs_free(&telemetry->resource);
-	defw2_attrs_free(&telemetry->run_attrs);
+	telemetry->spans = NULL;
+	free(telemetry->buffer);
+	telemetry->buffer = NULL;
+	telemetry->count = 0;
+	telemetry->histograms = false;
 	defw2_histogram_free(&telemetry->duration);
 	defw2_histogram_free(&telemetry->bytes);
-	free(telemetry->buffer);
+	telemetry->closed = true;
+	pthread_mutex_unlock(&telemetry->lock);
+}
+
+/* Once Margo has stopped, nothing can end a span, so the recorder goes. */
+void defw2_telemetry_free(struct defw2_rt *rt)
+{
+	struct defw2_telemetry *telemetry = rt->telemetry;
+
+	if (telemetry == NULL)
+		return;
+	defw2_telemetry_close(rt);
+	defw2_attrs_free(&telemetry->resource);
+	defw2_attrs_free(&telemetry->run_attrs);
 	pthread_mutex_destroy(&telemetry->lock);
 	free(telemetry);
 	rt->telemetry = NULL;
