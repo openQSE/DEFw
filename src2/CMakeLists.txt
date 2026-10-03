@@ -228,6 +228,19 @@ if(BUILD_TESTING)
 		PROPERTIES
 			FIXTURES_SETUP defw2_qpm_otlp_files)
 
+	# Sinks and publishers across two runtimes, and a sink in a second
+	# process that the test starts and then stops with SIGSTOP. It too
+	# profiles into a directory of its own for the OTLP checker.
+	set(DEFW2_EVENT_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry-event")
+	file(MAKE_DIRECTORY "${DEFW2_EVENT_TELEMETRY_DIR}")
+	add_executable(defw2_event_smoke tests/defw2_event_smoke.c)
+	target_link_libraries(defw2_event_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_event_smoke
+		COMMAND defw2_event_smoke "${DEFW2_EVENT_TELEMETRY_DIR}")
+	set_tests_properties(defw2_event_smoke
+		PROPERTIES
+			FIXTURES_SETUP defw2_event_otlp_files)
+
 	# The wire test reaches the procs directly, so it sees the internal
 	# headers the library is built from.
 	add_executable(defw2_wire_smoke tests/defw2_wire_smoke.c)
@@ -237,7 +250,8 @@ if(BUILD_TESTING)
 			${CMAKE_CURRENT_SOURCE_DIR}/rpc
 			${CMAKE_CURRENT_SOURCE_DIR}/telemetry
 			${CMAKE_CURRENT_SOURCE_DIR}/host
-			${CMAKE_CURRENT_SOURCE_DIR}/qpm)
+			${CMAKE_CURRENT_SOURCE_DIR}/qpm
+			${CMAKE_CURRENT_SOURCE_DIR}/event)
 	target_link_libraries(defw2_wire_smoke
 		PRIVATE defw2 PkgConfig::ARGOBOTS Threads::Threads)
 	add_test(NAME defw2_wire_smoke COMMAND defw2_wire_smoke)
@@ -281,6 +295,13 @@ if(BUILD_TESTING)
 		set_tests_properties(defw2_qpm_otlp_check
 			PROPERTIES
 				FIXTURES_REQUIRED defw2_qpm_otlp_files)
+		add_test(NAME defw2_event_otlp_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_otlp_check.py"
+				"${DEFW2_EVENT_TELEMETRY_DIR}")
+		set_tests_properties(defw2_event_otlp_check
+			PROPERTIES
+				FIXTURES_REQUIRED defw2_event_otlp_files)
 	else()
 		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
 	endif()
