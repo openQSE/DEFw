@@ -17,6 +17,7 @@ compare field by field.
 | `v2/defw2_bench.c` | The measured v2 client, built as `defw2-bench`. It knows nothing about workloads or reports. |
 | `v2/defw2_bench_client.py` | The same measurement through the Python binding, with the same arguments and the same result file. |
 | `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
+| `qfw_qpm_client.py` | W5 and W6 through QFw's own client code, on v1 or on v2 through `defw2.compat`. It runs under `qfw-srun`, and the launcher starts it. |
 | `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. |
 
 ## Running the v1 harness
@@ -68,7 +69,7 @@ python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `W1`, `W2`, `W3` | | Workload from the design's Workloads table |
+| `W1`, `W2`, `W3`, `W5`, `W6` | | Workload from the design's Workloads table. W5 and W6 are below |
 | `--payload` | per workload | Payload size, such as `64`, `4KiB` or `16MiB` |
 | `--calls` | per workload | Measured calls per client |
 | `--warmup` | per workload | Unmeasured calls per client before measuring |
@@ -91,6 +92,56 @@ says which pair it was: no suffix for C to C, then `pycli`, `pysvc` or
 `na+sm` with one client, a 64 byte round trip is 0.067 ms C to C, 0.065 ms
 from the Python client, 0.102 ms to the Python service and 0.087 ms for
 both, against v1's 4.591 ms.
+
+## Running W5 and W6
+
+W5 and W6 time whole QPM jobs: `async_run`, then `read_cq` back to back
+until the completion is ready. W5 runs a fixed 4-qubit circuit. W6 asks for
+a 20-qubit statevector, 16 MiB, and lends a buffer for it. Their subject is
+QFw's fake IQM QPM, which a QFw run serves, so the launcher starts no
+service. It finds the QPM through the run's directory.
+
+They need a QFw installation built with DEFw v2, as for any v2 run, and the
+QPM's plane. One install serves both versions. Start the plane on one node,
+with `QFW_DEFW_VERSION=2` for v2, or `DEFW_TRANSPORT=ofi` and
+`DEFW_OFI_PROVIDER=tcp` for v1 on the provider v2 uses:
+
+```bash
+source <prefix>/bin/qfw-activate --venv <venv>
+qfw-setup --profile local --service-id fake-iqm
+```
+
+Then measure from another, with QFw active in the same way:
+
+```bash
+python3 src2/bench/v2/defw2_bench.py W5 --qfw-run-dir <run> \
+  --client c --clients 8 --bin-dir <prefix>/bin
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--qfw-run-dir` | The QFw run whose plane serves the QPM. Its directory, and for `--client qfw` its DEFw, come from the run's state |
+| `--client` | `c` or `python` for the typed clients on v2, or `qfw` for QFw's own client code on the run's DEFw, v1 or v2 |
+| `--directory` | A directory to use instead of the run's, for the typed clients |
+| `--service-id` | The QPM's service_id. By default the directory's only QPM, as in a QFw run, which names its QPM for the run |
+| `--qubits`, `--shots` | Per job, instead of the workload's |
+
+On a v1 run, `--transport` sets the v1 clients' `DEFW_TRANSPORT`, so give
+it the transport the plane runs on.
+
+A job gets the call timeout, `--timeout-ms` in the clients and 60 s by
+default, to complete in, so a completion the QPM loses fails that job
+rather than the run. The first job is checked, and tried up to three times
+before the client gives up, because QFw's QPM fails a job now and then
+under concurrent callers.
+
+The report adds what a job is made of. `qpm.backend` is the QPM's own run
+time, as the fake reports it. `qpm.overhead` is the job less that time,
+which is the framework's cost per job and W5's headline. `qpm.collect` is
+the `read_cq` that found the completion. For W6 it carries the statevector,
+and for QFw's client it includes decoding it, since an application has not
+got its result until then. `qpm.polls` counts the `read_cq` calls a job
+took. The QPM runs on another node, so its CPU and memory are not reported.
 
 ## What a v2 run does
 
