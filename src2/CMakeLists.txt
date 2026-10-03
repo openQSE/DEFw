@@ -91,7 +91,8 @@ set_target_properties(defw2-dirsvc
 # The measured client. The launcher beside it, bench/v2/defw2_bench.py, runs
 # as many of these as the workload asks for and writes the report.
 add_executable(defw2-bench bench/v2/defw2_bench.c)
-target_link_libraries(defw2-bench PRIVATE defw2)
+# libm for W6, which checks the statevector it receives.
+target_link_libraries(defw2-bench PRIVATE defw2 m)
 target_compile_options(defw2-bench PRIVATE -Wall -Wextra)
 set_target_properties(defw2-bench
 	PROPERTIES
