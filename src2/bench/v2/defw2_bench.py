@@ -11,6 +11,13 @@ qfw.bench.run span the calls hang beneath, and passes its trace context to
 every client, so one run is one trace across every process in it.
 
 	defw2_bench.py W1 --transport ofi+tcp --clients 8
+
+W5 and W6 run QPM jobs against QFw's fake IQM QPM instead, which a QFw run
+serves. The launcher starts no service for them. It finds the run's
+directory, and measures the C client, the Python client, or QFw's own client
+code on the run's DEFw, which may be v1:
+
+	defw2_bench.py W5 --qfw-run-dir RUN --client qfw --clients 8
 """
 
 import argparse
@@ -32,6 +39,7 @@ SCOPE_NAME = 'defw.bench.v2'
 SCOPE_VERSION = '0.1'
 REPORT_SCHEMA = 'defw-bench-summary/1'
 SERVICE_API = 'qfw.echo'
+QPM_API = 'qfw.qpm.execution'
 POLL_S = 0.05
 STOP_GRACE_S = 10
 STDERR_TAIL_LINES = 15
@@ -62,8 +70,26 @@ def parse_args(argv):
 		help='handler execution streams in the service '
 		'(default: the runtime default)')
 	parser.add_argument(
-		'--client', choices=('c', 'python'), default='c',
-		help='which echo client to measure (default: c)')
+		'--client', choices=('c', 'python', 'qfw'), default='c',
+		help='which client to measure: c, python, or for W5 and W6 '
+		'QFw\'s own client code under qfw-srun (default: c)')
+	parser.add_argument(
+		'--qfw-run-dir',
+		help='W5 and W6: the QFw run whose plane serves the QPM')
+	parser.add_argument(
+		'--directory',
+		help='W5 and W6: the directory to find the QPM in '
+		'(default: the QFw run\'s)')
+	parser.add_argument(
+		'--service-id',
+		help='W5 and W6: the QPM\'s service_id (default: the only QPM '
+		'in the directory, as in a QFw run, which names its own)')
+	parser.add_argument(
+		'--qubits', type=int,
+		help='W5 and W6: qubits per job (default: set by the workload)')
+	parser.add_argument(
+		'--shots', type=int,
+		help='W5 and W6: shots per job (default: set by the workload)')
 	parser.add_argument(
 		'--service', choices=('c', 'python'), default='c',
 		help='which echo service to measure against (default: c)')
@@ -102,6 +128,21 @@ def parse_args(argv):
 	args = parser.parse_args(argv)
 
 	workload = common.WORKLOADS[args.workload]
+	args.qpm = workload.get('qpm', False)
+	if args.qpm:
+		args.qubits = args.qubits or workload['qubits']
+		args.shots = args.shots or workload['shots']
+		args.statevector = workload['statevector']
+		# A W6 job's payload is its statevector, set by the qubits.
+		args.payload_bytes = (16 << args.qubits
+				      if args.statevector else 0)
+		if not args.qfw_run_dir and not (args.directory and
+						 args.client != 'qfw'):
+			parser.error('{} needs --qfw-run-dir, or --directory '
+				     'for the c and python clients'.format(
+					     args.workload))
+	elif args.client == 'qfw':
+		parser.error('the qfw client runs only W5 and W6')
 	if args.payload_bytes is None:
 		args.payload_bytes = workload['payload_bytes']
 	if args.calls is None:
@@ -112,8 +153,10 @@ def parse_args(argv):
 	if args.clients < 1:
 		parser.error('--clients must be at least 1')
 	# W3 is the bulk workload. Anything too large to ride inside a
-	# message has to go through registered memory in any case.
-	args.bulk = args.workload == 'W3' or args.payload_bytes > 4 * 1024 * 1024
+	# message has to go through registered memory in any case. A W6
+	# statevector does too, but the QPM's API decides that, not this.
+	args.bulk = not args.qpm and (args.workload == 'W3' or
+				      args.payload_bytes > 4 * 1024 * 1024)
 	return args
 
 
@@ -193,6 +236,8 @@ def proc_peak_rss_kib(pid):
 
 def _flavour(args):
 	"""What a run's name says about which halves were Python."""
+	if args.client == 'qfw':
+		return 'qfw'
 	if args.client == 'python' and args.service == 'python':
 		return 'pypy'
 	if args.service == 'python':
@@ -204,7 +249,8 @@ def _flavour(args):
 
 def make_run_dir(args, trace_id):
 	stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-	name = ('{}-v2{}-{}-{}-c{}-{}'.format(stamp, _flavour(args),
+	name = ('{}-v{}{}-{}-{}-c{}-{}'.format(stamp, args.defw_major,
+					    _flavour(args),
 					    args.workload,
 					    args.transport.replace('+', ''),
 					    args.clients, trace_id[:8]))
@@ -215,25 +261,25 @@ def make_run_dir(args, trace_id):
 
 
 def write_config(args, run_dir, trace_id, root_span_id, binaries):
-	label = args.label or 'v2{}-{}-{}-{}-c{}'.format(
-		_flavour(args),
+	label = args.label or 'v{}{}-{}-{}-{}-c{}'.format(
+		args.defw_major, _flavour(args),
 		args.workload, args.transport,
 		common.format_size(args.payload_bytes).replace(' ', ''),
 		args.clients)
 	config = {
 		'schema': 1,
-		'defw_major': 2,
+		'defw_major': args.defw_major,
 		'trace_id': trace_id,
 		'root_span_id': root_span_id,
 		'label': label,
 		'workload': args.workload,
 		'payload_bytes': args.payload_bytes,
-		'payload_kind': 'bulk' if args.bulk else 'bytes',
+		'payload_kind': payload_kind(args),
 		'calls': args.calls,
 		'warmup': args.warmup,
 		'clients': args.clients,
 		'transport': args.transport,
-		'transport_env': {'DEFW2_ADDRESS': args.transport + '://'},
+		'transport_env': transport_env(args),
 		'rpc_threads': args.rpc_threads,
 		'run_dir': run_dir,
 		'binaries': binaries,
@@ -250,14 +296,46 @@ def write_config(args, run_dir, trace_id, root_span_id, binaries):
 	return config
 
 
+def payload_kind(args):
+	if args.qpm:
+		return 'statevector' if args.statevector else 'none'
+	return 'bulk' if args.bulk else 'bytes'
+
+
+def transport_env(args):
+	"""What picks the transport. QFw's client gets its own from the run,
+	except that v1 takes DEFW_TRANSPORT from the caller."""
+	if args.client == 'qfw':
+		if args.defw_major == 1:
+			return common.transport_env(args.transport)
+		return {}
+	return {'DEFW2_ADDRESS': args.transport + '://'}
+
+
+def read_qfw_run(run_dir):
+	"""The directory and the DEFw of a QFw run, from its state file."""
+	path = os.path.join(run_dir, 'state', 'runtime-state.json')
+	try:
+		with open(path, encoding='utf-8') as stream:
+			state = json.load(stream)
+	except (OSError, ValueError) as exc:
+		fail('cannot read the QFw run at {}: {}'.format(run_dir, exc))
+	endpoint = (state.get('local_dirsvc') or {}).get('endpoint')
+	if not endpoint:
+		fail('the QFw run at {} names no directory'.format(run_dir))
+	major = str((state.get('environment') or {}).get(
+		'QFW_DEFW_VERSION') or '1').strip()
+	return {'directory': 'ofi+tcp://' + endpoint, 'defw_major': int(major)}
+
+
 def process_env(args, run_dir, agent):
 	env = dict(os.environ)
 	env.update({
-		'DEFW2_ADDRESS': args.transport + '://',
 		'DEFW2_TELEMETRY_DIR': os.path.join(run_dir, 'otlp'),
 		'DEFW_AGENT_NAME': agent,
 		'DEFW_LOG_LEVEL': args.log_level,
 	})
+	env.update(transport_env(args))
 	if args.no_spans:
 		env.pop('DEFW2_PROFILE', None)
 	else:
@@ -292,43 +370,62 @@ def start_service(args, config, binaries):
 	return service, address
 
 
+def client_command(args, binaries):
+	if args.client == 'qfw':
+		return ['qfw-srun', '--run-dir', args.qfw_run_dir,
+			os.path.join(BENCH_DIR, 'qfw_qpm_client.py')]
+	if args.client == 'python':
+		return [sys.executable,
+			os.path.join(V2_DIR, 'defw2_bench_client.py')]
+	return [binaries['defw2-bench']]
+
+
 def start_clients(args, config, binaries, address):
 	run_dir = config['run_dir']
 	traceparent = '00-{}-{}-01'.format(config['trace_id'],
 					   config['root_span_id'])
 	clients = []
 	for index in range(args.clients):
-		if args.client == 'python':
-			command = [sys.executable,
-				   os.path.join(V2_DIR, 'defw2_bench_client.py')]
-		else:
-			command = [binaries['defw2-bench']]
+		command = client_command(args, binaries)
 		command += [
 			'--address', address,
 			'--index', str(index),
 			'--calls', str(args.calls),
 			'--warmup', str(args.warmup),
-			'--payload', str(args.payload_bytes),
 			'--traceparent', traceparent,
 			'--ready', common.ready_path(run_dir, index),
 			'--go', common.go_path(run_dir),
 			'--result', common.result_path(run_dir, index),
 			'--wait-s', str(int(args.timeout)),
 		]
+		if args.qpm:
+			command += ['--qpm', '--qubits', str(args.qubits),
+				    '--shots', str(args.shots)]
+			if args.service_id:
+				command += ['--service-id', args.service_id]
+			if args.statevector:
+				command.append('--statevector')
+		else:
+			command += ['--payload', str(args.payload_bytes)]
 		if args.bulk:
 			command.append('--bulk')
 		log = open(os.path.join(run_dir, 'logs',
 					'client-{}.log'.format(index)),
 			   'w', encoding='utf-8')
 		env = process_env(args, run_dir, 'bench-client-{}'.format(index))
-		clients.append(subprocess.Popen(command, stdout=log, stderr=log,
-						env=env, text=True))
+		client = subprocess.Popen(command, stdout=log, stderr=log,
+					  env=env, text=True,
+					  start_new_session=True)
+		client.group = True
+		clients.append(client)
 	return clients
 
 
 def check_service(service, run_dir):
 	"""A service that stops takes the run with it, and every client then
-	sits in its own timeout, so say so at once."""
+	sits in its own timeout, so say so at once. W5 and W6 start none."""
+	if service is None:
+		return
 	code = service.poll()
 	if code is None:
 		return
@@ -375,15 +472,35 @@ def wait_for_clients(args, config, clients, service):
 			time.sleep(POLL_S)
 
 
-def stop(process):
-	if process is None or process.poll() is not None:
-		return
-	process.terminate()
+def signal_process(process, signum):
+	"""Signal a process, or the whole of its process group when it leads
+	one, which is how every client is started."""
 	try:
-		process.wait(timeout=STOP_GRACE_S)
-	except subprocess.TimeoutExpired:
-		process.kill()
-		process.wait(timeout=STOP_GRACE_S)
+		if getattr(process, 'group', False):
+			os.killpg(process.pid, signum)
+		else:
+			process.send_signal(signum)
+	except ProcessLookupError:
+		pass
+
+
+def stop(process):
+	"""Stop a process and anything it started. QFw's client runs under
+	qfw-srun, which passes no signal on to the client it starts, so
+	stopping qfw-srun alone left the client running and holding its
+	reservation."""
+	if process is None:
+		return
+	group = getattr(process, 'group', False)
+	if process.poll() is None:
+		signal_process(process, signal.SIGTERM)
+		try:
+			process.wait(timeout=STOP_GRACE_S)
+		except subprocess.TimeoutExpired:
+			signal_process(process, signal.SIGKILL)
+			process.wait(timeout=STOP_GRACE_S)
+	if group:
+		signal_process(process, signal.SIGKILL)
 
 
 def tail(path):
@@ -426,9 +543,11 @@ def environment(args, config):
 		'defw_log_level': args.log_level,
 		'profiling': not args.no_spans,
 		'client_language': args.client,
-		'service_language': args.service,
+		'service_language': 'qfw' if args.qpm else args.service,
 		'service_workers': (args.service_workers
-				    if args.service == 'python' else None),
+				    if args.service == 'python' and
+				    not args.qpm else None),
+		'qfw_run_dir': args.qfw_run_dir,
 	}
 
 
@@ -466,7 +585,7 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 		'run': {
 			'trace_id': config['trace_id'],
 			'label': config['label'],
-			'defw_major': 2,
+			'defw_major': args.defw_major,
 			'go_unix_ns': go_unix_ns,
 			'end_unix_ns': end_unix_ns,
 		},
@@ -483,7 +602,9 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 			'env': config['transport_env'],
 			# v2 asks Margo for one provider and fails if it
 			# cannot have it, so there is nothing to fall back to.
-			'fallback_check': 'not applicable',
+			# v1 under QFw is not checked here.
+			'fallback_check': ('not checked' if args.defw_major == 1
+					   else 'not applicable'),
 		},
 		'environment': environment(args, config),
 		'latency': common.latency_summary(ok_durations),
@@ -512,7 +633,48 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 		report['bulk'] = {
 			'payload_mib_per_s': payload_mib * len(ok_durations) / busy_s,
 		}
+	if args.qpm:
+		report['workload'].update({
+			'qubits': args.qubits,
+			'shots': args.shots,
+			'statevector': args.statevector,
+			# The one the clients found, which a QFw run names.
+			'service_id': results[0].get('service_id'),
+		})
+		report['qpm'] = qpm_summary(args, results)
 	return report
+
+
+def qpm_summary(args, results):
+	"""A job is async_run plus the read_cq calls it took. Overhead is the
+	job less the QPM's own run time, which is what the framework costs:
+	the design's qfw.app.job minus backend time. Collect is the read_cq
+	that found the completion, which carries a W6 statevector."""
+	backend, overhead, collect, polls = [], [], [], []
+	for result in results:
+		skipped = set(result['failed_calls'])
+		for job, duration in enumerate(result['durations_ns']):
+			if job in skipped:
+				continue
+			backend.append(result['backend_ns'][job])
+			overhead.append(duration - result['backend_ns'][job])
+			collect.append(result['collect_ns'][job])
+			polls.append(result['polls'][job])
+	summary = {
+		'backend': common.latency_summary(backend),
+		'overhead': common.latency_summary(overhead),
+		'collect': common.latency_summary(collect),
+		'polls': {
+			'mean': sum(polls) / len(polls) if polls else None,
+			'p50': common.percentile(sorted(polls), 0.50),
+			'max': max(polls) if polls else None,
+		},
+	}
+	if args.statevector and collect:
+		statevector_mib = args.payload_bytes / common.MIB
+		summary['statevector_mib_per_s'] = (
+			statevector_mib * len(collect) / (sum(collect) / 1e9))
+	return summary
 
 
 def write_run_span(args, config, report, go_unix_ns, end_unix_ns):
@@ -534,14 +696,14 @@ def write_run_span(args, config, report, go_unix_ns, end_unix_ns):
 				'qfw.bench.warmup': args.warmup,
 				'qfw.bench.clients': args.clients,
 				'qfw.transport.kind': args.transport,
-				'qfw.rpc.api': SERVICE_API,
+				'qfw.rpc.api': QPM_API if args.qpm else SERVICE_API,
 			}),
 			kind=common.SPAN_KIND_INTERNAL,
 			error='{} calls failed'.format(failed) if failed else None)
 		resource = common.process_attributes('defw2-bench')
 		resource.update({
 			'qfw.transport.kind': args.transport,
-			'qfw.defw.major': 2,
+			'qfw.defw.major': args.defw_major,
 			'qfw.defw.revision': args.defw_revision,
 			'qfw.bench.harness.revision': config['harness_revision'],
 			'container.image.name': args.image,
@@ -576,6 +738,19 @@ def print_table(report):
 	if 'bulk' in report:
 		print('  bulk  {:.1f} MiB/s'.format(
 			report['bulk']['payload_mib_per_s']))
+	if 'qpm' in report:
+		qpm = report['qpm']
+		print('  per job  overhead p50 {:.3f} ms, p99 {:.3f} ms, '
+		      'backend p50 {:.3f} ms'.format(
+			      qpm['overhead']['p50_us'] / 1e3,
+			      qpm['overhead']['p99_us'] / 1e3,
+			      qpm['backend']['p50_us'] / 1e3))
+		print('  collect p50 {:.3f} ms, polls p50 {}, max {}'.format(
+			qpm['collect']['p50_us'] / 1e3, qpm['polls']['p50'],
+			qpm['polls']['max']))
+		if 'statevector_mib_per_s' in qpm:
+			print('  statevector  {:.1f} MiB/s on collect'.format(
+				qpm['statevector_mib_per_s']))
 	if report['failed_calls']:
 		print('  {} calls FAILED'.format(report['failed_calls']))
 
@@ -585,8 +760,19 @@ def main(argv):
 	if not args.force:
 		check_memory(args)
 
-	binaries = {name: find_binary(name, args.bin_dir)
-		    for name in ('defw2-echo', 'defw2-bench')}
+	args.defw_major = 2
+	directory = args.directory
+	if args.qpm and args.qfw_run_dir:
+		qfw_run = read_qfw_run(args.qfw_run_dir)
+		directory = directory or qfw_run['directory']
+		if args.client == 'qfw':
+			args.defw_major = qfw_run['defw_major']
+	needed = []
+	if args.client == 'c':
+		needed.append('defw2-bench')
+	if not args.qpm:
+		needed.append('defw2-echo')
+	binaries = {name: find_binary(name, args.bin_dir) for name in needed}
 	trace_id = os.urandom(16).hex()
 	root_span_id = os.urandom(8).hex()
 	run_dir = make_run_dir(args, trace_id)
@@ -596,23 +782,35 @@ def main(argv):
 	service = None
 	clients = []
 	try:
-		service, address = start_service(args, config, binaries)
-		print('echo service at {}'.format(address))
+		if args.qpm:
+			# QFw serves the QPM, so there is nothing to start.
+			address = directory
+			print('QPM {} in the directory at {}'.format(
+				args.service_id or 'of the run', address))
+		else:
+			service, address = start_service(args, config,
+							 binaries)
+			print('echo service at {}'.format(address))
 		clients = start_clients(args, config, binaries, address)
 		wait_for_ready(args, config, clients, service)
 
-		service_cpu_before = proc_cpu_ns(service.pid)
+		service_cpu_before = (proc_cpu_ns(service.pid)
+				      if service is not None else None)
 		go_unix_ns = time.time_ns()
 		with open(common.go_path(run_dir), 'w', encoding='ascii'):
 			pass
 		wait_for_clients(args, config, clients, service)
 		end_unix_ns = time.time_ns()
 
-		service_cpu_after = proc_cpu_ns(service.pid)
+		# The QPM runs on another node, so its usage is not this
+		# launcher's to read.
+		service_cpu_after = (proc_cpu_ns(service.pid)
+				     if service is not None else None)
 		usage = {
 			'cpu_ns': (None if service_cpu_after is None
 				   else service_cpu_after - service_cpu_before),
-			'max_rss_kib': proc_peak_rss_kib(service.pid),
+			'max_rss_kib': (proc_peak_rss_kib(service.pid)
+					if service is not None else None),
 		}
 		stop(service)
 

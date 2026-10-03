@@ -28,11 +28,24 @@ CLIENT_INDEX_ENV = 'DEFW_BENCH_CLIENT_INDEX'
 
 # Workload defaults, from the Workloads table in docs/design_v2.md. W3's
 # call count depends on its payload size, see default_calls().
+#
+# W5 and W6 measure whole QPM jobs rather than calls: async_run, then read_cq
+# until the completion is ready. A W6 job returns a statevector of 16 bytes an
+# amplitude, which is its payload.
 WORKLOADS = {
 	'W1': {'payload_bytes': 64, 'calls': 10000, 'warmup': 100},
 	'W2': {'payload_bytes': 4 * 1024, 'calls': 10000, 'warmup': 100},
 	'W3': {'payload_bytes': MIB, 'calls': None, 'warmup': 2},
+	'W5': {'payload_bytes': 0, 'calls': 1000, 'warmup': 20,
+	       'qpm': True, 'qubits': 4, 'shots': 1024, 'statevector': False},
+	'W6': {'payload_bytes': 16 * MIB, 'calls': 20, 'warmup': 2,
+	       'qpm': True, 'qubits': 20, 'shots': 1024, 'statevector': True},
 }
+
+# The echo workloads, which the v1 harness measures against DEFw's own echo
+# service. W5 and W6 run QPM jobs through QFw instead, see the v2 launcher.
+ECHO_WORKLOADS = sorted(name for name, workload in WORKLOADS.items()
+			if not workload.get('qpm'))
 
 # A W3 client moves about this much payload, within the call limits below,
 # so a 256 MiB run takes minutes rather than hours.
