@@ -31,7 +31,8 @@ add_library(defw2 SHARED
 	dir/defw2_dir_cache.c
 	services/echo/defw2_echo_svc.c
 	qpm/defw2_qpm_client.c
-	qpm/defw2_qpm_svc.c)
+	qpm/defw2_qpm_svc.c
+	qpm/defw2_qpm_task.c)
 
 target_include_directories(defw2
 	PUBLIC
