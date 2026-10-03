@@ -1736,10 +1736,10 @@ Two are not fixed.
   call timeout, which is why jobs per second at eight clients is taken from
   the median client. The harness retries the unmeasured first job and gives
   every job the call timeout, so a lost completion costs a job and not a
-  run.
-- Every completed result is kept. `UTIL_QPM.all_results` is written and
-  never read, and the fake's own result list is drained only by events. A W6
-  job leaves its 16 MiB behind in the QPM for good.
+  run. This is openQSE/QFw#91.
+- Every result `read_cq` collects is kept. `UTIL_QPM.read_cq` appends each
+  one to `all_results`, which nothing reads or empties, so a W6 job leaves
+  its 16 MiB behind in the QPM for good. This is openQSE/QFw#92.
 
 **Not run.** The shared-memory pair Phase 0 set beside `ofi+tcp`. QFw's plane
 finds its directory from a host and a port, which `na+sm` does not have.
