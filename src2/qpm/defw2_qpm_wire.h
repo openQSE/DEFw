@@ -165,6 +165,13 @@ defw2_rc_t defw2_qpm_task_from_wire(struct defw2_arena *arena,
 				    const defw2_qpm_wire_task_t *w,
 				    defw2_qpm_task_t *task);
 
+/*
+ * The completion event's kind, which carries a defw2_qpm_wire_task_t. Only
+ * the event code and the tests need it by name.
+ */
+struct defw2_event_kind;
+extern const struct defw2_event_kind defw2_qpm_completion_kind;
+
 /* --- the fourteen methods -------------------------------------------- */
 
 #define DEFW2_QPM_METHOD(var, api, name, in_t, out_t)			\

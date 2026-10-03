@@ -24,6 +24,9 @@ add_library(defw2 SHARED
 	telemetry/defw2_otlp.c
 	telemetry/defw2_trace.c
 	host/defw2_service.c
+	event/defw2_event.c
+	event/defw2_event_pub.c
+	event/defw2_event_sink.c
 	dir/defw2_dir_store.c
 	dir/defw2_dir_svc.c
 	dir/defw2_dir_client.c
@@ -31,6 +34,7 @@ add_library(defw2 SHARED
 	dir/defw2_dir_cache.c
 	services/echo/defw2_echo_svc.c
 	qpm/defw2_qpm_client.c
+	qpm/defw2_qpm_event.c
 	qpm/defw2_qpm_svc.c
 	qpm/defw2_qpm_task.c)
 
