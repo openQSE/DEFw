@@ -1469,6 +1469,7 @@ met.
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
 
 Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
+Phase 2's was met on 3 October 2026. See Phase 2 Results.
 
 ## Success Criteria
 
@@ -1585,6 +1586,163 @@ lines of code and the SPANK flow.
   service and its progress threads, and v2 manages 7,811 calls/s with eight
   clients against 12,047 with one, so that row understates v2. `na+sm`
   leaves out the network stack and scales from 13,912 to 42,994 calls/s.
+
+## Phase 2 Results
+
+Phase 2's exit criterion is met. W5 and W6 run from C and Python, and W7 runs
+unchanged at the application level. W5 and W6 were measured on 3 October
+2026, and W7 on 2 October.
+
+**How it was measured.** The QFw-SLURM-Cluster image, built from its
+`defw2-prototype` branch. QFw's fake IQM QPM ran on `fake-iqm-head`, in a
+plane of its own started afresh for every run, and the clients ran on `c1`.
+The two nodes share the same four CPUs, so the clients and the QPM compete
+for them, and the Docker VM has 8 GB. One QFw installation served both versions:
+QFw `defw2-prototype` with openQSE/QFw#89, and DEFw `defw2-prototype` with the
+harness at `42a53f8`, built with v2. `QFW_DEFW_VERSION` was the only
+difference between them. v1 ran on `ofi+tcp`, as v2 does, with one W5 run on
+tcp for reference. Both logged as Phase 0 did, at `error`, with Python's
+logging at `critical`. QFw's own default for a QPM is `debug,DEFW_ALL`, which
+on v1 writes about half a megabyte a job. Profiling was on.
+
+A job is `async_run`, then `read_cq` back to back until the completion is
+ready. The fake sleeps about a millisecond a job and reports how long, and
+overhead is the job less that time, the design's `qfw.app.job` minus backend.
+The fake had eight slots, the concurrent jobs its device profile declares,
+rather than the one a single host gives it.
+
+Three clients ran each workload. QFw's own client code, its `QPMResolver` and
+v1 calls, ran on v1, and unchanged on v2 through `defw2.compat`. The typed C
+and Python clients ran on v2. The harness is in `src2/bench`, and its README
+says how to run it.
+
+**W5.** A fixed 4-qubit circuit, 1,000 jobs a client, except v1 at eight
+clients, which ran ten, see below. Jobs per second at eight clients is the
+median client's rate times eight, for the reason in the QFw findings below.
+
+| Client | DEFw | Clients | Overhead p50 | Overhead p99 | Job p50 | Polls a job | Jobs/s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| QFw | v1 | 1 | 12.130 ms | 13.842 ms | 13.257 ms | 1.0 | 75 |
+| QFw | v2 | 1 | 0.791 ms | 3.142 ms | 1.909 ms | 4.7 | 496 |
+| Python | v2 | 1 | 0.732 ms | 2.663 ms | 1.853 ms | 5.2 | 510 |
+| C | v2 | 1 | 0.821 ms | 2.827 ms | 1.946 ms | 5.0 | 478 |
+| QFw | v1 | 8 | 91.621 ms | 271.565 ms | 94.485 ms | 2.8 | 74 |
+| QFw | v2 | 8 | 18.125 ms | 26.753 ms | 19.395 ms | 6.4 | 409 |
+| Python | v2 | 8 | 18.030 ms | 26.993 ms | 19.277 ms | 6.4 | 411 |
+| C | v2 | 8 | 15.992 ms | 25.084 ms | 17.225 ms | 6.1 | 452 |
+
+v1 on tcp gave 12.126 ms of overhead with one client, the same as on
+`ofi+tcp`.
+
+**W6.** A 20-qubit statevector, 16 MiB, 20 jobs from one client. Collect is
+the `read_cq` that delivered it. For QFw's client it includes decoding it,
+since an application has not got its result until then.
+
+| Client | DEFw | Job p50 | Collect p50 | Statevector on collect |
+| --- | --- | --- | --- | --- |
+| QFw | v1 | 19.634 s | 19.296 s | 0.8 MiB/s |
+| QFw | v2 | 19.649 ms | 9.514 ms | 1,509 MiB/s |
+| Python | v2 | 19.407 ms | 9.261 ms | 1,515 MiB/s |
+| C | v2 | 19.740 ms | 9.536 ms | 1,470 MiB/s |
+
+**W7.** From openQSE/QFw-SLURM-Cluster#31: `qfw_qiskit_simple.sh` with 4
+qubits, its QPM a site service, under Slurm, timed as a whole.
+
+| QPM | v1 | v2 |
+| --- | --- | --- |
+| NWQ-Sim | 22.8 s | 4.4 s |
+| Fake IQM | 22.7 s | 4.7 s |
+
+Both versions returned the same statevector from NWQ-Sim, and the same counts
+and reservation from the fake. `qfw_mpi_smoke.sh` ran on v1 from the same
+installation, beside the v2 plane, in 15.2 s.
+
+**Bulk.** Mercury's own bulk benchmark against v2's W3, `c1` to
+`fake-iqm-head` over `ofi+tcp`, the pair W5 and W6 ran on. Mercury's moves
+one way, 64 transfers a call. W3 moves its payload both ways each call, a
+pull and a push with the RPC inside the time, so its rate here counts both.
+Mercury's could not run above 32 MiB on the 6 GiB node, since it keeps 64
+buffers in flight.
+
+| Rate | 16 MiB | 32 MiB |
+| --- | --- | --- |
+| Mercury `hg_bw_read`, server push | 3,430 MiB/s | 3,407 MiB/s |
+| Mercury `hg_bw_write`, server pull | 3,419 MiB/s | 3,411 MiB/s |
+| v2 W3, both ways | 3,276 MiB/s | 4,054 MiB/s |
+| v2 against Mercury | 96% | 119% |
+
+W6's collect pushes 16 MiB one way through the Python QPM at about 1,500
+MiB/s, 44% of Mercury's push. The rest of its 9.5 ms is the RPC and the
+QPM's own work.
+
+**Success criteria that can be judged now.**
+
+| Criterion | Target | Result |
+| --- | --- | --- |
+| Framework overhead per job in W5 | At most one half of v1 | One 15th for QFw's own code on v2, 0.79 ms against 12.13 ms, and about the same for the typed clients. Met. |
+| Bulk bandwidth, 16 MiB and above | At least eighty percent of Mercury's own bulk benchmark | 96% at 16 MiB and 119% at 32 MiB, for W3 against Mercury on the same pair. Met. |
+| Application-level regressions in W7 | None | None. Met. |
+
+The rest belong to later phases: unsafe deserialization over the whole of
+v2, lines of code and the SPANK flow.
+
+**What the measurements show.**
+
+- At one client v2 costs about 0.8 ms a job beyond the QPM's own run,
+  whichever client calls it. QFw's own code through `defw2.compat` costs no
+  more than the typed Python client. v1 costs 12.1 ms, and as in Phase 0 its
+  transport makes no difference.
+- v2 polls about five times a job and v1 once. A v1 `read_cq` takes 6.9 ms,
+  longer than the job, so v1's first poll finds it done.
+- At eight clients QFw's QPM is the limit, not DEFw. v2 holds 410 to 450 jobs
+  a second, fewer than the 480 to 510 one client gets alone, because the QPM
+  runs in one Python interpreter and every poll costs it CPU. The clients
+  share its four CPUs, so what a client spends is taken from the QPM. A C
+  client spends 0.40 ms of CPU a job, a Python one 0.55 ms and QFw's 0.64 ms,
+  and at eight clients the C clients got the most through. Events, in Phase
+  3, take the polling away.
+- v1 at eight clients ran 74 jobs a second over ten jobs a client, at 92 ms
+  of overhead a job, and 3 of its 80 jobs failed in QFw's QPM. With a
+  hundred jobs a client it did not finish in 30 minutes. Its QPM sat at 100%
+  of one CPU, and its scheduler reported `failed to mark task failed:
+  rc=-7`.
+- W6 is where the bulk path shows. v2 delivers 16 MiB in about 9.5 ms,
+  1,500 MiB/s, through a Python service and QFw's controller. v1 carries the
+  statevector as base64 text inside its YAML message. It takes 19.3 s to
+  deliver it, and its client spends 5.3 s of CPU on it.
+
+**What the measurements found in QFw.** Two problems in QFw's QPM are fixed
+by openQSE/QFw#89. Both affect any QPM, and v2 exposed them.
+
+- The controller sized every completion record for
+  `max-bytes-per-reservation` with `repr`, which spells a byte as up to four
+  characters. On v2 a statevector travels raw, and building that text took
+  216 ms for 16 MiB, under the controller's lock. Every `read_cq` waited
+  behind it, and W6's collect took 230 ms before the fix and 9.5 ms after.
+  It also counted the statevector about three times against the budget.
+- `submit_provider_async` looks a task up and then binds the provider's
+  handle, taking the lock for each step. A fast provider's own thread can
+  finish and retire the task in between, and the bind raised `KeyError`.
+
+Two are not fixed.
+
+- QFw's out-of-resources queue races. `process_oor_queue` runs in several
+  threads at once, each provider completion and every `read_cq`, and two can
+  take the same queued task. The second finds it retired, and the error
+  surfaces in some other client's call, or kills the completion thread before
+  it hands over its own task's result. In the table's runs at eight clients
+  three jobs in 24,000 failed: two of 8,000 for C, none for Python and one
+  for QFw's client. One of them lost its completion and waited out the 60 s
+  call timeout, which is why jobs per second at eight clients is taken from
+  the median client. The harness retries the unmeasured first job and gives
+  every job the call timeout, so a lost completion costs a job and not a
+  run.
+- Every completed result is kept. `UTIL_QPM.all_results` is written and
+  never read, and the fake's own result list is drained only by events. A W6
+  job leaves its 16 MiB behind in the QPM for good.
+
+**Not run.** The shared-memory pair Phase 0 set beside `ofi+tcp`. QFw's plane
+finds its directory from a host and a port, which `na+sm` does not have.
 
 ## Appendix A: DEFw v1 Inventory
 
