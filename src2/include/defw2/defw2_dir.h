@@ -438,6 +438,12 @@ defw2_rc_t defw2_dir_bind(defw2_service_t *svc,
  * interval_ms of 0 takes the default, which is a third of the directory's
  * default timeout so that one lost heartbeat is not enough to be declared
  * dead.
+ *
+ * It registers before it returns. When that fails it returns why: the
+ * transport's code when the registration did not reach a directory, such as
+ * DEFW2_ERR_TIMEOUT, or DEFW2_ERR_NOT_FOUND from a process that serves no
+ * directory, or the directory's own code when it refused, such as
+ * DEFW2_ERR_BUSY for a service_id that a live runtime already holds.
  */
 typedef struct defw2_dir_agent defw2_dir_agent_t;
 
