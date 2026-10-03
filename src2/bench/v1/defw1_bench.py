@@ -64,7 +64,7 @@ CLEARED_ENV = (
 def parse_args(argv):
 	parser = argparse.ArgumentParser(
 		description='Run a DEFw v1 benchmark workload.')
-	parser.add_argument('workload', choices=sorted(common.WORKLOADS))
+	parser.add_argument('workload', choices=common.ECHO_WORKLOADS)
 	parser.add_argument(
 		'--payload', type=common.parse_size, dest='payload_bytes',
 		help='payload size such as 64, 4KiB or 16MiB '
