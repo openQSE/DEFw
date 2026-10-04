@@ -231,6 +231,23 @@ means the registration should go. The next event to the same target is
 tried afresh. Delivery is at most once, and the completion queue is how a
 caller recovers a lost event.
 
+The directory sends events too, of services coming and going:
+
+```python
+with defw2.Directory(rt) as directory:
+	subscription = directory.subscribe(sink, service_type='qfw.qpm')
+	for event in sink:
+		# event.type is SERVICE_CONNECTED or SERVICE_DISCONNECTED
+		change = event.payload
+		print(change['reason'], change['record']['service_id'])
+```
+
+A change says whether the record `connected`, the `reason`, which is
+`registered`, `heartbeat-resumed`, `deregistered` or `heartbeat-timeout`,
+and the `record` as the directory then holds it, a dict like the ones
+`resolve` returns. `unsubscribe` ends a subscription, and returns False for
+one the directory no longer holds.
+
 ## v1 code on v2
 
 QFw's QPM services and its Qiskit backend are written against v1. They run
