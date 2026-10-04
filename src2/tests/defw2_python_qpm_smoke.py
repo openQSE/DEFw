@@ -24,6 +24,7 @@ hears of both, with the record each time.
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -267,6 +268,26 @@ def directory(runtime, dirsvc_binary):
 		check('though an operator still sees it deregistered',
 		      len(gone) == 1 and gone[0]['state'] == 'DEREGISTERED'
 		      and gone[0]['address'] is None)
+
+	# A directory that stops answering, as one whose node went would. A
+	# question with a limit of its own hears so at that limit, not at the
+	# handle's 10 s.
+	before = watching.runtime_id()
+	dirsvc.process.send_signal(signal.SIGSTOP)
+	os.waitpid(dirsvc.process.pid, os.WUNTRACED)
+	start = time.monotonic()
+	try:
+		watching.runtime_id(timeout_ms=300)
+		answered = True
+	except defw2.DefwError:
+		answered = False
+	waited = time.monotonic() - start
+	dirsvc.process.send_signal(signal.SIGCONT)
+	check('a stopped directory fails a question at its own limit',
+	      not answered and 0.25 < waited < 3)
+	print('    it took {:.2f} s'.format(waited))
+	check('and the same runtime answers once it goes on',
+	      watching.runtime_id() == before)
 	watching.close()
 	sink.close()
 	listener.close()

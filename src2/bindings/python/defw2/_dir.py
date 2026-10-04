@@ -182,9 +182,10 @@ class Directory:
 					'opening the directory at ' + address)
 		self._dir = out[0]
 
-	def _options(self, kept):
+	def _options(self, kept, timeout_ms=None):
 		opts = ffi.new('defw2_call_opts_t *')
-		opts.timeout_ms = self._timeout_ms
+		opts.timeout_ms = (self._timeout_ms if timeout_ms is None
+				   else timeout_ms)
 		kept.kept.append(opts)
 		return opts
 
@@ -313,13 +314,19 @@ class Directory:
 		status.raise_for_status()
 		return True
 
-	def runtime_id(self):
+	def runtime_id(self, timeout_ms=None):
 		"""Which runtime the directory is. It is new each time the
-		directory starts, and it is every directory event's source."""
+		directory starts, and it is every directory event's source.
+
+		timeout_ms limits this one call in place of the handle's own
+		limit. A caller asking whether the directory is still there
+		wants a short one, because over ofi+tcp a call to a process
+		that has gone fails only when its time is up."""
 		kept = _Kept()
 		buffer = ffi.new('char[]', lib.DEFW2_DIR_RUNTIME_ID_LEN)
 		holder = _status_out()
-		rc = lib.defw2_dir_runtime_id(self._dir, self._options(kept),
+		rc = lib.defw2_dir_runtime_id(self._dir,
+					      self._options(kept, timeout_ms),
 					      buffer, len(buffer), holder)
 		status = _take_status(holder)
 		if rc != lib.DEFW2_OK:
