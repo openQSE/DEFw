@@ -402,6 +402,16 @@ typedef struct {
 typedef struct defw2_dir defw2_dir_t;
 typedef struct defw2_dir_agent defw2_dir_agent_t;
 
+#define DEFW2_DIR_CONNECTED ...
+#define DEFW2_DIR_DISCONNECTED ...
+typedef struct {
+	defw2_event_target_t target; const char *service_id;
+	const char *service_type; uint32_t changes;
+} defw2_dir_subscribe_req_t;
+typedef struct {
+	bool connected; const char *reason; defw2_dir_record_t record;
+} defw2_dir_change_t;
+
 const char *defw2_dir_state_name(defw2_dir_state_t state);
 defw2_rc_t defw2_dir_open(defw2_rt_t *rt, const char *address,
 			  defw2_dir_t **dir);
@@ -425,6 +435,16 @@ defw2_rc_t defw2_dir_agent_start(defw2_service_t *svc, const char *dir_address,
 void defw2_dir_agent_stop(defw2_dir_agent_t *agent);
 uint64_t defw2_dir_agent_generation(const defw2_dir_agent_t *agent);
 const char *defw2_dir_agent_runtime_id(const defw2_dir_agent_t *agent);
+defw2_rc_t defw2_dir_subscribe(defw2_dir_t *dir,
+			       const defw2_dir_subscribe_req_t *req,
+			       const defw2_call_opts_t *opts,
+			       uint64_t *subscription_id,
+			       defw2_status_t *status);
+defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
+				 const defw2_call_opts_t *opts,
+				 defw2_status_t *status);
+defw2_rc_t defw2_dir_event_accept(defw2_event_sink_t *sink);
+const defw2_dir_change_t *defw2_dir_event_change(const defw2_event_t *event);
 const char *defw2_dirsvc(const defw2_rt_t *rt);
 const char *defw2_hostname(const defw2_rt_t *rt);
 /* telemetry */

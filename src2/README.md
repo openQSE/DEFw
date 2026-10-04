@@ -105,7 +105,7 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `telemetry/` | Spans, histograms and the OTLP JSON writer |
 | `host/` | The service host: identity, provider registration and the run loop |
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
-| `dir/`, `services/dirsvc/` | The directory: store, wire, service, client, agent and binding cache, and the `defw2-dirsvc` daemon |
+| `dir/`, `services/dirsvc/` | The directory: store, wire, service, client, agent, binding cache and events, and the `defw2-dirsvc` daemon |
 | `qpm/` | The QPM's control, admission and execution APIs: wire, client stubs and provider, and its completion event. Nothing outside this directory and `defw2_qpm.h` knows what a QPM is |
 | `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
@@ -281,6 +281,29 @@ an envelope naming the API and the event, then the payload as that API's
 own wire structure, decoded by that API's own checked proc. A sink decodes
 only the kinds its owner accepted, and refuses any other before allocating
 for it.
+
+The directory publishes the same way. A subscriber hears
+`SERVICE_CONNECTED` when a record it matches becomes UP, by registering or by
+its heartbeat resuming, and `SERVICE_DISCONNECTED` when one stops being UP,
+by deregistering or timing out, each with the reason and the record, in the
+order the directory recorded them:
+
+```c
+defw2_dir_subscribe_req_t req = {
+	.target = { defw2_event_sink_address(sink), DEFW2_PROVIDER_EVENT,
+		    "qpms" },
+	.service_type = "qfw.qpm",
+};
+
+defw2_dir_event_accept(sink);
+defw2_dir_subscribe(dir, &req, &opts, &id, &status);
+```
+
+A subscription lasts until `defw2_dir_unsubscribe`, or until a delivery to
+its sink fails. A restarted directory has none, and each event's source is
+the directory's runtime, so a subscriber that sees a new one subscribes
+again. `tests/defw2_dir_event_smoke.c` checks every change, the order of a
+hundred of them, the filters, and a dead subscriber that holds up no one.
 
 `tests/defw2_event_smoke.c` stops a sink's process with SIGSTOP, which is
 the client #64 describes, and checks that every other sink still gets its

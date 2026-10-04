@@ -1,5 +1,6 @@
 /*
- * The qfw.directory service: six handlers over the store.
+ * The qfw.directory service: six handlers over the store, and the events of
+ * defw2_dir_event.c, which bring their own two.
  *
  * Each handler does the same four things in the same order, which is the
  * point of the shared header: check the version, decode into the public
@@ -25,6 +26,7 @@
 struct defw2_dir_bound {
 	defw2_service_t		*svc;
 	defw2_dir_store_t	*store;
+	defw2_dir_events_t	*events;
 	/*
 	 * The liveness scan's timer. Margo owns the timer once it is armed, so
 	 * stopping is a flag the callback reads rather than a destroy racing
@@ -642,7 +644,9 @@ static void bound_free(void *arg)
 		margo_timer_cancel(bound->scan_timer);
 		margo_timer_destroy(bound->scan_timer);
 	}
+	/* The store first, so nothing is left to tell the events. */
 	defw2_dir_store_destroy(bound->store);
+	defw2_dir_events_destroy(bound->events);
 	free(bound);
 }
 
@@ -671,6 +675,14 @@ defw2_rc_t defw2_dir_bind(defw2_service_t *svc,
 		free(bound);
 		return rc;
 	}
+	rc = defw2_dir_events_create(rt, &bound->events);
+	if (rc != DEFW2_OK) {
+		defw2_dir_store_destroy(bound->store);
+		free(bound);
+		return rc;
+	}
+	defw2_dir_store_watch(bound->store, defw2_dir_events_changed,
+			      bound->events);
 
 	ids[0] = MARGO_REGISTER_PROVIDER(rt->mid, DEFW2_RPC_DIR_REGISTER,
 					 defw2_dir_register_in_t,
@@ -715,6 +727,7 @@ defw2_rc_t defw2_dir_bind(defw2_service_t *svc,
 				  DEFW2_API_DIR,
 				  defw2_service_provider_id(svc));
 			defw2_dir_store_destroy(bound->store);
+			defw2_dir_events_destroy(bound->events);
 			free(bound);
 			return DEFW2_ERR_INTERNAL;
 		}
@@ -727,6 +740,11 @@ defw2_rc_t defw2_dir_bind(defw2_service_t *svc,
 	margo_register_data(rt->mid, ids[0], bound, bound_free);
 	for (i = 1; i < 6; i++)
 		margo_register_data(rt->mid, ids[i], bound, NULL);
+
+	/* Margo owns bound now, so a failure here leaves it to free. */
+	rc = defw2_dir_events_bind(svc, bound->events);
+	if (rc != DEFW2_OK)
+		return rc;
 
 	/* margo_timer_create reports zero for success, not an hg_return_t. */
 	if (margo_timer_create(rt->mid, scan_timer_cb, bound,

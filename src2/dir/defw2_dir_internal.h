@@ -219,4 +219,35 @@ defw2_rc_t defw2_dir_store_generation(defw2_dir_store_t *store,
  */
 size_t defw2_dir_store_scan(defw2_dir_store_t *store);
 
+/*
+ * Be told each time a record becomes UP or stops being UP, with the reasons
+ * defw2_dir_change_t lists. The store calls fn under its own lock, so the
+ * changes arrive in the order the store made them, and record is a view
+ * that lasts only for the call. fn must not call back into the store.
+ */
+typedef void (*defw2_dir_watch_fn)(void *arg,
+				   const defw2_dir_record_t *record,
+				   bool connected, const char *reason);
+
+void defw2_dir_store_watch(defw2_dir_store_t *store, defw2_dir_watch_fn fn,
+			   void *arg);
+
+/* --- events ---------------------------------------------------------- */
+
+/*
+ * The directory's subscriptions and the publisher that serves them. bind
+ * registers subscribe and unsubscribe on the directory's provider, and
+ * changed is the store's watcher, which publishes one change to every
+ * subscription it matches.
+ */
+typedef struct defw2_dir_events defw2_dir_events_t;
+
+defw2_rc_t defw2_dir_events_create(struct defw2_rt *rt,
+				   defw2_dir_events_t **events);
+void defw2_dir_events_destroy(defw2_dir_events_t *events);
+defw2_rc_t defw2_dir_events_bind(defw2_service_t *svc,
+				 defw2_dir_events_t *events);
+void defw2_dir_events_changed(void *events, const defw2_dir_record_t *record,
+			      bool connected, const char *reason);
+
 #endif /* DEFW2_DIR_INTERNAL_H */

@@ -25,7 +25,7 @@ import threading
 import warnings
 
 from ._defw2 import ffi, lib
-from ._dir import _Kept, build_record
+from ._dir import build_record
 from ._echo import API_ECHO, PROVIDER_ECHO
 from ._qpm import (
 	API_QPM_ADMISSION,
@@ -38,7 +38,7 @@ from ._qpm import (
 	typed_api,
 	write_answer,
 )
-from ._runtime import CATEGORY_CODE, DefwError, Runtime, _check
+from ._runtime import CATEGORY_CODE, DefwError, Runtime, _check, _Kept
 
 __all__ = ['ServiceHost']
 

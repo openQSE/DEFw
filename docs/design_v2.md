@@ -560,7 +560,8 @@ there, and adding one needs no DEFw release.
 | `resolve_services` | Clients | Filters by `service_type`, selector name or resource, `binding_name`, API version, and properties. A property filter matches on equality by default. A caller that needs a bitmask match, which v1 hard-codes for `qpm_type` and `qpm_capabilities`, names those properties in the request, so the directory keeps no vocabulary of its own. Returns records with the selected binding. Omits `DOWN`, `TIMED_OUT` and `DEREGISTERED` records. |
 | `query_directory` | Operators | Everything, including inactive records until retention expires. |
 | `get_generation` | Clients and services | Current generation for a `service_id`. |
-| `subscribe` | Clients, optional | Registers an event sink for record changes so cached bindings can be invalidated without polling. |
+| `subscribe` | Clients, optional | Registers an event sink for record changes, so a client hears of a restarted service without polling. The directory sends `SERVICE_CONNECTED` when a matching record becomes `UP` and `SERVICE_DISCONNECTED` when it stops being `UP`, each with its reason and the record, in the order it records them. Narrows by `service_id` and `service_type`. Lasts until `unsubscribe` or until a delivery to the sink fails. |
+| `unsubscribe` | Clients | Ends a subscription. |
 
 ### Liveness
 
@@ -701,7 +702,7 @@ form `defw2.<api>.<method>`. The prototype types the hot path.
 
 | API | Methods typed in the prototype |
 | --- | --- |
-| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe` |
+| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe`, `unsubscribe` |
 | `qfw.qpm.control` | `is_ready`, `get_service_status` |
 | `qfw.qpm.admission` | `reserve`, `renew`, `release`, `cancel`, `get_reservation` |
 | `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit`, `register_event_notification` |
@@ -979,6 +980,22 @@ the API and the event, followed by the payload as that API's own wire
 structure. A sink decodes only the kinds its owner accepted, and refuses any
 other before allocating anything for it, so a payload is as checked as any
 typed answer.
+
+**Directory events.** The directory publishes through the same mechanism.
+A caller subscribes a sink with `subscribe`, narrowed by `service_id` or
+`service_type` if it likes, and the directory sends it `SERVICE_CONNECTED`
+when a matching record becomes `UP`, by registering or by its heartbeat
+resuming, and `SERVICE_DISCONNECTED` when one stops being `UP`, by
+deregistering or timing out. Those are v1's names, and they are the event's
+type. Each event carries the reason and the record as the directory then
+holds it, so a client following a restarted QPM gets its new address and
+generation without resolving again. The store hands each change to the
+publisher under its own lock, so a subscriber hears of the changes in the
+order the directory made them. A subscription lasts until `unsubscribe` or
+until a delivery to its sink fails, and it lives in the directory's memory,
+so a restarted directory has none. Each event's source is the directory's
+runtime, which is how a subscriber notices a new directory and subscribes
+again.
 
 For a C caller the callback runs on the sink's own thread, never on a Margo
 handler thread, so the caller may block. A Python caller takes events with

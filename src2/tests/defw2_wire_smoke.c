@@ -34,6 +34,11 @@ static size_t heap_in_use(void)
 {
 	return __sanitizer_get_current_allocated_bytes();
 }
+
+static size_t heap_with_maps(void)
+{
+	return heap_in_use();
+}
 #else
 #include <malloc.h>
 
@@ -41,12 +46,21 @@ static size_t heap_in_use(void)
 {
 	return mallinfo2().uordblks;
 }
+
+/* malloc maps a large allocation apart, and counts it apart. */
+static size_t heap_with_maps(void)
+{
+	struct mallinfo2 info = mallinfo2();
+
+	return info.uordblks + info.hblkhd;
+}
 #endif
 
 #include <defw2/defw2_echo.h>
 #include <defw2/defw2_qpm.h>
 
 #include "defw2_qpm_wire.h"
+#include "defw2_dir_wire.h"
 #include "defw2_event_internal.h"
 
 static int failures;
@@ -320,6 +334,9 @@ static void accepting(defw2_event_in_t *in)
 static void events(hg_proc_t proc, struct msg *m)
 {
 	defw2_event_in_t in;
+	long long grew;
+	hg_return_t ret;
+	size_t heap;
 	unsigned i;
 
 	memset(&in, 0, sizeof(in));
@@ -368,6 +385,38 @@ static void events(hg_proc_t proc, struct msg *m)
 	      encode(proc, m, hg_proc_defw2_event_in_t, &in) ==
 	      HG_INVALID_ARG);
 	release(proc, hg_proc_defw2_event_in_t, &in);
+
+	/*
+	 * A directory event carries a record, and a record carries counted
+	 * lists. A count larger than the wire allows is refused before
+	 * anything is allocated for it: a million aliases would be 8 MiB of
+	 * pointers before the first one failed to decode.
+	 */
+	envelope(m, DEFW2_API_DIR, DEFW2_DIR_EVENT_SERVICE);
+	put(m, "\1", 1);			/* connected */
+	put_str(m, "registered");
+	for (i = 0; i < 3; i++)
+		put_str(m, "s");	/* service_id, type and runtime_id */
+	put_u64(m, 1);			/* generation */
+	put_u32(m, 0);			/* state */
+	for (i = 0; i < 3; i++)
+		put_str(m, "s");	/* address, node_name and hostname */
+	put_u32(m, 7);			/* pid */
+	put_str(m, "fake-20q");		/* selector_name */
+	put_u32(m, 1u << 20);		/* aliases, a million of them */
+	memset(&in, 0, sizeof(in));
+	in.accepted[0] = &defw2_dir_change_kind;
+	in.naccepted = 1;
+	heap = heap_with_maps();
+	ret = decode(proc, m, hg_proc_defw2_event_in_t, &in);
+	grew = (long long)heap_with_maps() - (long long)heap;
+	check("a directory event claiming a vast list is refused",
+	      ret == HG_OVERFLOW && in.payload != NULL);
+	check("before anything is allocated for the list",
+	      grew < 64 * 1024);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+	check("and the free releases the strings that did decode",
+	      in.payload == NULL && in.tag == NULL);
 }
 
 /* --- a hostile peer against real providers -------------------------- */

@@ -35,8 +35,7 @@ import math
 import time
 
 from ._defw2 import ffi, lib
-from ._dir import _Kept
-from ._runtime import DefwError, _text
+from ._runtime import DefwError, _Kept, _text
 
 __all__ = [
 	'Event', 'EventKind', 'EventPublisher', 'EventSink', 'EventTarget',
@@ -97,8 +96,8 @@ class EventKind:
 	"""One API's kind of event, as the binding handles it.
 
 	accept readies a sink for it, read turns one into its payload, and
-	send publishes one. Each API defines its own, such as
-	defw2.QPM_COMPLETION.
+	send publishes one, or is None for a kind only C sends. Each API
+	defines its own, such as defw2.QPM_COMPLETION.
 	"""
 
 	def __init__(self, api, name, accept, read, send):
@@ -308,6 +307,11 @@ class EventPublisher:
 		such as one with a field too long for the wire. type is the
 		registration's, and traceparent the work the event belongs to.
 		"""
+		if kind.send is None:
+			raise DefwError(lib.DEFW2_ERR_INVALID,
+					'invalid-argument',
+					'Python does not send {!r}'.format(
+						kind))
 		address, provider_id, tag = target
 		kept = _Kept()
 		where = ffi.new('defw2_event_target_t *')

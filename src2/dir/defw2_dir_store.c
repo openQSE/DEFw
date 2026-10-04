@@ -28,6 +28,8 @@ struct defw2_dir_store {
 	uint32_t		scan_interval_ms;
 	uint64_t		retention_ms;
 	char			*snapshot_path;	/* owned, may be NULL */
+	defw2_dir_watch_fn	watch;		/* may be NULL */
+	void			*watch_arg;
 };
 
 void defw2_dir_result_free(defw2_dir_result_t *result)
@@ -373,6 +375,30 @@ static void unlink_locked(defw2_dir_store_t *store,
 
 static void snapshot_locked(defw2_dir_store_t *store);
 
+void defw2_dir_store_watch(defw2_dir_store_t *store, defw2_dir_watch_fn fn,
+			   void *arg)
+{
+	if (store == NULL)
+		return;
+	pthread_mutex_lock(&store->lock);
+	store->watch = fn;
+	store->watch_arg = arg;
+	pthread_mutex_unlock(&store->lock);
+}
+
+/* Tell the watcher what just changed. Caller holds the lock. */
+static void changed_locked(defw2_dir_store_t *store,
+			   const defw2_dir_record_own_t *record,
+			   bool connected, const char *reason)
+{
+	defw2_dir_record_t view;
+
+	if (store->watch == NULL)
+		return;
+	defw2_dir_record_own_view(record, &view);
+	store->watch(store->watch_arg, &view, connected, reason);
+}
+
 defw2_rc_t defw2_dir_store_register(defw2_dir_store_t *store,
 				    const defw2_dir_record_t *src,
 				    uint64_t *generation,
@@ -427,6 +453,7 @@ defw2_rc_t defw2_dir_store_register(defw2_dir_store_t *store,
 	record->next = store->records;
 	store->records = record;
 	snapshot_locked(store);
+	changed_locked(store, record, true, "registered");
 	/*
 	 * Logged while the lock is held on purpose: the moment it is dropped
 	 * the record belongs to the store, and a scan may retire and free it
@@ -493,6 +520,7 @@ defw2_rc_t defw2_dir_store_heartbeat(defw2_dir_store_t *store,
 		record->state = DEFW2_DIR_STATE_UP;
 		record->retention_deadline_ns = 0;
 		snapshot_locked(store);
+		changed_locked(store, record, true, "heartbeat-resumed");
 		pthread_mutex_unlock(&store->lock);
 		defw2_log(store->rt, DEFW2_LOG_WARNING,
 			  "directory: %s heartbeat resumed, back to UP",
@@ -530,6 +558,7 @@ defw2_rc_t defw2_dir_store_deregister(defw2_dir_store_t *store,
 	record->retention_deadline_ns = defw2_wall_ns() +
 		store->retention_ms * 1000000ull;
 	snapshot_locked(store);
+	changed_locked(store, record, false, "deregistered");
 	/* Under the lock, for the reason register logs under it. */
 	defw2_log(store->rt, DEFW2_LOG_MESSAGE,
 		  "directory: deregistered %s generation %" PRIu64,
@@ -583,6 +612,7 @@ size_t defw2_dir_store_scan(defw2_dir_store_t *store)
 		record->state = DEFW2_DIR_STATE_TIMED_OUT;
 		record->retention_deadline_ns = now +
 			store->retention_ms * 1000000ull;
+		changed_locked(store, record, false, "heartbeat-timeout");
 		changed++;
 		defw2_log(store->rt, DEFW2_LOG_WARNING,
 			  "directory: %s timed out, no heartbeat for %" PRIu64 " ms",

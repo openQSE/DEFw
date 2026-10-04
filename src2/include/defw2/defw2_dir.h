@@ -39,6 +39,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <defw2/defw2_event.h>
 #include <defw2/defw2_rpc.h>
 #include <defw2/defw2_service.h>
 
@@ -386,6 +387,89 @@ size_t defw2_dir_cache_revalidate(defw2_dir_cache_t *cache,
 
 /* How many bindings are held, which is for tests and for an operator. */
 size_t defw2_dir_cache_size(const defw2_dir_cache_t *cache);
+
+/* --- events ---------------------------------------------------------- */
+
+/*
+ * A service coming and going, told to a sink as the directory records it.
+ *
+ * A caller subscribes a sink (defw2_event.h), and the directory sends it an
+ * event each time a record the subscription matches becomes UP, by
+ * registering or by its heartbeat resuming, and each time it stops being
+ * UP, by deregistering or timing out. A subscriber gets them in the order
+ * the directory recorded them. v1 called the two SERVICE_CONNECTED and
+ * SERVICE_DISCONNECTED, and an event's type is one of those names.
+ *
+ *	defw2_dir_subscribe_req_t req = {
+ *		.target = { defw2_event_sink_address(sink),
+ *			    DEFW2_PROVIDER_EVENT, "qpm" },
+ *		.service_id = "qpm:iqm:q20",
+ *	};
+ *
+ *	defw2_dir_event_accept(sink);
+ *	defw2_dir_subscribe(dir, &req, &opts, &id, &status);
+ *
+ * A subscription lasts until it is cancelled or a delivery to its sink
+ * fails. It lives in the directory's memory, so a restarted directory has
+ * none. Each event's source is the directory's runtime, so a subscriber
+ * that sees a new one subscribes again.
+ */
+#define DEFW2_DIR_EVENT_SERVICE		"service"
+#define DEFW2_DIR_SERVICE_CONNECTED	"SERVICE_CONNECTED"
+#define DEFW2_DIR_SERVICE_DISCONNECTED	"SERVICE_DISCONNECTED"
+
+/* Which changes a subscription hears about. 0 means both. */
+#define DEFW2_DIR_CONNECTED		(1u << 0)
+#define DEFW2_DIR_DISCONNECTED		(1u << 1)
+
+/*
+ * service_id and service_type each narrow a subscription to the records
+ * that match exactly, and NULL matches any. target is the sink, and its tag
+ * comes back on every event.
+ */
+typedef struct {
+	defw2_event_target_t	target;
+	const char		*service_id;
+	const char		*service_type;
+	uint32_t		changes;	/* DEFW2_DIR_*, 0 for both */
+} defw2_dir_subscribe_req_t;
+
+/*
+ * What a directory event carries: which way the record went, why, and the
+ * record as the directory now holds it, its new generation on the way up
+ * and its final state on the way down. reason is "registered",
+ * "heartbeat-resumed", "deregistered" or "heartbeat-timeout".
+ */
+typedef struct {
+	bool			connected;
+	const char		*reason;
+	defw2_dir_record_t	record;
+} defw2_dir_change_t;
+
+/*
+ * Subscribe, and learn the id the directory gave the subscription, which is
+ * what unsubscribe takes. Fails with DEFW2_CAT_INVALID_ARGUMENT for a
+ * target with no address or one on the directory's own provider, and with
+ * DEFW2_CAT_PENDING_CAPACITY when the directory holds as many subscriptions
+ * as it will.
+ */
+defw2_rc_t defw2_dir_subscribe(defw2_dir_t *dir,
+			       const defw2_dir_subscribe_req_t *req,
+			       const defw2_call_opts_t *opts,
+			       uint64_t *subscription_id,
+			       defw2_status_t *status);
+
+/* End one. DEFW2_CAT_NOT_FOUND when the directory holds no such id. */
+defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
+				 const defw2_call_opts_t *opts,
+				 defw2_status_t *status);
+
+/*
+ * Make a sink take directory events, and read one. The change belongs to
+ * the event: free the event, never the change. NULL for any other event.
+ */
+defw2_rc_t defw2_dir_event_accept(defw2_event_sink_t *sink);
+const defw2_dir_change_t *defw2_dir_event_change(const defw2_event_t *event);
 
 /* --- service side --------------------------------------------------- */
 

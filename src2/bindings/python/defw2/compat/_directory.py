@@ -14,10 +14,11 @@ matching is v1's: the same filters, the same rules.
 A v2 record that a v2 service registered has no v1_record, and still
 resolves, as the v1 record its typed fields describe.
 
-v1's directory events, SERVICE_CONNECTED and SERVICE_DISCONNECTED, need
-events, which v2 does not have until phase 3. Registering for them is
-accepted, and nothing is delivered: a client notices a restarted service
-when it next resolves, not before.
+v1's directory events, SERVICE_CONNECTED and SERVICE_DISCONNECTED, are
+v2's too, but compat does not subscribe to them until its clients serve
+sinks of their own. Until then registering for them is accepted, and
+nothing is delivered: a client notices a restarted service when it next
+resolves, not before.
 """
 
 import copy
@@ -366,7 +367,7 @@ class Directory:
 			raise
 		return generation or None
 
-	# --- directory events, which v2 does not deliver yet
+	# --- directory events, which compat does not deliver yet
 
 	def register_event_notification(self, endpoint, event_type, class_id,
 					filters=None):
@@ -381,7 +382,8 @@ class Directory:
 		if not self._told:
 			self._told = True
 			log.warning('directory events are accepted and not '
-				    'delivered: v2 has no events until phase 3')
+				    'delivered: compat does not subscribe to '
+				    'them yet')
 		registration_id = str(uuid.uuid4())
 		self._events[registration_id] = (event_type, class_id,
 						 dict(filters or {}))
