@@ -6,15 +6,16 @@ typed QPM APIs, taking the arguments by the names the API class declares,
 and builds the v1 answer back from the typed one. Everything else fails,
 naming the method, until v2 types it.
 
-Fourteen QPM methods go over the typed APIs. The fifteenth,
-register_event_notification, is emulated until compat's clients serve
-sinks of their own. v1 pushed each completion to the caller as an event.
-So once a caller registers, compat watches every task this process submits
-through the same QPM, peeks the completion queue until each task completes,
-and puts the completion on the caller's event queue, as v1's push would
-have. Peeking leaves the completion queued, as v1's push did, so a read_cq
-of it still finds it. What arrives is what peek_cq answers: the record v1
-pushed, saying poll_operation peek_cq.
+Fifteen QPM methods go over the typed APIs. The fifteenth,
+register_event_notification, registers this process's sink with the QPM,
+and _events puts what arrives there on the caller's own event queue, as
+v1's push did.
+
+The other way round, a v1 QPM keeps a client's registration as the
+api_events.BaseEventAPI it makes with the endpoint it was given, and puts
+each completion to it. The endpoint compat gives it is the client's sink,
+and a put to it publishes the completion and returns at once, so a v1 QPM
+sends its events without waiting on any client, and without changing.
 
 A failure comes back as the v1 exception the service raised, by name,
 when it is a DEFw exception or a Python built-in one, and as the DEFw
@@ -25,15 +26,14 @@ carried it, so the v2 spans and the service's own join the caller's trace.
 """
 
 import builtins
-import copy
 import inspect
 import logging
-import os
 import re
 import sys
 import threading
 
-from .._qpm import QPM
+from .._event import EventTarget
+from .._qpm import QPM, QPM_COMPLETION
 from .._runtime import DefwError
 from . import _mapping as m
 from . import _state
@@ -63,12 +63,9 @@ TYPED = {
 	'delete_circuit': 'task',
 }
 
-# How often the completion collector peeks, by default.
-POLL_MS = int(os.environ.get('DEFW2_COMPAT_POLL_MS', '10'))
-
 # Outcomes QFw's QPM answers a peek with when a completion will never be
-# there, so the collector stops waiting for it.
-_NEVER = ('INVALID_RESERVATION', 'MISSING_RESERVATION', 'NO_LONGER_RETAINED')
+# there, so the sweep stops waiting for it.
+NEVER = ('INVALID_RESERVATION', 'MISSING_RESERVATION', 'NO_LONGER_RETAINED')
 
 # The DEFw exception for a category, when the message names no class.
 _BY_CATEGORY = {
@@ -126,26 +123,19 @@ class Target:
 		self.service_id = service_id
 		self.runtime_id = runtime_id
 		self._lock = threading.Lock()
-		self._completions = None
 		self._statevectors = {}
-
-	def completions(self):
-		with self._lock:
-			if self._completions is None:
-				self._completions = Completions(self)
-				_state.on_close(self._completions.stop)
-			return self._completions
 
 	def submitted(self, cid, info, reservation_id, token):
 		"""Note a task this process submitted: the room its statevector
-		needs, and whether a completion listener wants it."""
+		needs, and, when a registration wants its completion, the task
+		itself, for the sweep that recovers a lost event."""
 		capacity = _statevector_bytes(info)
 		with self._lock:
 			if capacity:
 				self._statevectors[cid] = capacity
-			completions = self._completions
-		if completions is not None:
-			completions.watch(cid, reservation_id, token)
+		events = _state.started_events()
+		if events is not None:
+			events.watch(self, cid, reservation_id, token)
 
 	def capacity(self, cid):
 		with self._lock:
@@ -238,8 +228,13 @@ def invoke(target, owner, fn, args, kwargs):
 		except DefwError as error:
 			raise v1_exception(error) from error
 	if name == 'register_event_notification':
-		return target.completions().register(
-			_arguments(fn, args, kwargs))
+		try:
+			return _state.events().register_completions(
+				target, _arguments(fn, args, kwargs))
+		except m.MappingError as error:
+			raise _mapping_error(error) from None
+		except DefwError as error:
+			raise v1_exception(error) from error
 	raise unsupported(owner, name)
 
 
@@ -261,7 +256,7 @@ def _selectors(a):
 	return values
 
 
-def _traceparent():
+def traceparent():
 	"""The caller's trace context, when something registered v1's
 	defw_trace hooks, as QFw's telemetry does."""
 	tracing = sys.modules.get('defw_trace')
@@ -273,7 +268,7 @@ def _traceparent():
 def _typed(target, name, a):
 	qpm = target.qpm
 	kind = TYPED[name]
-	trace = {'traceparent': _traceparent()}
+	trace = {'traceparent': traceparent()}
 	if name in ('is_ready', 'get_service_status'):
 		answer = getattr(qpm, name)(**_ctx(a), **trace)
 	elif name == 'reserve':
@@ -316,7 +311,7 @@ def _typed(target, name, a):
 
 	result = m.typed_to_answer(kind, answer)
 	if kind == 'task':
-		_fill_statevector(result, answer)
+		fill_statevector(result, answer)
 	if name == 'async_run' and isinstance(result, dict) and \
 	   isinstance(result.get('cid'), str):
 		target.submitted(result['cid'], a.get('info'),
@@ -363,7 +358,7 @@ def collect(target, name, values, capacity, traceparent=None):
 	return answer
 
 
-def _fill_statevector(result, answer):
+def fill_statevector(result, answer):
 	stub = m.find_stub(result)
 	if stub is None:
 		return
@@ -374,132 +369,68 @@ def _fill_statevector(result, answer):
 	m.restore_statevector(stub, answer.statevector_data)
 
 
-# --- completion events --------------------------------------------------
+# --- events to a client ---------------------------------------------------
 
 
-class Completions:
-	"""v1's completion events from one remote QPM, collected by peeking.
+class EventEndpoint:
+	"""A client's sink, as the endpoint a v1 QPM keeps for its
+	registration. The QPM makes an api_events.BaseEventAPI of it, and a
+	put to that publishes the event to the sink."""
 
-	register() is register_event_notification. Each task this process
-	submits through the QPM afterwards is watched until peek_cq says it
-	completed, and its completion is put on every matching registration's
-	event queue, the caller's own defw_event_baseapi.BaseEventAPI.
+	def __init__(self, address, provider_id):
+		self.address = address
+		self.provider_id = provider_id
+
+	def get_id(self):
+		return self.address
+
+	def get(self):
+		return {'addr': self.address, 'provider_id': self.provider_id}
+
+	def __repr__(self):
+		return 'EventEndpoint({}, {})'.format(self.address,
+						      self.provider_id)
+
+
+def event_call(endpoint, class_id, name, args, kwargs):
+	"""A call on a v1 event API object whose target is a client's sink.
+	put is the only method v1 called on one."""
+	if name != 'put':
+		raise unsupported('BaseEventAPI', name)
+	event = args[0] if args else kwargs.get('event')
+	return publish_event(endpoint, class_id, event)
+
+
+def publish_event(endpoint, class_id, event):
+	"""v1's put of a completion event to a client, as a v2 completion.
+
+	It returns once the event is queued, and never waits on the client.
+	The record goes as the typed task it is, its statevector described
+	rather than carried, since the client fetches that from the
+	completion queue. A full queue drops the event, which the client's
+	sweep recovers. A client that is gone raises, so the QPM drops the
+	registration, as v1 dropped one whose put failed.
 	"""
-
-	def __init__(self, target):
-		self._target = target
-		self._lock = threading.Lock()
-		self._registrations = []
-		self._watched = {}
-		self._wake = threading.Event()
-		self._stop = threading.Event()
-		self._thread = None
-
-	def register(self, a):
-		import defw_common_def
-		class_id = a.get('class_id')
-		try:
-			queue = defw_common_def.get_class_from_db(class_id)
-		except Exception:  # noqa: BLE001
-			raise _mapping_error(ValueError(
-				'no local event queue {!r}: register_external() '
-				'it before registering for events'.format(class_id)))
-		registration = {
-			'evtype': a.get('evtype'),
-			'class_id': class_id,
-			'queue': queue,
-			'reservation_id': a.get('reservation_id'),
-			'filters': dict(a.get('filters') or {}),
-		}
-		with self._lock:
-			self._registrations.append(registration)
-			count = len(self._registrations)
-			if self._thread is None:
-				self._thread = threading.Thread(
-					target=self._run, daemon=True,
-					name='defw2-compat-completions')
-				self._thread.start()
-		log.info('completion events for %s are collected by peek_cq '
-			 'every %d ms', self._target.service_id, POLL_MS)
-		return {'status': 'accepted', 'class_id': class_id,
-			'registration_count': count}
-
-	def watch(self, cid, reservation_id, token):
-		with self._lock:
-			if not self._registrations:
-				return
-			self._watched[cid] = (reservation_id, token)
-		self._wake.set()
-
-	def stop(self):
-		self._stop.set()
-		self._wake.set()
-		if self._thread is not None and \
-		   self._thread is not threading.current_thread():
-			self._thread.join(10)
-
-	def _run(self):
-		while not self._stop.is_set():
-			with self._lock:
-				watched = list(self._watched.items())
-			if not watched:
-				self._wake.wait(0.5)
-				self._wake.clear()
-				continue
-			for cid, (reservation_id, token) in watched:
-				if self._stop.is_set():
-					return
-				self._peek(cid, reservation_id, token)
-			self._stop.wait(POLL_MS / 1000.0)
-
-	def _peek(self, cid, reservation_id, token):
-		try:
-			answer = collect(self._target, 'peek_cq', {
-				'cid': cid, 'qtask_id': 0,
-				'reservation_id': m.context_reservation(
-					reservation_id),
-				'token': m.context_token(token)},
-				self._target.capacity(cid))
-			if not answer.completion_ready:
-				if answer.outcome in _NEVER:
-					log.warning('no completion will come for %s: '
-						    '%s', cid, answer.outcome)
-					self._done(cid)
-				return
-			record = m.typed_to_answer('task', answer)
-			_fill_statevector(record, answer)
-		except Exception:  # noqa: BLE001
-			if not self._stop.is_set():
-				log.exception('collecting the completion of %s',
-					      cid)
-			return
-		self._deliver(record)
-		self._done(cid)
-
-	def _done(self, cid):
-		with self._lock:
-			self._watched.pop(cid, None)
-		self._target.forget(cid)
-
-	def _deliver(self, record):
-		import api_events
-		with self._lock:
-			registrations = list(self._registrations)
-		matching = [r for r in registrations if self._matches(r, record)]
-		for index, registration in enumerate(matching):
-			payload = record if index == 0 else copy.deepcopy(record)
-			try:
-				registration['queue'].put(api_events.Event(
-					registration['evtype'], payload))
-			except Exception:  # noqa: BLE001
-				log.exception('delivering a completion to %s',
-					      registration['class_id'])
-
-	@staticmethod
-	def _matches(registration, record):
-		reservation_id = registration['reservation_id']
-		if reservation_id is not None and \
-		   record.get('reservation_id') != reservation_id:
-			return False
-		return all(record.get(key) == value
-			   for key, value in registration['filters'].items())
+	from . import _events
+	record, nbytes = m.describe_statevector(event.get_event())
+	try:
+		task = m.answer_to_typed('task', record)
+	except m.MappingError as error:
+		raise _mapping_error(error) from None
+	if nbytes:
+		task['statevector_shape'] = (nbytes // m.C128_BYTES,)
+		task['statevector_dtype'] = 'c128'
+	try:
+		queued = _state.publisher().publish(
+			QPM_COMPLETION,
+			EventTarget(endpoint.address, endpoint.provider_id,
+				    class_id),
+			task, type=_events.type_text(event.get_evtype()),
+			traceparent=traceparent())
+	except DefwError as error:
+		raise v1_exception(error) from error
+	if not queued:
+		log.warning('dropped the completion event of %s to %s, whose '
+			    'queue is full; its sweep will find it',
+			    record.get('cid') if isinstance(record, dict)
+			    else None, endpoint.address)

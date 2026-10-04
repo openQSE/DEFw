@@ -15,23 +15,17 @@ A v2 record that a v2 service registered has no v1_record, and still
 resolves, as the v1 record its typed fields describe.
 
 v1's directory events, SERVICE_CONNECTED and SERVICE_DISCONNECTED, are
-v2's too, but compat does not subscribe to them until its clients serve
-sinks of their own. Until then registering for them is accepted, and
-nothing is delivered: a client notices a restarted service when it next
-resolves, not before.
+v2's too. Registering for one subscribes this process's sink, and _events
+puts each change on the caller's queue as v1's dictionary.
 """
 
 import copy
 import json
-import logging
 import re
-import uuid
 
 from .._dir import Directory as V2Directory
 from .._runtime import DefwError
 from ._mapping import STR_MAX
-
-log = logging.getLogger('defw2.compat')
 
 V1_RECORD = 'v1_record'
 SERVICE_EVENT_TYPES = ('SERVICE_CONNECTED', 'SERVICE_DISCONNECTED')
@@ -277,16 +271,14 @@ class Directory:
 	def __init__(self, runtime, address):
 		self._runtime = runtime
 		self.address = address
-		self._v2 = V2Directory(runtime, address)
-		self._events = {}
-		self._told = False
+		self.v2 = V2Directory(runtime, address)
 		self._registered = None
 		# v2 records by (service_id, runtime_id), so a connect can use
 		# the bindings the record it came from declared.
 		self.seen = {}
 
 	def close(self):
-		self._v2.close()
+		self.v2.close()
 
 	# --- registration, for a process that serves
 
@@ -334,7 +326,7 @@ class Directory:
 	# --- resolution, for a client
 
 	def _resolve(self, service_id=None, service_type=None):
-		records = self._v2.resolve(service_type=service_type or None,
+		records = self.v2.resolve(service_type=service_type or None,
 					   service_id=service_id or None)
 		for v2 in records:
 			self.seen[(v2['service_id'], v2['runtime_id'])] = v2
@@ -360,17 +352,21 @@ class Directory:
 
 	def get_service_generation(self, service_id):
 		try:
-			generation = self._v2.generation(service_id)
+			generation = self.v2.generation(service_id)
 		except DefwError as error:
 			if error.category == 'not-found':
 				return None
 			raise
 		return generation or None
 
-	# --- directory events, which compat does not deliver yet
+	# --- directory events
 
 	def register_event_notification(self, endpoint, event_type, class_id,
 					filters=None):
+		"""v1's registration for a directory event, as a subscription
+		of this process's sink. endpoint is this process, which is
+		where the sink is."""
+		from . import _state
 		if event_type not in SERVICE_EVENT_TYPES:
 			raise _v1_error('Unsupported directory event type '
 					'{!r}'.format(event_type))
@@ -379,18 +375,20 @@ class Directory:
 		if unsupported:
 			raise _v1_error('Unsupported directory event filters: '
 					'{}'.format(', '.join(unsupported)))
-		if not self._told:
-			self._told = True
-			log.warning('directory events are accepted and not '
-				    'delivered: compat does not subscribe to '
-				    'them yet')
-		registration_id = str(uuid.uuid4())
-		self._events[registration_id] = (event_type, class_id,
-						 dict(filters or {}))
-		return registration_id
+		try:
+			return _state.events().subscribe_directory(
+				self, event_type, class_id, filters)
+		except DefwError as error:
+			raise _v1_error('defw2.compat: the directory would not '
+					'take the subscription: {}'.format(
+						error.message))
 
 	def unregister_event_notification(self, registration_id):
-		return self._events.pop(registration_id, None) is not None
+		from . import _state
+		events = _state.started_events()
+		if events is None:
+			return False
+		return events.unsubscribe_directory(self, registration_id)
 
 	def __getattr__(self, name):
 		raise AttributeError(

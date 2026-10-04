@@ -16,6 +16,10 @@ when the caller lent room for it, and only its description when not.
 read_cq peeks first, so a completion whose statevector does not fit stays
 queued for the retry, as the typed API promises; v1's read_cq would have
 consumed it.
+
+register_event_notification hands the v1 QPM the caller's sink as the
+endpoint to put its events to, and the sink's tag as the class_id. A put
+to it publishes the event, so the QPM sends it without waiting.
 """
 
 import inspect
@@ -23,7 +27,9 @@ import sys
 import threading
 
 from .._runtime import ServiceError
+from . import _events
 from . import _mapping as m
+from ._remote import EventEndpoint
 
 __all__ = ['QPMAdapter', 'service_error']
 
@@ -299,3 +305,15 @@ class QPMAdapter:
 	def delete_circuit(self, request):
 		return self._task(self._invoke(
 			'delete_circuit', **self._selectors(request)), 0)
+
+	def register_event_notification(self, request):
+		"""type is the v1 evtype as JSON when a compat client sent it,
+		so it reaches the QPM as itself, and extra carries v1's
+		filters."""
+		target = request.target
+		extra = request.extra if isinstance(request.extra, dict) else {}
+		return self._typed('decision', self._invoke(
+			'register_event_notification',
+			EventEndpoint(target.address, target.provider_id),
+			_events.evtype_of(request.type), target.tag,
+			filters=extra.get('filters'), **self._context(request)))
