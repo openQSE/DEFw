@@ -16,6 +16,12 @@ QPMs get the same calls in the same order, so they stay in step.
 
 The directory's answers are compared with v1's own directory code, loaded
 from the v1 tree, given the same record.
+
+Events are the ones v1 delivered. The QPM puts each completion to the
+caller's registration, and it arrives on the caller's own queue with its
+statevector, or from the sweep when its event is lost. A registration
+whose sink is gone is dropped by the QPM when its put fails. A service
+coming and going reaches the caller as v1's directory events.
 """
 
 import base64
@@ -336,12 +342,34 @@ def execution_checks(execution, reference):
 	      'get_device_profile is not a typed v2 method' in got[2], got)
 
 
+def take(events, count, timeout=30):
+	"""count events from a v1 event queue, waiting as v1 code does."""
+	taken = []
+	deadline = time.monotonic() + timeout
+	while len(taken) < count:
+		left = deadline - time.monotonic()
+		if left <= 0:
+			break
+		ready, _, _ = select.select([events.fileno()], [], [], left)
+		if ready:
+			taken.extend(events.get())
+	return taken
+
+
+def completion_of(reference, cid):
+	"""The completion record the reference QPM queued for cid."""
+	for record in reference.completions:
+		if record['cid'] == cid:
+			return dict(record)
+	return None
+
+
 def event_checks(execution, reference):
 	events = BaseEventAPI()
 	events.register_external()
 	registration = execution.register_event_notification(
 		defw.me.my_endpoint(), 1, events.class_id())
-	check('register_event_notification is accepted',
+	check('register_event_notification is the v1 QPM\'s own answer',
 	      registration == {'status': 'accepted',
 			       'class_id': events.class_id(),
 			       'registration_count': 1}, registration)
@@ -350,17 +378,129 @@ def event_checks(execution, reference):
 	task = same('a run after registering', execution, reference,
 		    'async_run', info, reservation_id=RID)
 	cid = task['cid'] if task else None
-	ready, _, _ = select.select([events.fileno()], [], [], 30)
-	delivered = events.get() if ready else []
+	delivered = take(events, 1)
 	check('its completion arrives as an event on the caller\'s queue',
 	      len(delivered) == 1 and delivered[0].get_evtype() == 1)
 	payload = delivered[0].get_event() if delivered else None
-	want = reference.peek_cq(cid=cid, reservation_id=RID)
+	want = completion_of(reference, cid)
 	check('carrying the completion record, statevector and all',
 	      payload == want, _diff(payload, want))
 	same('and the completion is still queued for read_cq', execution,
 	     reference, 'read_cq', cid=cid, reservation_id=RID)
+
+	lost = dict(info, num_qubits=4, drop_event=True)
+	task = same('a run the QPM sends no event for', execution, reference,
+		    'async_run', lost, reservation_id=RID)
+	cid = task['cid'] if task else None
+	want = reference.peek_cq(cid=cid, reservation_id=RID)
+	delivered = take(events, 1)
+	payload = delivered[0].get_event() if delivered else None
+	check('the sweep recovers it from the completion queue',
+	      len(delivered) == 1 and payload == want, _diff(payload, want))
+	same('and leaves it queued as well', execution, reference, 'read_cq',
+	     cid=cid, reservation_id=RID)
+
+	late = dict(info, num_qubits=4, delay_event=1.5)
+	task = same('a run whose event comes late', execution, reference,
+		    'async_run', late, reservation_id=RID)
+	delivered = take(events, 2, timeout=3)
+	check('reaches the queue once, from the sweep, not again from it',
+	      len(delivered) == 1 and
+	      delivered[0].get_event().get('poll_operation') == 'peek_cq',
+	      [d.get_event().get('cid') for d in delivered])
+	same('and its completion is read', execution, reference, 'read_cq',
+	     cid=task['cid'] if task else None, reservation_id=RID)
+	return events
+
+
+def dead_sink_checks(execution, reference, events, record):
+	"""A sink that goes: the QPM's put to it fails and the QPM drops the
+	registration, as v1 did, while the live sink hears every event."""
+	rt = _state.runtime()
+	dead = defw2.EventSink(rt, provider_id=9)
+	target = dead.target('dead')
+	dead.close()
+	with defw2.QPM.from_record(rt, record) as qpm:
+		decision = qpm.register_event_notification(
+			target, type='1', reservation_id=RID)
+	check('a typed caller registers a sink that is gone',
+	      decision.decision == 'accepted' and
+	      decision.extra.get('registration_count') == 2, decision)
+
+	info = {'qasm': QASM, 'num_qubits': 2}
+	for _ in range(5):
+		execution.async_run(info, reservation_id=RID)
+		reference.async_run(info, reservation_id=RID)
+		time.sleep(0.2)
+	check('the live sink hears every completion',
+	      len(take(events, 5)) == 5)
+
+	other = BaseEventAPI()
+	other.register_external()
+	registration = execution.register_event_notification(
+		defw.me.my_endpoint(), 1, other.class_id())
+	check('and the QPM dropped the dead one when its put failed',
+	      registration.get('registration_count') == 2, registration)
+	other.unregister_external()
 	events.unregister_external()
+
+
+def directory_event_checks(dirsvc):
+	"""v1's directory events, from the v2 directory."""
+	events = BaseEventAPI()
+	events.register_external()
+	ids = [dirsvc.register_event_notification(
+		defw.me.my_endpoint(), kind, events.class_id(),
+		filters={'service_type': 'test.compat.events'})
+	       for kind in ('SERVICE_CONNECTED', 'SERVICE_DISCONNECTED')]
+	check('the directory takes a registration for each event',
+	      len(set(ids)) == 2)
+
+	rt = _state.runtime()
+	directory_id = _state.directory().v2.runtime_id()
+	host = defw2.ServiceHost(rt, 'svc:compat-events', 'test.compat.events',
+				 apis=[(defw2.API_ECHO, 11)])
+	host.register()
+	delivered = take(events, 1)
+	event = delivered[0] if delivered else {}
+	record = event.get('service_record') or {}
+	check('a service registering is v1\'s SERVICE_CONNECTED',
+	      event.get('event') == 'SERVICE_CONNECTED' and
+	      event.get('service_id') == 'svc:compat-events' and
+	      event.get('service_type') == 'test.compat.events' and
+	      event.get('runtime_id') == rt.runtime_id and
+	      event.get('peer_handle') == rt.runtime_id and
+	      event.get('directory_runtime_id') == directory_id, event)
+	check('with the v1 record a resolve would give',
+	      record.get('service_id') == 'svc:compat-events' and
+	      record.get('state') == 'UP' and record.get('generation') == 1 and
+	      (record.get('endpoint') or {}).get('address') == host.address,
+	      record)
+
+	host.close()
+	delivered = take(events, 1)
+	event = delivered[0] if delivered else {}
+	check('and deregistering is SERVICE_DISCONNECTED, with its reason',
+	      event.get('event') == 'SERVICE_DISCONNECTED' and
+	      event.get('reason') == 'deregistered' and
+	      event.get('service_id') == 'svc:compat-events' and
+	      'service_record' not in event, event)
+	check('unregistering a directory event ends it, once',
+	      dirsvc.unregister_event_notification(ids[0]) and
+	      dirsvc.unregister_event_notification(ids[1]) and
+	      not dirsvc.unregister_event_notification(ids[0]))
+	events.unregister_external()
+
+
+def peer_checks():
+	"""The directory stays, so a peer event listener hears nothing."""
+	import defw_workers
+	heard = []
+	defw_workers.add_peer_event_listener(heard.append)
+	time.sleep(1)
+	defw_workers.remove_peer_event_listener(heard.append)
+	check('a peer event listener hears nothing while the directory stays',
+	      heard == [], heard)
 
 
 def typed_checks(record, reference):
@@ -439,7 +579,13 @@ def main():
 	admission_checks(apis['admission'], reference)
 	execution_checks(apis['execution'], reference)
 	typed_checks(record, reference)
-	event_checks(apis['execution'], reference)
+	events = event_checks(apis['execution'], reference)
+	rt = _state.runtime()
+	with defw2.Directory(rt, rt.dirsvc) as v2:
+		v2_record = v2.resolve(service_type='qfw.qpm')[0]
+	dead_sink_checks(apis['execution'], reference, events, v2_record)
+	directory_event_checks(dirsvc)
+	peer_checks()
 
 	print('COMPAT CLIENT ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

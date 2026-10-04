@@ -302,7 +302,26 @@ def take_statevector(answer):
 			return answer, None
 	else:
 		data = payload['data']
+	return _stubbed(answer, path, payload), data
 
+
+def describe_statevector(answer):
+	"""take_statevector without the data: (answer, nbytes).
+
+	The answer has the same stub, and nbytes is what the payload decodes
+	to, 0 when there is none. Nothing is decoded when the payload says its
+	own size, as QFw's do, which is what an event wants: it describes a
+	statevector and never carries it.
+	"""
+	path, payload = find_statevector(answer)
+	if path is None:
+		return answer, 0
+	return _stubbed(answer, path, payload), payload_size(payload)
+
+
+def _stubbed(answer, path, payload):
+	"""A copy of answer with payload's data set to None, copied along the
+	path so the service's own dictionaries are untouched."""
 	answer = dict(answer)
 	holder = answer
 	for key in path[:-1]:
@@ -311,7 +330,7 @@ def take_statevector(answer):
 	stub = dict(payload)
 	stub['data'] = None
 	holder[path[-1]] = stub
-	return answer, data
+	return answer
 
 
 def find_stub(answer):

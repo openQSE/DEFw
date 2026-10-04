@@ -6,6 +6,12 @@ the way QFw's util/qpm/statevector.py encodes them. Nothing in it knows
 about v2. Every answer is a function of the calls made so far, so two
 instances given the same calls give the same answers, which is how the
 compat test compares the one it reaches over v2 with one it calls itself.
+
+It keeps event registrations and puts each completion to the ones that
+match, one after another, dropping one whose put fails, which is what
+QFw's controller does. A run whose info asks for drop_event is completed
+without its event, the way a lost one is, and one that asks for
+delay_event has its event put that many seconds later.
 """
 
 import base64
@@ -278,8 +284,13 @@ class QPM:
 		with self.lock:
 			task['state'] = 'completed'
 			task['outcome'] = 'COMPLETED'
-			self.completions.append(
-				self._record(task, self._result(info)))
+			record = self._record(task, self._result(info))
+			self.completions.append(record)
+		if info.get('delay_event'):
+			threading.Timer(info['delay_event'], self._push,
+					(record,)).start()
+		elif not info.get('drop_event'):
+			self._push(record)
 		return self._status(task, outcome='ACCEPTED', echo=echo)
 
 	def sync_run(self, info, reservation_id=None, token=None, timeout=None,
@@ -366,12 +377,40 @@ class QPM:
 	def register_event_notification(self, ep, evtype, class_id,
 					token=None, reservation_id=None,
 					filters=None):
-		self.events.append(BaseEventAPI(class_id=class_id, target=ep))
-		return {'status': 'accepted', 'class_id': class_id}
+		registration = {
+			'class': BaseEventAPI(class_id=class_id, target=ep),
+			'evtype': evtype,
+			'reservation_id': reservation_id,
+			'filters': dict(filters or {}),
+		}
+		with self.lock:
+			self.events.append(registration)
+			count = len(self.events)
+		return {'status': 'accepted', 'class_id': class_id,
+			'registration_count': count}
+
+	@staticmethod
+	def _matches(registration, record):
+		if registration['reservation_id'] not in (
+				None, record['reservation_id']):
+			return False
+		return all(record.get(key) == value
+			   for key, value in registration['filters'].items())
+
+	def _push(self, record):
+		with self.lock:
+			matching = [r for r in self.events
+				    if self._matches(r, record)]
+		stale = []
+		for r in matching:
+			try:
+				r['class'].put(Event(r['evtype'], dict(record)))
+			except Exception:  # noqa: BLE001
+				stale.append(r)
+		if stale:
+			with self.lock:
+				self.events = [r for r in self.events
+					       if r not in stale]
 
 	def get_device_profile(self, token=None, device_id=None):
 		return {'device_id': 'fake-v1-4q', 'max_qubits': 4}
-
-	def deliver(self, record):
-		"""Never called: a v1 QPM's own push, kept to show Event loads."""
-		return Event(1, record)

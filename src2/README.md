@@ -318,9 +318,9 @@ what `defw2_event.h` promises.
 `defw2-python`, beside the built package, runs v1 Python on v2: a v1
 client as `defw2-python script.py`, and a v1 QPM service module as
 `defw2-python --serve svc_fake_iqm_qpm`. QFw's code runs under it
-unchanged. `bindings/python/README.md` says what it provides, and
-`tests/defw2_compat_smoke.py` checks a v1 QPM and a v1 client against v1's
-own answers.
+unchanged, events included. `bindings/python/README.md` says what it
+provides, and `tests/defw2_compat_smoke.py` checks a v1 QPM and a v1 client
+against v1's own answers.
 
 ## What the wire refuses
 
@@ -426,7 +426,8 @@ section. The names v2 adds:
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
 | `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
-| `DEFW2_COMPAT_POLL_MS` | 10 | How often `defw2.compat` peeks for a v1 caller's completion events |
+| `DEFW2_COMPAT_SWEEP_MS` | 5000 | How often `defw2.compat` looks for a completion whose event was lost |
+| `DEFW2_COMPAT_DIRSVC_CHECK_MS` | 2000 | How often `defw2.compat` asks the directory which runtime it is, while v1 code listens for its peer events |
 
 `defw2-python` finds the v1 tree it reuses at `DEFW_PATH`, as v1's launcher
 did. It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,

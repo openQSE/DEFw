@@ -22,12 +22,12 @@ The v1 names come from three places.
 - Every other v1 module name fails to import, with an error that says so,
   rather than loading v1's runtime beside v2's.
 
-Fourteen of a remote QPM's typed methods go over the typed QPM APIs. Any
-other remote method fails, naming the method, until v2 types it. v1's
-completion events are collected by peeking the completion queue, until
-compat's clients serve sinks of their own. _remote has the details, and
-_mapping how a v1 dictionary crosses the typed APIs and comes back the
-same.
+A remote QPM's fifteen typed methods go over the typed QPM APIs. Any
+other remote method fails, naming the method, until v2 types it. Every
+compat process listens, and v1's events, a QPM's completions and the
+directory's changes, reach the caller's own queue through one sink.
+_remote has the remote objects, _events the events, and _mapping how a v1
+dictionary crosses the typed APIs and comes back the same.
 """
 
 import importlib.abc

@@ -7,7 +7,8 @@ The mapping, in this process. Every kind of value a v1 QPM's dictionaries
 hold crosses the typed APIs through defw2.compat._mapping and comes back
 the same: answers in both directions, run and reservation requests,
 circuits and statevectors, and the values that must stay in extra because
-a typed field would change them.
+a typed field would change them. And the directory watch, given a
+directory that answers as the test says, makes the peer events v1 made.
 
 End to end, in processes of their own over na+sm. The directory runs as
 defw2-dirsvc. tests/compat/svc_v1_qpm, a v1 QPM service module written
@@ -190,6 +191,99 @@ def mapping_checks():
 	check('and goes back in, the payload the service made',
 	      taken == answer, taken)
 
+	described, nbytes = m.describe_statevector(answer)
+	check('an event describes it by its size, with the same stub',
+	      nbytes == 64 and m.find_stub(described) is not None and
+	      answer['result']['statevector'] is payload)
+	broken = dict(answer, result=dict(answer['result'], statevector=dict(
+		payload, data='not base64')))
+	check('and decodes nothing, taking the size the payload gives',
+	      m.describe_statevector(broken)[1] == 64)
+
+
+def address_checks():
+	"""Where a compat client listens, by what its environment asks."""
+	import socket
+	from defw2.compat import _state
+
+	saved = {name: os.environ.get(name)
+		 for name in ('DEFW2_ADDRESS', 'DEFW_LISTEN_PORT')}
+	seen = {}
+	try:
+		for name, address, port in (
+				('unset', None, None),
+				('ofi+tcp alone', 'ofi+tcp://', None),
+				('a host', 'ofi+tcp://somewhere', None),
+				('a port', 'ofi+tcp://', '4242'),
+				('another provider', 'na+sm://', None)):
+			for variable, value in (('DEFW2_ADDRESS', address),
+						('DEFW_LISTEN_PORT', port)):
+				if value is None:
+					os.environ.pop(variable, None)
+				else:
+					os.environ[variable] = value
+			seen[name] = _state._host_address()
+	finally:
+		for name, value in saved.items():
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+	mine = 'ofi+tcp://' + socket.gethostname()
+	check('a client asked for nothing in particular listens on its host',
+	      seen['unset'] == mine and seen['ofi+tcp alone'] == mine, seen)
+	check('and one asked for a host, a port or a provider gets that',
+	      seen['a host'] is None and seen['a port'] is None and
+	      seen['another provider'] is None, seen)
+
+
+def watch_checks():
+	"""The directory watch, against a directory that answers as told."""
+	from defw2._defw2 import lib
+	from defw2.compat._events import DIRSVC, DirectoryWatch
+
+	answers = []
+	emitted = []
+	lost = []
+
+	def ask():
+		answer = answers.pop(0)
+		if isinstance(answer, Exception):
+			raise answer
+		return answer
+
+	def kinds():
+		taken = [(e['event_type'], e['remote_runtime_id'], e['reason'])
+			 for e in emitted]
+		emitted.clear()
+		return taken
+
+	down = defw2.DefwError(lib.DEFW2_ERR_TRANSPORT, 'transport', 'gone')
+	watch = DirectoryWatch(ask, emitted.append, lost.append)
+	answers[:] = ['dir-1', 'dir-1']
+	watch.check()
+	watch.check()
+	check('the directory\'s first answer is a start, not a change',
+	      kinds() == [] and watch.up and lost == [])
+	answers[:] = [down, down]
+	watch.check()
+	first = list(emitted)
+	watch.check()
+	check('a directory that stops answering is PEER_LOST, once',
+	      kinds() == [('PEER_LOST', 'dir-1', 'unreachable')] and
+	      lost == ['dir-1'] and first[0]['node_type'] == DIRSVC and
+	      first[0]['peer_handle'] == 'dir-1')
+	answers[:] = ['dir-1']
+	watch.check()
+	check('and PEER_READY when it answers again',
+	      kinds() == [('PEER_READY', 'dir-1', 'reconnected')])
+	answers[:] = ['dir-2']
+	watch.check()
+	check('a directory that restarted unseen is lost, then ready',
+	      kinds() == [('PEER_LOST', 'dir-1', 'restarted'),
+			  ('PEER_READY', 'dir-2', 'reconnected')] and
+	      lost == ['dir-1', 'dir-1'] and watch.runtime_id == 'dir-2')
+
 
 # --- end to end ------------------------------------------------------------
 
@@ -229,6 +323,10 @@ def environment(dirsvc):
 	env.setdefault('DEFW_PATH', os.path.normpath(
 		os.path.join(HERE, '..', '..')))
 	env['DEFW_LOG_DIR'] = os.path.join(os.getcwd(), 'compat-logs')
+	# A sweep and a directory check every fifth of a second, so the
+	# client sees what they do while it waits.
+	env['DEFW2_COMPAT_SWEEP_MS'] = '200'
+	env['DEFW2_COMPAT_DIRSVC_CHECK_MS'] = '200'
 	if dirsvc:
 		env['DEFW2_DIRSVC'] = dirsvc
 	return env
@@ -272,6 +370,8 @@ def main(argv):
 	args = parser.parse_args(argv)
 
 	mapping_checks()
+	address_checks()
+	watch_checks()
 	end_to_end(args.dirsvc, args.launcher)
 
 	print('COMPAT SMOKE ' + ('FAILED' if failures else 'PASSED'))

@@ -197,7 +197,11 @@ def directory(runtime, dirsvc_binary):
 	      subscription > 0)
 
 	fake = Server('registered-fake', fake_command('--register'), env)
-	change = next_change(sink, defw2.SERVICE_CONNECTED)
+	event = sink.next(timeout_ms=10000)
+	change = event.payload if event is not None and \
+		event.type == defw2.SERVICE_CONNECTED else None
+	check('the event comes from the runtime the directory says it is',
+	      event is not None and event.source == watching.runtime_id())
 	record = (change or {}).get('record', {})
 	check('and hears the QPM register, with its record',
 	      change is not None and change['connected'] and

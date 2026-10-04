@@ -444,9 +444,10 @@ bool defw2_dir_entry_from_wire(defw2_dir_arena_t *arena,
 /* --- events ---------------------------------------------------------- */
 
 /*
- * subscribe and unsubscribe postdate the six methods above and take the
- * typed path every API since has taken, through defw2_typed.h. They are the
- * directory's own, so they speak the directory's version.
+ * subscribe, unsubscribe and get_runtime_id postdate the six methods above
+ * and take the typed path every API since has taken, through
+ * defw2_typed.h. They are the directory's own, so they speak the
+ * directory's version.
  */
 
 /* subscribe: the target's three fields, flattened, and what to hear of. */
@@ -467,6 +468,14 @@ MERCURY_GEN_PROC(defw2_dir_unsubscribe_in_t,
 	((defw2_hdr_t)(hdr))
 	((hg_uint64_t)(subscription_id)))
 
+/* get_runtime_id asks nothing but the header. */
+MERCURY_GEN_PROC(defw2_dir_runtime_id_in_t,
+	((defw2_hdr_t)(hdr)))
+
+MERCURY_GEN_PROC(defw2_dir_runtime_id_out_t,
+	((defw2_wire_status_t)(status))
+	((defw2_str_t)(runtime_id)))
+
 /* A directory event's payload: which way the record went, why, and it. */
 MERCURY_GEN_PROC(defw2_dir_wire_change_t,
 	((hg_uint8_t)(connected))
@@ -483,6 +492,8 @@ DEFW2_DIR_METHOD(defw2_dir_m_subscribe, subscribe,
 		 defw2_dir_subscribe_in_t, defw2_dir_subscribe_out_t);
 DEFW2_DIR_METHOD(defw2_dir_m_unsubscribe, unsubscribe,
 		 defw2_dir_unsubscribe_in_t, defw2_dir_lease_out_t);
+DEFW2_DIR_METHOD(defw2_dir_m_get_runtime_id, get_runtime_id,
+		 defw2_dir_runtime_id_in_t, defw2_dir_runtime_id_out_t);
 
 /* The event's kind, which carries a defw2_dir_wire_change_t. */
 struct defw2_event_kind;

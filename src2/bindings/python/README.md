@@ -269,15 +269,20 @@ error that says it has no v2 counterpart.
 
 A served v1 QPM answers the typed QPM APIs through `QPMAdapter`, so C and
 Python v2 callers reach it as they reach any QPM. A v1 client's API classes
-send fourteen of the typed QPM methods over the same APIs, and the
-dictionary the service returned comes back key for key, its exceptions as
-the same v1 classes, and a statevector through the bulk path, put back into
-the v1 payload. The fifteenth, `register_event_notification`, waits for
-compat to serve sinks and publish events. Until then the adapter does not
-serve it, and a v1 client's registration is answered by peeking the
-completion queue. `_mapping.py` says exactly what moves into a typed field
-and what stays in `extra`, and the design document's Python section says
-why.
+send the fifteen typed QPM methods over the same APIs, and the dictionary
+the service returned comes back key for key, its exceptions as the same v1
+classes, and a statevector through the bulk path, put back into the v1
+payload. `_mapping.py` says exactly what moves into a typed field and what
+stays in `extra`, and the design document's Python section says why.
+
+Every compat process listens and serves one sink, as `_events.py`
+describes. A v1 client's `register_event_notification` registers that sink
+with the QPM, and the QPM's `put` to it publishes the completion without
+waiting. The completion arrives on the caller's own queue as v1's `Event`,
+its statevector fetched from the completion queue, and a slow sweep
+recovers one whose event was lost. Directory events arrive as v1's
+dictionaries, and compat asks the directory which runtime it is now and
+then, to give v1 code the peer events it follows a restart by.
 
 ## Layout
 
@@ -293,7 +298,8 @@ why.
 | `defw2/compat/__init__.py` | `install`, which makes the v1 names importable, and the finder that refuses the rest |
 | `defw2/compat/_mapping.py` | How a v1 QPM's dictionaries cross the typed APIs, both ways |
 | `defw2/compat/_adapter.py` | `QPMAdapter`, a `ServiceHost` handler over a v1 QPM object |
-| `defw2/compat/_remote.py` | Remote objects for v1 callers, v1 exceptions, and completion events by peeking |
+| `defw2/compat/_remote.py` | Remote objects for v1 callers, v1 exceptions, and a v1 QPM's put to a client's sink |
+| `defw2/compat/_events.py` | v1's events: the process's sink, the sweep that recovers a lost completion, and the directory watch behind peer events |
 | `defw2/compat/_directory.py` | `defw.dirsvc`: v1 registration and resolution over the v2 directory |
 | `defw2/compat/_serve.py`, `__main__.py` | `defw2-python` and its `--serve` |
 | `defw2/compat/_v1/` | The five v1 modules compat provides itself |

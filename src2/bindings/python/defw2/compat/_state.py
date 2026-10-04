@@ -1,34 +1,64 @@
 """The one v2 runtime a compat process has, and what hangs off it.
 
 v1 started its runtime when the process started. compat starts a v2 one
-the first time something needs it, as a client, or as a server when the
-process serves, and closes everything at exit in an order that is safe:
-the completion collectors first, then the remote QPMs, the directory, the
-service and its registration, and the runtime last.
+the first time something needs it, and closes everything at exit in an
+order that is safe: the events first, then the remote QPMs, the directory,
+the service and its registration, and the runtime last.
+
+Every compat process listens, as every v1 process did, because a QPM and
+the directory send it events. One told no particular address binds its
+host's name, as QFw binds a QPM's, since another node cannot always reach
+an interface Mercury picks for itself.
 """
 
 import atexit
 import logging
 import os
 import re
+import socket
 import threading
 
-from .._runtime import Runtime
+from .._runtime import DefwError, Runtime
 
 log = logging.getLogger('defw2.compat')
 
 lock = threading.RLock()
-role = 'client'
+role = 'server'
 node_name = None
 host = None
 _runtime = None
 _directory = None
 _endpoint = None
+_events = None
+_publisher = None
 _closers = []
 _closed = False
 
 # Set by me.exit(), which a served v1 service calls to stop its process.
 stopping = threading.Event()
+
+
+def _host_address():
+	"""ofi+tcp on this host's name, when the environment asks for ofi+tcp
+	with no host and no port, and None to take what it asks for."""
+	address = os.environ.get('DEFW2_ADDRESS', 'ofi+tcp://')
+	if address != 'ofi+tcp://' or \
+	   os.environ.get('DEFW_LISTEN_PORT', '0') not in ('', '0'):
+		return None
+	return 'ofi+tcp://' + socket.gethostname()
+
+
+def _start():
+	name = node_name or os.environ.get('DEFW_AGENT_NAME')
+	address = _host_address()
+	if address is None:
+		return Runtime(role=role, node_name=name)
+	try:
+		return Runtime(role=role, address=address, node_name=name)
+	except DefwError as error:
+		log.warning('cannot listen at %s, so Mercury chooses: %s',
+			    address, error)
+	return Runtime(role=role, node_name=name)
 
 
 def runtime():
@@ -37,8 +67,7 @@ def runtime():
 		if _closed:
 			raise RuntimeError('defw2.compat has shut down')
 		if _runtime is None:
-			_runtime = Runtime(role=role, node_name=node_name or
-					   os.environ.get('DEFW_AGENT_NAME'))
+			_runtime = _start()
 			atexit.register(close)
 			log.info('runtime %s at %s', _runtime.runtime_id,
 				 _runtime.address)
@@ -54,6 +83,35 @@ def on_close(closer):
 	out."""
 	with lock:
 		_closers.append(closer)
+
+
+def events():
+	"""This process's sink and the threads that serve it, made on first
+	use."""
+	global _events
+	with lock:
+		if _events is None:
+			from ._events import Hub
+			_events = Hub(runtime())
+			on_close(_events.close)
+		return _events
+
+
+def started_events():
+	"""The events, or None when nothing has needed them yet."""
+	return _events
+
+
+def publisher():
+	"""What a served QPM sends its clients' events with, made on first
+	use."""
+	global _publisher
+	with lock:
+		if _publisher is None:
+			from .._event import EventPublisher
+			_publisher = EventPublisher(runtime())
+			on_close(_publisher.close)
+		return _publisher
 
 
 def directory():
@@ -109,7 +167,7 @@ def endpoint():
 
 def close():
 	"""Shut everything down, once."""
-	global _runtime, _directory, _closed, host
+	global _runtime, _directory, _events, _publisher, _closed, host
 	with lock:
 		if _closed:
 			return
@@ -129,6 +187,8 @@ def close():
 		_runtime.close()
 		_runtime = None
 	_directory = None
+	_events = None
+	_publisher = None
 
 
 def exit():

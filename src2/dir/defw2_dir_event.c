@@ -439,10 +439,10 @@ void defw2_dir_events_destroy(defw2_dir_events_t *events)
 	free(events);
 }
 
-/* --- subscribe and unsubscribe --------------------------------------- */
+/* --- subscribe, unsubscribe and get_runtime_id ----------------------- */
 
 /*
- * What the two methods find on their registration. Margo frees it with
+ * What the three methods find on their registration. Margo frees it with
  * free, and the events it points at belong to the directory, which frees
  * them as the runtime finalizes, after the last call.
  */
@@ -495,6 +495,16 @@ static void serve_unsubscribe(struct defw2_served *served, void *vin,
 				  "the directory has no such subscription");
 }
 
+/* The string is the runtime's, so it outlives the respond. */
+static void serve_runtime_id(struct defw2_served *served, void *vin,
+			     void *vout)
+{
+	defw2_dir_runtime_id_out_t *out = vout;
+
+	(void)vin;
+	out->runtime_id = defw2_runtime_id(served->rt);
+}
+
 static void defw2_dir_subscribe_ult(hg_handle_t handle)
 {
 	defw2_dir_subscribe_in_t in;
@@ -515,6 +525,16 @@ static void defw2_dir_unsubscribe_ult(hg_handle_t handle)
 }
 DEFINE_MARGO_RPC_HANDLER(defw2_dir_unsubscribe_ult)
 
+static void defw2_dir_runtime_id_ult(hg_handle_t handle)
+{
+	defw2_dir_runtime_id_in_t in;
+	defw2_dir_runtime_id_out_t out;
+
+	defw2_typed_serve(handle, &defw2_dir_m_get_runtime_id, &in,
+			  sizeof(in), &out, sizeof(out), serve_runtime_id);
+}
+DEFINE_MARGO_RPC_HANDLER(defw2_dir_runtime_id_ult)
+
 defw2_rc_t defw2_dir_events_bind(defw2_service_t *svc,
 				 defw2_dir_events_t *events)
 {
@@ -523,6 +543,8 @@ defw2_rc_t defw2_dir_events_bind(defw2_service_t *svc,
 		  _handler_for_defw2_dir_subscribe_ult },
 		{ &defw2_dir_m_unsubscribe,
 		  _handler_for_defw2_dir_unsubscribe_ult },
+		{ &defw2_dir_m_get_runtime_id,
+		  _handler_for_defw2_dir_runtime_id_ult },
 	};
 	struct dir_events_bound *bound;
 

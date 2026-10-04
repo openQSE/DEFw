@@ -465,6 +465,20 @@ defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
 				 defw2_status_t *status);
 
 /*
+ * Which runtime the directory is, copied into runtime_id, a buffer of len
+ * bytes, at least DEFW2_DIR_RUNTIME_ID_LEN. It is new each time the
+ * directory starts, so a client that keeps subscriptions asks for it now
+ * and then: a different one is a restarted directory, which holds none of
+ * them. It is also every directory event's source.
+ */
+#define DEFW2_DIR_RUNTIME_ID_LEN	64
+
+defw2_rc_t defw2_dir_runtime_id(defw2_dir_t *dir,
+				const defw2_call_opts_t *opts,
+				char *runtime_id, size_t len,
+				defw2_status_t *status);
+
+/*
  * Make a sink take directory events, and read one. The change belongs to
  * the event: free the event, never the change. NULL for any other event.
  */

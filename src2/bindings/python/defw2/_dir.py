@@ -313,6 +313,21 @@ class Directory:
 		status.raise_for_status()
 		return True
 
+	def runtime_id(self):
+		"""Which runtime the directory is. It is new each time the
+		directory starts, and it is every directory event's source."""
+		kept = _Kept()
+		buffer = ffi.new('char[]', lib.DEFW2_DIR_RUNTIME_ID_LEN)
+		holder = _status_out()
+		rc = lib.defw2_dir_runtime_id(self._dir, self._options(kept),
+					      buffer, len(buffer), holder)
+		status = _take_status(holder)
+		if rc != lib.DEFW2_OK:
+			raise DefwError(rc, 'transport',
+					'the directory did not answer')
+		status.raise_for_status()
+		return _text(buffer)
+
 	def generation(self, service_id):
 		kept = _Kept()
 		out = ffi.new('uint64_t *')
