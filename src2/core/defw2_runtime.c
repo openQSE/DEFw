@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>	/* strcasecmp */
+#include <time.h>
 #include <unistd.h>
 
 #include <uuid/uuid.h>
@@ -20,6 +21,9 @@
 #include "defw2_trace.h"
 
 #define DEFW2_JSON_MAX	4096
+
+/* How long finalize waits for Margo's last handler before giving up. */
+#define DEFW2_FINALIZE_WAIT_MS	30000
 
 static char *read_file(const struct defw2_rt *rt, const char *path)
 {
@@ -239,6 +243,12 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 	if (rc != DEFW2_OK)
 		goto fail_margo;
 
+	/*
+	 * Hold the instance, so that Margo finalizing it does not free it.
+	 * defw2_finalize releases it once Margo is done. See there for why.
+	 */
+	margo_instance_ref_incr(rt->mid);
+
 	defw2_log(rt, DEFW2_LOG_MESSAGE,
 		  "defw2 %s up as %s at %s, runtime %s, role %s",
 		  defw2_version(), rt->node_name, rt->address, rt->runtime_id,
@@ -249,6 +259,7 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 fail_margo:
 	defw2_telemetry_close(rt);
 	margo_finalize(rt->mid);
+	defw2_telemetry_free(rt);
 fail:
 	free(rt->address);
 	defw2_log_close(rt);
@@ -274,6 +285,27 @@ void defw2_runtime_stop(struct defw2_rt *rt)
 	margo_finalize(rt->mid);
 }
 
+/*
+ * Has Margo finished? margo_finalize does nothing while a handler is still
+ * running. The last handler to finish runs it instead, from its own ULT, so
+ * the call can return long before the instance is finalized.
+ */
+static bool margo_done(struct defw2_rt *rt)
+{
+	struct timespec pause = { 0, 1000000 };
+	uint64_t deadline = defw2_mono_ns() +
+			    (uint64_t)DEFW2_FINALIZE_WAIT_MS * 1000000ull;
+	bool done = false;
+
+	while (margo_instance_is_finalized(rt->mid, &done) == HG_SUCCESS &&
+	       !done) {
+		if (defw2_mono_ns() > deadline)
+			return false;
+		nanosleep(&pause, NULL);
+	}
+	return done;
+}
+
 void defw2_finalize(defw2_rt_t *rt)
 {
 	int i;
@@ -284,9 +316,28 @@ void defw2_finalize(defw2_rt_t *rt)
 	defw2_log(rt, DEFW2_LOG_MESSAGE, "defw2 down, runtime %s",
 		  rt->runtime_id);
 	/* Written before the network goes away, so a run that then hangs in
-	 * margo_finalize still leaves its measurements behind. */
+	 * margo_finalize still leaves its measurements behind. The recorder
+	 * itself stays until Margo has stopped, because a ULT can still be
+	 * ending a span until then. */
 	defw2_telemetry_close(rt);
 	defw2_runtime_stop(rt);
+	/*
+	 * Nothing is freed until Margo is done, which is when its last handler
+	 * has finished, because a handler still running can reach this
+	 * runtime. An event sink's handler read it after the free before this
+	 * waited. A handler that never finishes leaves the runtime allocated
+	 * rather than freed under it.
+	 */
+	if (!margo_done(rt)) {
+		defw2_log(rt, DEFW2_LOG_ERROR,
+			  "Margo still had a handler running after %d ms, so "
+			  "the runtime is left allocated",
+			  DEFW2_FINALIZE_WAIT_MS);
+		return;
+	}
+	margo_instance_release(rt->mid);
+	rt->mid = MARGO_INSTANCE_NULL;
+	defw2_telemetry_free(rt);
 	free(rt->address);
 	free(rt->dirsvc);
 	for (i = 0; i < rt->rpc_cached; i++)

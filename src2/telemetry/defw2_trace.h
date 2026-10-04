@@ -51,10 +51,16 @@ void defw2_trace_end(struct defw2_rt *rt, struct defw2_trace *trace);
  */
 const char *defw2_telemetry_dir(const defw2_config_t *cfg);
 
-/* Set up and tear down the recorder. Called from defw2_init and finalize. */
+/*
+ * Set up and tear down the recorder. Called from defw2_init and finalize.
+ * close writes everything out and stops recording, and free releases the
+ * recorder once Margo has stopped, so a ULT still finishing a call between
+ * the two ends its span against a recorder that drops it.
+ */
 defw2_rc_t defw2_telemetry_open(struct defw2_rt *rt,
 				const defw2_config_t *cfg);
 void defw2_telemetry_close(struct defw2_rt *rt);
+void defw2_telemetry_free(struct defw2_rt *rt);
 
 /* The monotonic clock, for durations that must not follow the wall clock. */
 uint64_t defw2_mono_ns(void);

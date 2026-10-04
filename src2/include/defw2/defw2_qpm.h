@@ -44,6 +44,7 @@
 #include <stdint.h>
 
 #include <defw2/defw2_bulk.h>
+#include <defw2/defw2_event.h>
 #include <defw2/defw2_rpc.h>
 #include <defw2/defw2_service.h>
 
@@ -442,6 +443,36 @@ defw2_rc_t defw2_qpm_admission_bind(defw2_service_t *svc,
 				    const defw2_qpm_admission_ops_t *ops);
 defw2_rc_t defw2_qpm_execution_bind(defw2_service_t *svc,
 				    const defw2_qpm_execution_ops_t *ops);
+
+/* --- events ---------------------------------------------------------- */
+
+/*
+ * A completion event tells a caller that a task finished, so it need not
+ * poll. Its payload is a defw2_qpm_task_t, the record read_cq would answer
+ * with, except that a statevector is described and never carried:
+ * statevector_delivered is false, and statevector.nbytes is the buffer to
+ * lend read_cq or peek_cq for it. A large result never rides in an event,
+ * which is what held v1's clients up behind one another.
+ *
+ * A caller's sink takes completion events once defw2_qpm_event_accept says
+ * so. A service sends one with defw2_qpm_publish_completion, which returns
+ * what defw2_event.h says publishing returns. type is what the caller's
+ * registration asked for, and comes back on the event.
+ */
+#define DEFW2_QPM_EVENT_COMPLETION	"completion"
+
+defw2_rc_t defw2_qpm_event_accept(defw2_event_sink_t *sink);
+defw2_rc_t defw2_qpm_publish_completion(defw2_event_publisher_t *pub,
+					const defw2_event_target_t *target,
+					const char *type,
+					const defw2_qpm_task_t *task,
+					const char *traceparent);
+
+/*
+ * The task a completion event carries, or NULL for any other event. It
+ * belongs to the event: free the event, never the task.
+ */
+const defw2_qpm_task_t *defw2_qpm_event_task(const defw2_event_t *event);
 
 #ifdef __cplusplus
 }

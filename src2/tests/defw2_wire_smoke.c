@@ -5,9 +5,9 @@
  * the terminator it promises. v2's do not, and this test holds them to it.
  * The first half hands the decoders the bytes a broken or hostile peer would
  * send, built by hand. The second half sends such requests to real
- * providers, echo and a QPM's control API, to show that a malformed request
- * is answered rather than crashing the provider or leaking what it half
- * decoded.
+ * providers, echo, a QPM's control API and an event sink, to show that a
+ * malformed request is answered rather than crashing the provider or
+ * leaking what it half decoded.
  *
  * Whether a refused request leaks is measured rather than left to the leak
  * sanitizer. A provider decodes into a structure on its handler's stack, and
@@ -47,6 +47,7 @@ static size_t heap_in_use(void)
 #include <defw2/defw2_qpm.h>
 
 #include "defw2_qpm_wire.h"
+#include "defw2_event_internal.h"
 
 static int failures;
 
@@ -282,6 +283,93 @@ static void partial(hg_proc_t proc, struct msg *m)
 	      hdr.runtime_id == NULL);
 }
 
+static void put_str(struct msg *m, const char *s)
+{
+	put_u64(m, strlen(s) + 1);
+	put(m, s, strlen(s) + 1);
+}
+
+/* An event's header and envelope, up to where its payload starts. */
+static void envelope(struct msg *m, const char *api, const char *name)
+{
+	reset(m);
+	put_u32(m, DEFW2_QPM_VERSION);
+	put_u64(m, 1);
+	put_str(m, "rt-1");
+	put_u64(m, 0);			/* no traceparent */
+	put_u64(m, 0);			/* client_send_ns */
+	put_str(m, "tag");
+	put_u64(m, 0);			/* no type */
+	put_u64(m, 7);			/* seq */
+	put_str(m, api);
+	put_str(m, name);
+}
+
+static void accepting(defw2_event_in_t *in)
+{
+	memset(in, 0, sizeof(*in));
+	in->accepted[0] = &defw2_qpm_completion_kind;
+	in->naccepted = 1;
+}
+
+/*
+ * An event names its kind in the envelope, and its payload is decoded by
+ * that kind's proc. A decoder that was not given the kind refuses it
+ * before allocating anything for a payload it cannot check.
+ */
+static void events(hg_proc_t proc, struct msg *m)
+{
+	defw2_event_in_t in;
+	unsigned i;
+
+	memset(&in, 0, sizeof(in));
+	envelope(m, DEFW2_API_QPM_EXECUTION, DEFW2_QPM_EVENT_COMPLETION);
+	for (i = 0; i < 16; i++)
+		put_u64(m, 0);		/* a payload of absent fields */
+	check("an event of a kind the sink was not given is refused",
+	      decode(proc, m, hg_proc_defw2_event_in_t, &in) == HG_NOENTRY &&
+	      in.unknown && in.payload == NULL && in.tag != NULL);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+	check("and the free releases the envelope that did decode",
+	      in.tag == NULL && in.api == NULL && in.hdr.runtime_id == NULL);
+
+	accepting(&in);
+	check("the same bytes decode where the kind is taken",
+	      decode(proc, m, hg_proc_defw2_event_in_t, &in) == HG_SUCCESS &&
+	      in.kind == &defw2_qpm_completion_kind && in.payload != NULL &&
+	      in.seq == 7);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+	check("and the free releases the payload as well", in.payload == NULL);
+
+	accepting(&in);
+	envelope(m, DEFW2_API_QPM_EXECUTION, "another");
+	for (i = 0; i < 16; i++)
+		put_u64(m, 0);
+	check("an event named for a kind nobody takes is refused",
+	      decode(proc, m, hg_proc_defw2_event_in_t, &in) == HG_NOENTRY &&
+	      in.unknown && in.payload == NULL);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+
+	/* The payload breaks after a string of its own decoded. */
+	accepting(&in);
+	envelope(m, DEFW2_API_QPM_EXECUTION, DEFW2_QPM_EVENT_COMPLETION);
+	put_str(m, DEFW2_QPM_COMPLETED);
+	put_u64(m, 1u << 20);
+	put(m, "abc", 4);
+	check("a payload claiming more than the message carries is refused",
+	      decode(proc, m, hg_proc_defw2_event_in_t, &in) == HG_OVERFLOW &&
+	      in.payload != NULL);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+	check("and the free releases what decoded before it",
+	      in.payload == NULL && in.tag == NULL);
+
+	memset(&in, 0, sizeof(in));
+	check("a sender cannot encode an event without its kind",
+	      encode(proc, m, hg_proc_defw2_event_in_t, &in) ==
+	      HG_INVALID_ARG);
+	release(proc, hg_proc_defw2_event_in_t, &in);
+}
+
 /* --- a hostile peer against real providers -------------------------- */
 
 static int served_calls;
@@ -323,6 +411,7 @@ struct target {
 	uint32_t	version;
 	unsigned	trailer;
 	hg_proc_cb_t	out_proc;
+	bool		event;	/* a QPM completion's envelope follows */
 };
 
 enum evil {
@@ -390,6 +479,17 @@ static hg_return_t evil_in_proc(hg_proc_t proc, void *arg)
 	}
 	hg_proc_hg_uint64_t(proc, &zero);	/* traceparent, absent */
 	hg_proc_hg_uint64_t(proc, &zero);	/* client_send_ns */
+	if (evil_target->event) {
+		hg_proc_hg_uint64_t(proc, &zero);	/* tag */
+		hg_proc_hg_uint64_t(proc, &zero);	/* type */
+		hg_proc_hg_uint64_t(proc, &zero);	/* seq */
+		len = sizeof(DEFW2_API_QPM_EXECUTION);
+		hg_proc_hg_uint64_t(proc, &len);
+		hg_proc_bytes(proc, (void *)DEFW2_API_QPM_EXECUTION, len);
+		len = sizeof(DEFW2_QPM_EVENT_COMPLETION);
+		hg_proc_hg_uint64_t(proc, &len);
+		hg_proc_bytes(proc, (void *)DEFW2_QPM_EVENT_COMPLETION, len);
+	}
 	for (i = 0; i < evil_target->trailer; i++)
 		hg_proc_hg_uint64_t(proc, &zero);
 	return HG_SUCCESS;
@@ -498,6 +598,18 @@ static void hostile(void)
 		"a QPM", defw2_qpm_m_is_ready.rpc, DEFW2_PROVIDER_QPM_CONTROL,
 		DEFW2_QPM_VERSION, 2, hg_proc_defw2_qpm_status_out_t,
 	};
+	/* Enough zeros after the envelope for a payload of absent fields. */
+	const struct target sink_target = {
+		"an event sink", DEFW2_RPC_EVENT_DELIVER, DEFW2_PROVIDER_EVENT,
+		DEFW2_QPM_VERSION, 16, hg_proc_defw2_event_out_t, true,
+	};
+	defw2_event_publisher_t *publisher = NULL;
+	defw2_event_target_t target = { NULL, DEFW2_PROVIDER_EVENT, "honest" };
+	defw2_qpm_task_t task = { .cid = "honest-1", .outcome = "COMPLETED" };
+	defw2_event_sink_stats_t sink_stats;
+	defw2_event_sink_t *sink = NULL;
+	defw2_event_t event = { 0 };
+	const defw2_qpm_task_t *got;
 	defw2_config_t server_cfg, client_cfg;
 	defw2_rt_t *server_rt = NULL, *client_rt = NULL;
 	defw2_service_t *echo_svc = NULL, *qpm_svc = NULL;
@@ -531,6 +643,10 @@ static void hostile(void)
 				   DEFW2_PROVIDER_QPM_CONTROL, &qpm_svc) ==
 	      DEFW2_OK && defw2_qpm_control_bind(qpm_svc, &qpm_ops) ==
 	      DEFW2_OK);
+	check("and an event sink takes completions",
+	      defw2_event_sink_create(server_rt, DEFW2_PROVIDER_EVENT, NULL,
+				      &sink) == DEFW2_OK &&
+	      defw2_qpm_event_accept(sink) == DEFW2_OK);
 
 	/*
 	 * A Margo instance of its own, so the hostile registrations of the
@@ -541,9 +657,13 @@ static void hostile(void)
 	if (evil != MARGO_INSTANCE_NULL) {
 		attack(evil, defw2_address(server_rt), &echo_target);
 		attack(evil, defw2_address(server_rt), &qpm_target);
+		attack(evil, defw2_address(server_rt), &sink_target);
 	}
 	check("no service ran for any of them",
 	      __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 0);
+	defw2_event_sink_stats(sink, &sink_stats);
+	check("and the sink queued no event",
+	      sink_stats.received == 0 && sink_stats.waiting == 0);
 
 	memset(&client_cfg, 0, sizeof(client_cfg));
 	client_cfg.address = "na+sm://";
@@ -568,6 +688,21 @@ static void hostile(void)
 	defw2_buffer_free(&reply);
 	defw2_qpm_service_status_free(&status_out);
 	defw2_status_free(&status);
+
+	target.address = defw2_address(server_rt);
+	honest = client_rt != NULL &&
+		 defw2_event_publisher_create(client_rt, NULL, &publisher) ==
+		 DEFW2_OK &&
+		 defw2_qpm_publish_completion(publisher, &target, "completion",
+					      &task, NULL) == DEFW2_OK &&
+		 defw2_event_sink_next(sink, 10000, &event) == DEFW2_OK;
+	got = defw2_qpm_event_task(&event);
+	check("and an honest sender's event reaches the sink",
+	      honest && got != NULL && got->cid != NULL &&
+	      strcmp(got->cid, "honest-1") == 0);
+	defw2_event_free(&event);
+	defw2_event_publisher_destroy(publisher);
+	defw2_event_sink_destroy(sink);
 
 	defw2_binding_free(echo);
 	defw2_binding_free(control);
@@ -601,6 +736,7 @@ int main(void)
 	counted(proc, &m);
 	bulk(proc, &m);
 	partial(proc, &m);
+	events(proc, &m);
 
 	hg_proc_free(proc);
 	margo_finalize(mid);

@@ -127,8 +127,12 @@ MERCURY_GEN_PROC(defw2_qpm_reservation_out_t,
 	((hg_uint64_t)(expires_at_ns))
 	((defw2_text_t)(extra)))
 
-MERCURY_GEN_PROC(defw2_qpm_task_out_t,
-	((defw2_wire_status_t)(status))
+/*
+ * A task, as every execution method answers it and as a completion event
+ * carries it. Nesting it in the answer encodes the same bytes as listing
+ * its fields there, so the answer's wire did not change when it moved.
+ */
+MERCURY_GEN_PROC(defw2_qpm_wire_task_t,
 	((defw2_str_t)(outcome))
 	((defw2_str_t)(lifecycle_state))
 	((defw2_str_t)(cid))
@@ -139,6 +143,34 @@ MERCURY_GEN_PROC(defw2_qpm_task_out_t,
 	((hg_uint8_t)(completion_ready))
 	((defw2_wire_tensor_t)(statevector))
 	((defw2_text_t)(extra)))
+
+MERCURY_GEN_PROC(defw2_qpm_task_out_t,
+	((defw2_wire_status_t)(status))
+	((defw2_qpm_wire_task_t)(task)))
+
+/*
+ * Between a task and its wire form, for the answers and the event alike.
+ *
+ * defw2_qpm_task_fits says whether every string fits its field, so a
+ * service's mistake is caught before an encode would fail on it.
+ * defw2_qpm_task_to_wire points the wire form at the task's own strings, so
+ * the task must outlive the encode. defw2_qpm_task_from_wire copies the
+ * wire form into arena and describes the statevector without saying it was
+ * delivered, which only the caller of a result buffer can decide.
+ */
+bool defw2_qpm_task_fits(const defw2_qpm_task_t *task);
+void defw2_qpm_task_to_wire(const defw2_qpm_task_t *task,
+			    defw2_qpm_wire_task_t *w);
+defw2_rc_t defw2_qpm_task_from_wire(struct defw2_arena *arena,
+				    const defw2_qpm_wire_task_t *w,
+				    defw2_qpm_task_t *task);
+
+/*
+ * The completion event's kind, which carries a defw2_qpm_wire_task_t. Only
+ * the event code and the tests need it by name.
+ */
+struct defw2_event_kind;
+extern const struct defw2_event_kind defw2_qpm_completion_kind;
 
 /* --- the fourteen methods -------------------------------------------- */
 

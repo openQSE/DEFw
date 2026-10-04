@@ -387,28 +387,13 @@ static defw2_rc_t take_task(struct defw2_typed_call *call)
 	struct task_take *t = call->arg;
 	defw2_qpm_task_t *out = t->out;
 	struct defw2_arena *arena = answer_arena(&out->arena);
-	uint32_t i;
+	defw2_rc_t rc;
 
 	if (arena == NULL)
 		return DEFW2_ERR_NOMEM;
-	out->qtask_id = w->qtask_id;
-	out->reservation_id = w->reservation_id;
-	out->completion_ready = w->completion_ready != 0;
-	if (!copy_str(arena, w->outcome, &out->outcome) ||
-	    !copy_str(arena, w->lifecycle_state, &out->lifecycle_state) ||
-	    !copy_str(arena, w->cid, &out->cid) ||
-	    !copy_str(arena, w->reason, &out->reason) ||
-	    !copy_str(arena, w->message, &out->message) ||
-	    !copy_str(arena, w->extra, &out->extra))
-		return DEFW2_ERR_NOMEM;
-
-	out->statevector.dtype = w->statevector.dtype;
-	out->statevector.rank = w->statevector.rank;
-	for (i = 0; i < w->statevector.rank; i++)
-		out->statevector.shape[i] = w->statevector.shape[i];
-	out->statevector.nbytes = w->statevector.nbytes;
-	if (!w->statevector.delivered)
-		return DEFW2_OK;
+	rc = defw2_qpm_task_from_wire(arena, &w->task, out);
+	if (rc != DEFW2_OK || !w->task.statevector.delivered)
+		return rc;
 
 	/*
 	 * The service says the data is in the caller's buffer. Believe it

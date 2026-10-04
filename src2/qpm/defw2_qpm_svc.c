@@ -139,14 +139,7 @@ static bool reservation_to_wire(struct defw2_served *served,
 static bool task_to_wire(struct defw2_served *served,
 			 const defw2_qpm_task_t *a, defw2_qpm_task_out_t *w)
 {
-	uint32_t i;
-
-	if (!fits(a->outcome, DEFW2_STR_MAX) ||
-	    !fits(a->lifecycle_state, DEFW2_STR_MAX) ||
-	    !fits(a->cid, DEFW2_STR_MAX) ||
-	    !fits(a->reason, DEFW2_STR_MAX) ||
-	    !fits(a->message, DEFW2_STR_MAX) ||
-	    !fits(a->extra, DEFW2_EAGER_MAX))
+	if (!defw2_qpm_task_fits(a))
 		return too_long(served);
 	/* Checked again on the far side, but a service's own mistake is
 	 * better reported as one here. */
@@ -157,20 +150,7 @@ static bool task_to_wire(struct defw2_served *served,
 				  "dimensions");
 		return false;
 	}
-	w->outcome = a->outcome;
-	w->lifecycle_state = a->lifecycle_state;
-	w->cid = a->cid;
-	w->qtask_id = a->qtask_id;
-	w->reservation_id = a->reservation_id;
-	w->reason = a->reason;
-	w->message = a->message;
-	w->completion_ready = a->completion_ready ? 1 : 0;
-	w->statevector.dtype = a->statevector.dtype;
-	w->statevector.rank = a->statevector.rank;
-	for (i = 0; i < a->statevector.rank; i++)
-		w->statevector.shape[i] = a->statevector.shape[i];
-	w->statevector.nbytes = a->statevector.nbytes;
-	w->extra = a->extra;
+	defw2_qpm_task_to_wire(a, &w->task);
 	return true;
 }
 
@@ -211,8 +191,8 @@ static void deliver(struct defw2_served *served, const defw2_qpm_task_t *a,
 				  "its description");
 		return;
 	}
-	w->statevector.delivered = defw2_served_push(served, r->handle) ? 1
-									  : 0;
+	w->task.statevector.delivered =
+		defw2_served_push(served, r->handle) ? 1 : 0;
 }
 
 /* --- control --------------------------------------------------------- */

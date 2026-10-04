@@ -106,7 +106,8 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `host/` | The service host: identity, provider registration and the run loop |
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
 | `dir/`, `services/dirsvc/` | The directory: store, wire, service, client, agent and binding cache, and the `defw2-dirsvc` daemon |
-| `qpm/` | The QPM's control, admission and execution APIs: wire, client stubs and provider. Nothing outside this directory and `defw2_qpm.h` knows what a QPM is |
+| `qpm/` | The QPM's control, admission and execution APIs: wire, client stubs and provider, and its completion event. Nothing outside this directory and `defw2_qpm.h` knows what a QPM is |
+| `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
 | `bench/` | The benchmarks, and the v1 side of the comparison |
@@ -197,6 +198,59 @@ structure, and responds with no reply bytes, so nothing is encoded between
 C and Python in either direction. `defw2_qpm_smoke --serve` and
 `tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
 the C checks and the Python checks pass against both.
+
+## Events
+
+A service tells a caller that something happened through an event, so the
+caller need not poll. The caller creates a sink, which is a provider in its
+own process, so its runtime must be a server, and gives the service the
+sink's address, its provider and a tag of its own. The service sends events
+through a publisher.
+
+```c
+defw2_event_sink_opts_t opts = { .callback = on_event, .arg = me };
+
+defw2_event_sink_create(rt, DEFW2_PROVIDER_EVENT, &opts, &sink);
+defw2_qpm_event_accept(sink);
+```
+
+```c
+defw2_event_publisher_create(rt, NULL, &pub);
+rc = defw2_qpm_publish_completion(pub, &target, "completion", &task, tp);
+if (defw2_event_target_gone(rc))
+	drop_registration(&target);
+```
+
+Publishing copies the event and returns. The publisher delivers from an
+execution stream of its own: to every target at once, each target's events
+in order, each within a time limit, one second by default. A sink answers
+as soon as it has queued an event, before its callback or its reader sees
+it, so a slow consumer never holds up the service. A delivery that fails
+drops what waits for that target, and the next publish to it says the
+target is gone, so the service drops the registration. v1 delivered each
+event as a blocking call, one client after another, and one client decoding
+a large result held up the rest (openQSE/QFw#64).
+
+Delivery is at most once. A full sink, a full queue or a target that cannot
+be reached loses the event, and the service's own record, such as a
+completion queue, is how a caller recovers. `seq` counts one sender's
+events to one target from 1, so a gap shows a loss.
+
+A QPM's completion event carries the task record `read_cq` answers with,
+except the statevector, which it describes and never carries. A caller that
+wants the statevector lends `read_cq` or `peek_cq` a buffer of the size the
+description gives.
+
+One RPC, `defw2.event.deliver`, carries every API's events. Its request is
+an envelope naming the API and the event, then the payload as that API's
+own wire structure, decoded by that API's own checked proc. A sink decodes
+only the kinds its owner accepted, and refuses any other before allocating
+for it.
+
+`tests/defw2_event_smoke.c` stops a sink's process with SIGSTOP, which is
+the client #64 describes, and checks that every other sink still gets its
+events at once, that no publish waits on the network, and that the stalled
+delivery fails at its time limit.
 
 ## v1 code on v2
 
