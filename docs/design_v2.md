@@ -704,7 +704,7 @@ form `defw2.<api>.<method>`. The prototype types the hot path.
 | `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe` |
 | `qfw.qpm.control` | `is_ready`, `get_service_status` |
 | `qfw.qpm.admission` | `reserve`, `renew`, `release`, `cancel`, `get_reservation` |
-| `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit` |
+| `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit`, `register_event_notification` |
 | `qfw.echo` | `echo`, `echo_bulk`, used by the benchmarks |
 
 The execution request shows the shape. The public structures are plain C
@@ -924,6 +924,15 @@ sink's address, its provider identifier and a tag of its own in
 decides which events match them, as v1's QPM does, and sends each event
 through a publisher.
 
+`register_event_notification` is a typed QPM method. Its request carries
+the reservation and token every QPM call carries, the target, which is the
+sink's address and provider and the caller's tag, the caller's own type for
+the events, and `extra` for the rest, such as QFw's filters. It answers with
+a decision. The provider refuses a target with no address, or one on the
+directory's provider, before the service sees it. A registration lasts until
+a delivery to its sink fails, as v1's lasted until a `put` failed, so a
+caller ends one by destroying its sink. QFw has no call that ends one.
+
 A publisher copies the event and returns at once, so the service's own
 thread never waits on the network. It delivers from an execution stream it
 adds to Margo for itself: to every target at once, each target's events in
@@ -972,9 +981,12 @@ other before allocating anything for it, so a payload is as checked as any
 typed answer.
 
 For a C caller the callback runs on the sink's own thread, never on a Margo
-handler thread, so the caller may block. A Python caller takes events from
-the sink with `defw2_event_sink_next`, as a Python service takes calls from
-its queue.
+handler thread, so the caller may block. A Python caller takes events with
+`EventSink.next`, or by iterating the sink, which wait in
+`defw2_event_sink_next` with the interpreter lock released, as a Python
+service takes calls from its queue. A Python service publishes with
+`EventPublisher.publish`, which raises `TargetGone` when the registration
+should go.
 
 Until `defw2.compat` uses sinks, it gives a v1 caller its completion events
 by peeking the completion queue instead, as the Python section describes.
@@ -1129,9 +1141,9 @@ dictionary the v1 method returns into the typed answer. The module
 registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
 side, `defw.connect_to_binding` returns QFw's own API classes, such as
 `QPMExecution`, built on compat's `BaseRemote`. A call to one of the
-fourteen typed QPM methods goes over the typed APIs, with its arguments
-taken by the names the API class declares. Any other method fails, naming
-itself, until v2 types it. Phase 2 has no document tier.
+fourteen QPM methods typed in phase 2 goes over the typed APIs, with its
+arguments taken by the names the API class declares. Any other method
+fails, naming itself, until v2 types it. Phase 2 has no document tier.
 
 A v1 dictionary crosses the typed APIs unchanged. A value moves into a typed
 field only when the trip back gives the same value: a string that is not
@@ -1155,10 +1167,10 @@ naming it. Each call carries the caller's trace context from v1's
 `defw2_call_traceparent`, so QFw's own spans stay in one trace across the
 hop, as they did on v1.
 
-Three things v2 does not have yet are emulated, and the log says so.
-Completion events, which arrive with phase 3, are collected by peeking the
-completion queue for each task the process submitted after it registered,
-and put on the caller's own event queue. Peeking leaves the completion
+Three things are emulated, and the log says so. Completion events are
+collected by peeking the completion queue for each task the process
+submitted after it registered, and put on the caller's own event queue,
+until compat's clients serve sinks of their own. Peeking leaves the completion
 queued, as v1's push did. Directory events are accepted and not delivered,
 so a client notices a restarted service when it next resolves. And v1's
 directory records: registering keeps the v1 record's fields as JSON in a

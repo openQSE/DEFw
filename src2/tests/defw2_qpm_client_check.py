@@ -9,7 +9,9 @@ caller see the same QPM.
 	defw2_qpm_client_check.py ADDRESS
 
 It ends with the same calls from many threads at once, which is how a
-Python application calls, and which the binding has to allow.
+Python application calls, and which the binding has to allow, and then
+with completion events, taken from a sink in the client's own runtime,
+which is why that runtime is a server.
 """
 
 import sys
@@ -18,7 +20,14 @@ import threading
 import defw2
 from defw2._defw2 import lib
 
-from defw2_qpm_fake import BIG_EXTRA, fp_ctx, fp_reserve, fp_run, fp_task
+from defw2_qpm_fake import (
+	BIG_EXTRA,
+	fp_ctx,
+	fp_notify,
+	fp_reserve,
+	fp_run,
+	fp_task,
+)
 
 try:
 	import numpy
@@ -30,6 +39,12 @@ SV_COUNT = 1 << SV_QUBITS
 SV_BYTES = SV_COUNT * 16
 QASM = ('OPENQASM 2.0;\ninclude "qelib1.inc";\n'
 	'qreg q[2];\nh q[0];\ncx q[0],q[1];\n')
+QASM3 = 'OPENQASM 2.0;\nqreg q[3];\nh q[0];\n'
+EVENT_WAIT_MS = 10000
+
+# The W3C example, so the event's trace can be told from any other.
+TRACE_ID = '0af7651916cd43dd8448eb211c80319c'
+TRACEPARENT = '00-' + TRACE_ID + '-b7ad6b7169203331-01'
 
 failures = []
 
@@ -56,13 +71,13 @@ class Values:
 		self.__dict__.update(values)
 
 
-def sv_ok(data):
+def sv_ok(data, count=SV_COUNT):
 	if numpy is not None:
-		expect = numpy.arange(SV_COUNT, dtype=numpy.float64) * (1 - 1j)
-		return data.shape == (SV_COUNT,) and bool((data == expect).all())
+		expect = numpy.arange(count, dtype=numpy.float64) * (1 - 1j)
+		return data.shape == (count,) and bool((data == expect).all())
 	import struct
 	return all(struct.unpack_from('<dd', data, 16 * k) == (k, -k)
-		   for k in range(0, SV_COUNT, 997))
+		   for k in range(0, count, 997 if count > 997 else 1))
 
 
 def control_checks(qpm):
@@ -250,16 +265,108 @@ def threaded_checks(qpm, threads=8, calls=50):
 		print('  ' + errors[0])
 
 
+def event_checks(rt, qpm):
+	"""Completion events. Two registrations of one sink, told apart by
+	their tags, for reservation 7002. A run under 7001 goes first, so an
+	event for it would arrive ahead of the 7002 run's on each tag."""
+	sink = defw2.EventSink(rt)
+	check('a listening client serves a sink for completions',
+	      sink.address == rt.address and
+	      sink.provider_id == defw2.PROVIDER_EVENT)
+
+	notify = dict(type='circuit-result', tag='py-tag', reservation_id=7002,
+		      token='tok-ev', extra='{"filters":{"user":"doug"}}')
+	decision = qpm.register_event_notification(sink, **notify)
+	check('register_event_notification is accepted',
+	      decision.decision == 'accepted' and
+	      decision.reservation_id == 7002)
+	expect = fp_notify(Values(
+		reservation_id=7002, token='tok-ev',
+		target=sink.target('py-tag'), type='circuit-result',
+		extra_json=notify['extra']))
+	check('every registration field arrived', decision.extra_json == expect)
+	decision = qpm.register_event_notification(
+		sink, type='other', tag='py-other', reservation_id=7002,
+		token='tok-ev')
+	check('and the same sink again under another tag',
+	      decision.decision == 'accepted')
+
+	run = dict(circuit_format='openqasm2', num_qubits=3, num_shots=64,
+		   return_statevector=True)
+	first = qpm.async_run(QASM3, reservation_id=7001, **run)
+	check('a run under another reservation is accepted',
+	      first.outcome == 'ACCEPTED')
+	task = qpm.async_run(QASM3, reservation_id=7002,
+			     traceparent=TRACEPARENT, **run)
+	check('and so is one under the registered reservation',
+	      task.cid is not None)
+
+	events = [sink.next(timeout_ms=EVENT_WAIT_MS) for _ in range(2)]
+	tagged = {event.tag: event for event in events if event is not None}
+	mine = tagged.get('py-tag')
+	other = tagged.get('py-other')
+	check('its completion reaches the sink once per registration',
+	      mine is not None and other is not None)
+	check("and the other reservation's never does",
+	      mine is not None and mine.seq == 1 and other is not None and
+	      other.seq == 1 and sink.next(timeout_ms=250) is None)
+	check('each event says what it is and whose it is',
+	      mine is not None and mine.api == defw2.API_QPM_EXECUTION and
+	      mine.name == 'completion' and mine.type == 'circuit-result' and
+	      bool(mine.source) and other is not None and
+	      other.type == 'other')
+
+	got = mine.payload if mine is not None else None
+	expect = fp_run(Values(reservation_id=7002, token=None,
+			       circuit=QASM3.encode(), compiler=None,
+			       run_timeout_ms=None, cancel_on_timeout=False,
+			       extra_json=None, **run))
+	check('it carries the task read_cq answers with',
+	      isinstance(got, defw2.Task) and got.outcome == 'COMPLETED' and
+	      got.lifecycle_state == 'completed' and got.cid == task.cid and
+	      got.qtask_id == task.qtask_id and got.reservation_id == 7002 and
+	      got.completion_ready and got.reason is None and
+	      got.message is None and got.extra_json == expect)
+	check('and describes its statevector without carrying it',
+	      got is not None and not got.statevector_delivered and
+	      got.statevector_data is None and
+	      got.statevector.dtype == defw2.DTYPE['c128'] and
+	      got.statevector.shape == (8,) and got.statevector.nbytes == 128)
+	check("the event joins the run's trace",
+	      mine is not None and mine.traceparent is not None and
+	      len(mine.traceparent) == len(TRACEPARENT) and
+	      mine.traceparent[3:3 + len(TRACE_ID)] == TRACE_ID)
+
+	# What the event described is what a collecting read needs.
+	done = qpm.read_cq(cid=task.cid, reservation_id=7002,
+			   result=got.statevector.nbytes if got else 0)
+	check('read_cq into a buffer of the size it gave collects it',
+	      done.statevector_delivered and
+	      sv_ok(done.statevector_data, 8))
+
+	check('a registration that names no sink is refused',
+	      raises('invalid-argument', qpm.register_event_notification,
+		     defw2.EventTarget(None), reservation_id=7002) is not None)
+	check("and so is one on the directory's provider",
+	      raises('invalid-argument', qpm.register_event_notification,
+		     defw2.EventTarget(sink.address, 0),
+		     reservation_id=7002) is not None)
+
+	# The service hears it is gone on its next completion for 7002.
+	sink.close()
+
+
 def main(argv):
 	if len(argv) != 1:
 		raise SystemExit('usage: defw2_qpm_client_check.py ADDRESS')
 	address = argv[0]
-	with defw2.Runtime(node_name='qpm-py-client') as rt:
+	with defw2.Runtime(role='server', node_name='qpm-py-client') as rt:
 		with defw2.QPM(rt, address) as qpm:
 			control_checks(qpm)
 			admission_checks(qpm)
 			execution_checks(qpm)
 			threaded_checks(qpm)
+			event_checks(rt, qpm)
 
 		# A QPM method on another API's provider: Mercury refuses it
 		# before any handler runs, so it is the transport that says.

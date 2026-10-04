@@ -1,7 +1,7 @@
 /*
  * The QPM wire. Shared inside libdefw2 and not installed.
  *
- * Six request shapes and four answers cover the fourteen methods, which is
+ * Seven request shapes and four answers cover the fifteen methods, which is
  * the same grouping the public header uses: a method's request says what it
  * acts on and its answer says what kind of thing came back. Every string is
  * a checked one, every document is checked text, the circuit is counted
@@ -95,6 +95,16 @@ MERCURY_GEN_PROC(defw2_qpm_task_in_t,
 	((defw2_str_t)(reason))
 	((defw2_wire_result_t)(result)))
 
+/* register_event_notification: the target's three fields, flattened. */
+MERCURY_GEN_PROC(defw2_qpm_notify_in_t,
+	((defw2_hdr_t)(hdr))
+	((defw2_qpm_wire_ctx_t)(ctx))
+	((defw2_str_t)(address))
+	((hg_uint16_t)(provider_id))
+	((defw2_str_t)(tag))
+	((defw2_str_t)(type))
+	((defw2_text_t)(extra)))
+
 /* --- answers --------------------------------------------------------- */
 
 MERCURY_GEN_PROC(defw2_qpm_status_out_t,
@@ -172,7 +182,7 @@ defw2_rc_t defw2_qpm_task_from_wire(struct defw2_arena *arena,
 struct defw2_event_kind;
 extern const struct defw2_event_kind defw2_qpm_completion_kind;
 
-/* --- the fourteen methods -------------------------------------------- */
+/* --- the fifteen methods --------------------------------------------- */
 
 #define DEFW2_QPM_METHOD(var, api, name, in_t, out_t)			\
 	static const struct defw2_method var = {			\
@@ -212,5 +222,8 @@ DEFW2_QPM_METHOD(defw2_qpm_m_cancel_task, DEFW2_API_QPM_EXECUTION,
 		 cancel_task, defw2_qpm_task_in_t, defw2_qpm_task_out_t);
 DEFW2_QPM_METHOD(defw2_qpm_m_delete_circuit, DEFW2_API_QPM_EXECUTION,
 		 delete_circuit, defw2_qpm_task_in_t, defw2_qpm_task_out_t);
+DEFW2_QPM_METHOD(defw2_qpm_m_register_event_notification,
+		 DEFW2_API_QPM_EXECUTION, register_event_notification,
+		 defw2_qpm_notify_in_t, defw2_qpm_decision_out_t);
 
 #endif /* DEFW2_QPM_WIRE_H */
