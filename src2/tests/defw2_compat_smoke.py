@@ -15,9 +15,12 @@ defw2-dirsvc. tests/compat/svc_v1_qpm, a v1 QPM service module written
 against v1 alone, is served by defw2-python --serve. defw2_compat_client.py
 runs under defw2-python and calls it the way QFw's client code does,
 comparing every answer with v1's. Then the service is told to stop, and
-must leave cleanly and leave the directory. Last, a directory of its own
+must leave cleanly and leave the directory. Then a directory of its own
 stops answering under defw2_compat_watch.py, a v1 process that follows it
 by its peer events, and must be lost within the watch's time limit.
+
+Last, in this process again, compat must stop its events before what their
+threads use when it closes, whatever order they were made in.
 
 	defw2_compat_smoke.py --dirsvc PATH --launcher PATH
 """
@@ -431,6 +434,35 @@ def directory_stops(dirsvc_binary, launcher):
 	dirsvc.stop()
 
 
+def close_order_checks():
+	"""compat's events must stop before the remote QPMs and the directory
+	their threads use, even when the events came first, as they do under
+	QFw's lifecycle binding. This closes compat in this process, so it
+	runs last."""
+	from defw2.compat import _events, _state
+
+	order = []
+
+	class Events:
+		def __init__(self, runtime):
+			pass
+
+		def close(self):
+			order.append('events')
+
+	hub, runtime = _events.Hub, _state.runtime
+	_events.Hub = Events
+	_state.runtime = lambda: None
+	try:
+		_state.events()
+		_state.on_close(lambda: order.append('a remote QPM'))
+		_state.close()
+	finally:
+		_events.Hub, _state.runtime = hub, runtime
+	check('compat stops its events before a remote QPM made after them',
+	      order == ['events', 'a remote QPM'], order)
+
+
 def main(argv):
 	parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 	parser.add_argument('--dirsvc', required=True)
@@ -442,6 +474,7 @@ def main(argv):
 	watch_checks()
 	end_to_end(args.dirsvc, args.launcher)
 	directory_stops(args.dirsvc, args.launcher)
+	close_order_checks()
 
 	print('COMPAT SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

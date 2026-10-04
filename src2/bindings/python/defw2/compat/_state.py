@@ -87,13 +87,13 @@ def on_close(closer):
 
 def events():
 	"""This process's sink and the threads that serve it, made on first
-	use."""
+	use. close() stops them before anything else, whenever they were
+	made."""
 	global _events
 	with lock:
 		if _events is None:
 			from ._events import Hub
 			_events = Hub(runtime())
-			on_close(_events.close)
 		return _events
 
 
@@ -166,7 +166,12 @@ def endpoint():
 
 
 def close():
-	"""Shut everything down, once."""
+	"""Shut everything down, once.
+
+	The events go first, even when they were made before the rest, as
+	QFw's lifecycle binding makes them. Their threads fetch statevectors
+	from remote QPMs and ask the directory which runtime it is, so they
+	must stop before those close. The rest close last in, first out."""
 	global _runtime, _directory, _events, _publisher, _closed, host
 	with lock:
 		if _closed:
@@ -174,7 +179,13 @@ def close():
 		_closed = True
 		closers = list(reversed(_closers))
 		_closers.clear()
+		events = _events
 	stopping.set()
+	if events is not None:
+		try:
+			events.close()
+		except Exception:  # noqa: BLE001
+			log.exception('closing the events')
 	for closer in closers:
 		try:
 			closer()
