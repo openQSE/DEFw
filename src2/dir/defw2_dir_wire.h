@@ -27,6 +27,8 @@
 
 #include <defw2/defw2_dir.h>
 
+#include "defw2_dir_internal.h"
+#include "../rpc/defw2_typed.h"
 #include "../rpc/defw2_wire.h"
 
 /*
@@ -428,5 +430,62 @@ MERCURY_GEN_PROC(defw2_dir_generation_out_t,
 #define DEFW2_RPC_DIR_RESOLVE		"defw2.qfw.directory.resolve_services"
 #define DEFW2_RPC_DIR_QUERY		"defw2.qfw.directory.query_directory"
 #define DEFW2_RPC_DIR_GENERATION	"defw2.qfw.directory.get_generation"
+
+/*
+ * Rebuild a record and its selected binding into an arena, for a resolve's
+ * answer and for an event alike. Everything is copied, so the entry outlives
+ * the decoded buffers it came from. False when an allocation failed, and the
+ * arena then holds a partial entry that goes when it does.
+ */
+bool defw2_dir_entry_from_wire(defw2_dir_arena_t *arena,
+			       const defw2_wire_record_t *wire,
+			       uint32_t selected, defw2_dir_entry_t *entry);
+
+/* --- events ---------------------------------------------------------- */
+
+/*
+ * subscribe and unsubscribe postdate the six methods above and take the
+ * typed path every API since has taken, through defw2_typed.h. They are the
+ * directory's own, so they speak the directory's version.
+ */
+
+/* subscribe: the target's three fields, flattened, and what to hear of. */
+MERCURY_GEN_PROC(defw2_dir_subscribe_in_t,
+	((defw2_hdr_t)(hdr))
+	((defw2_str_t)(address))
+	((hg_uint16_t)(provider_id))
+	((defw2_str_t)(tag))
+	((defw2_str_t)(service_id))
+	((defw2_str_t)(service_type))
+	((hg_uint32_t)(changes)))
+
+MERCURY_GEN_PROC(defw2_dir_subscribe_out_t,
+	((defw2_wire_status_t)(status))
+	((hg_uint64_t)(subscription_id)))
+
+MERCURY_GEN_PROC(defw2_dir_unsubscribe_in_t,
+	((defw2_hdr_t)(hdr))
+	((hg_uint64_t)(subscription_id)))
+
+/* A directory event's payload: which way the record went, why, and it. */
+MERCURY_GEN_PROC(defw2_dir_wire_change_t,
+	((hg_uint8_t)(connected))
+	((defw2_str_t)(reason))
+	((defw2_wire_record_t)(record)))
+
+#define DEFW2_DIR_METHOD(var, name, in_t, out_t)			\
+	static const struct defw2_method var = {			\
+		DEFW2_API_DIR, #name, "defw2." DEFW2_API_DIR "." #name,	\
+		DEFW2_API_VERSION, hg_proc_##in_t, hg_proc_##out_t,	\
+	}
+
+DEFW2_DIR_METHOD(defw2_dir_m_subscribe, subscribe,
+		 defw2_dir_subscribe_in_t, defw2_dir_subscribe_out_t);
+DEFW2_DIR_METHOD(defw2_dir_m_unsubscribe, unsubscribe,
+		 defw2_dir_unsubscribe_in_t, defw2_dir_lease_out_t);
+
+/* The event's kind, which carries a defw2_dir_wire_change_t. */
+struct defw2_event_kind;
+extern const struct defw2_event_kind defw2_dir_change_kind;
 
 #endif /* DEFW2_DIR_WIRE_H */

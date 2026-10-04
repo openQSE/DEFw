@@ -344,12 +344,11 @@ defw2_rc_t defw2_dir_deregister(defw2_dir_t *dir, const char *service_id,
 /*
  * Rebuild one record into the caller's arena. Everything is copied out of
  * Mercury's decoded buffers, because those go back at margo_free_output and
- * the result has to outlive the call.
+ * the result has to outlive the call. A sink's event is rebuilt the same way.
  */
-static bool record_from_wire_arena(defw2_dir_arena_t *arena,
-				   const defw2_wire_record_t *wire,
-				   uint32_t selected,
-				   defw2_dir_entry_t *entry)
+bool defw2_dir_entry_from_wire(defw2_dir_arena_t *arena,
+			       const defw2_wire_record_t *wire,
+			       uint32_t selected, defw2_dir_entry_t *entry)
 {
 	defw2_dir_record_t *out = &entry->record;
 	hg_uint32_t i;
@@ -554,9 +553,10 @@ static defw2_rc_t resolve_call(defw2_dir_t *dir, const char *rpc_name,
 			uint32_t selected = i < out.selected.count ?
 				out.selected.items[i] : DEFW2_DIR_NO_BINDING;
 
-			if (!record_from_wire_arena(arena,
-						    &out.records.items[i],
-						    selected, &entries[i])) {
+			if (!defw2_dir_entry_from_wire(arena,
+						       &out.records.items[i],
+						       selected,
+						       &entries[i])) {
 				rc = DEFW2_ERR_NOMEM;
 				goto decoded;
 			}
@@ -657,4 +657,73 @@ out:
 	trace_finish(dir->rt, &trace, "get_generation", rc, status);
 	margo_destroy(handle);
 	return rc;
+}
+
+/* --- subscribe and unsubscribe --------------------------------------- */
+
+static defw2_rc_t take_subscription(struct defw2_typed_call *call)
+{
+	defw2_dir_subscribe_out_t *w = call->out;
+	uint64_t *subscription_id = call->arg;
+
+	if (subscription_id != NULL)
+		*subscription_id = w->subscription_id;
+	return DEFW2_OK;
+}
+
+defw2_rc_t defw2_dir_subscribe(defw2_dir_t *dir,
+			       const defw2_dir_subscribe_req_t *req,
+			       const defw2_call_opts_t *opts,
+			       uint64_t *subscription_id,
+			       defw2_status_t *status)
+{
+	struct defw2_typed_call call;
+	defw2_dir_subscribe_out_t out;
+	defw2_dir_subscribe_in_t in;
+
+	if (dir == NULL || req == NULL)
+		return DEFW2_ERR_INVALID;
+	if (subscription_id != NULL)
+		*subscription_id = 0;
+	memset(&in, 0, sizeof(in));
+	in.address = dir_str_out(req->target.address);
+	in.provider_id = req->target.provider_id;
+	in.tag = dir_str_out(req->target.tag);
+	in.service_id = dir_str_out(req->service_id);
+	in.service_type = dir_str_out(req->service_type);
+	in.changes = req->changes;
+
+	memset(&call, 0, sizeof(call));
+	call.binding = dir->binding;
+	call.method = &defw2_dir_m_subscribe;
+	call.opts = opts;
+	call.in = &in;
+	call.out = &out;
+	call.out_size = sizeof(out);
+	call.take = take_subscription;
+	call.arg = subscription_id;
+	return defw2_typed_call(&call, status);
+}
+
+defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
+				 const defw2_call_opts_t *opts,
+				 defw2_status_t *status)
+{
+	struct defw2_typed_call call;
+	defw2_dir_unsubscribe_in_t in;
+	defw2_dir_lease_out_t out;
+
+	if (dir == NULL)
+		return DEFW2_ERR_INVALID;
+	memset(&in, 0, sizeof(in));
+	in.subscription_id = subscription_id;
+
+	memset(&call, 0, sizeof(call));
+	call.binding = dir->binding;
+	call.method = &defw2_dir_m_unsubscribe;
+	call.opts = opts;
+	call.in = &in;
+	call.out = &out;
+	call.out_size = sizeof(out);
+	return defw2_typed_call(&call, status);
 }

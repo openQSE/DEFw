@@ -32,6 +32,7 @@ add_library(defw2 SHARED
 	dir/defw2_dir_client.c
 	dir/defw2_dir_agent.c
 	dir/defw2_dir_cache.c
+	dir/defw2_dir_event.c
 	services/echo/defw2_echo_svc.c
 	qpm/defw2_qpm_client.c
 	qpm/defw2_qpm_event.c
@@ -213,6 +214,11 @@ if(BUILD_TESTING)
 	target_link_libraries(defw2_dir_cache_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_dir_cache_smoke COMMAND defw2_dir_cache_smoke)
 
+	# A directory and a subscriber whose sinks take its events.
+	add_executable(defw2_dir_event_smoke tests/defw2_dir_event_smoke.c)
+	target_link_libraries(defw2_dir_event_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_dir_event_smoke COMMAND defw2_dir_event_smoke)
+
 	# One runtime that both serves an API and calls it. Guards the
 	# registration collision that silently unbound a provider.
 	# The QPM test profiles into a directory of its own, which the OTLP
@@ -251,6 +257,7 @@ if(BUILD_TESTING)
 			${CMAKE_CURRENT_SOURCE_DIR}/telemetry
 			${CMAKE_CURRENT_SOURCE_DIR}/host
 			${CMAKE_CURRENT_SOURCE_DIR}/qpm
+			${CMAKE_CURRENT_SOURCE_DIR}/dir
 			${CMAKE_CURRENT_SOURCE_DIR}/event)
 	target_link_libraries(defw2_wire_smoke
 		PRIVATE defw2 PkgConfig::ARGOBOTS Threads::Threads)

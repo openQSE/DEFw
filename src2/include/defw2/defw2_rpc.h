@@ -43,9 +43,13 @@ extern "C" {
  * 0.2 moved every string to an explicit length with a checked terminator.
  * The version lives inside the header that changed, so a 0.1 peer meets a
  * 0.2 one as a request that will not decode rather than as a mismatch.
+ *
+ * 0.3 added the directory's subscribe and unsubscribe. A 0.2 directory
+ * never registered them, so a caller meets one as a method that is not
+ * found.
  */
 #define DEFW2_API_VERSION_MAJOR	0
-#define DEFW2_API_VERSION_MINOR	2
+#define DEFW2_API_VERSION_MINOR	3
 #define DEFW2_API_VERSION	(((uint32_t)DEFW2_API_VERSION_MAJOR << 16) | \
 				 (uint32_t)DEFW2_API_VERSION_MINOR)
 
