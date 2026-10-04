@@ -147,6 +147,56 @@ uint64_t defw2_call_result_capacity(const defw2_call_t *call);
 const char *defw2_call_traceparent(const defw2_call_t *call);
 
 /*
+ * Events, declared in full for the reason the QPM APIs below are. A Python
+ * sink never has a callback: Python takes events with next.
+ */
+#define DEFW2_PROVIDER_EVENT ...
+typedef struct {
+	const char *address; uint16_t provider_id; const char *tag;
+} defw2_event_target_t;
+typedef struct {
+	const char *api; const char *name; const char *type; const char *tag;
+	const char *source; uint64_t seq; const char *traceparent;
+	const void *payload; void *arena;
+} defw2_event_t;
+typedef struct defw2_event_sink defw2_event_sink_t;
+typedef struct defw2_event_publisher defw2_event_publisher_t;
+typedef void (*defw2_event_cb_t)(const defw2_event_t *event, void *arg);
+typedef struct {
+	defw2_event_cb_t callback; void *arg; unsigned depth;
+	uint64_t max_bytes;
+} defw2_event_sink_opts_t;
+typedef struct {
+	uint64_t received; uint64_t refused; uint64_t waiting;
+} defw2_event_sink_stats_t;
+typedef struct {
+	uint32_t timeout_ms; unsigned depth; uint64_t max_bytes;
+} defw2_event_publisher_opts_t;
+typedef struct {
+	uint64_t published; uint64_t delivered; uint64_t refused;
+	uint64_t failed; uint64_t dropped; uint64_t waiting; uint32_t targets;
+} defw2_event_publisher_stats_t;
+
+void defw2_event_free(defw2_event_t *event);
+defw2_rc_t defw2_event_sink_create(defw2_rt_t *rt, uint16_t provider_id,
+				   const defw2_event_sink_opts_t *opts,
+				   defw2_event_sink_t **sink);
+void defw2_event_sink_destroy(defw2_event_sink_t *sink);
+defw2_rc_t defw2_event_sink_next(defw2_event_sink_t *sink,
+				 uint32_t timeout_ms, defw2_event_t *event);
+const char *defw2_event_sink_address(const defw2_event_sink_t *sink);
+uint16_t defw2_event_sink_provider_id(const defw2_event_sink_t *sink);
+void defw2_event_sink_stats(defw2_event_sink_t *sink,
+			    defw2_event_sink_stats_t *stats);
+defw2_rc_t defw2_event_publisher_create(defw2_rt_t *rt,
+					const defw2_event_publisher_opts_t *opts,
+					defw2_event_publisher_t **pub);
+void defw2_event_publisher_destroy(defw2_event_publisher_t *pub);
+bool defw2_event_target_gone(defw2_rc_t rc);
+void defw2_event_publisher_stats(defw2_event_publisher_t *pub,
+				 defw2_event_publisher_stats_t *stats);
+
+/*
  * The QPM APIs. Declared in full rather than with "...", so the compile
  * checks every field's type and offset against defw2_qpm.h and a drifted
  * header is a build error here rather than a corrupted call.
@@ -284,6 +334,13 @@ defw2_rc_t defw2_qpm_delete_circuit(defw2_binding_t *qpm,
 				    const defw2_call_opts_t *opts,
 				    defw2_qpm_task_t *out,
 				    defw2_status_t *status);
+defw2_rc_t defw2_qpm_event_accept(defw2_event_sink_t *sink);
+defw2_rc_t defw2_qpm_publish_completion(defw2_event_publisher_t *pub,
+					const defw2_event_target_t *target,
+					const char *type,
+					const defw2_qpm_task_t *task,
+					const char *traceparent);
+const defw2_qpm_task_t *defw2_qpm_event_task(const defw2_event_t *event);
 defw2_rc_t defw2_qpm_control_bind(defw2_service_t *svc, const void *ops);
 defw2_rc_t defw2_qpm_admission_bind(defw2_service_t *svc, const void *ops);
 defw2_rc_t defw2_qpm_execution_bind(defw2_service_t *svc, const void *ops);
@@ -384,6 +441,7 @@ SOURCE = """
 #include <defw2/defw2_bulk.h>
 #include <defw2/defw2_dir.h>
 #include <defw2/defw2_echo.h>
+#include <defw2/defw2_event.h>
 #include <defw2/defw2_qpm.h>
 #include <defw2/defw2_telemetry.h>
 """
