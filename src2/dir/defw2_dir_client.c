@@ -727,3 +727,51 @@ defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
 	call.out_size = sizeof(out);
 	return defw2_typed_call(&call, status);
 }
+
+/* --- get_runtime_id -------------------------------------------------- */
+
+struct runtime_id_take {
+	char	*runtime_id;
+	size_t	len;
+};
+
+static defw2_rc_t take_runtime_id(struct defw2_typed_call *call)
+{
+	defw2_dir_runtime_id_out_t *w = call->out;
+	struct runtime_id_take *t = call->arg;
+
+	/* A failure carries no id, and its status says why. */
+	if (w->runtime_id == NULL)
+		return DEFW2_OK;
+	if (strlen(w->runtime_id) >= t->len)
+		return DEFW2_ERR_INVALID;
+	strcpy(t->runtime_id, w->runtime_id);
+	return DEFW2_OK;
+}
+
+defw2_rc_t defw2_dir_runtime_id(defw2_dir_t *dir,
+				const defw2_call_opts_t *opts,
+				char *runtime_id, size_t len,
+				defw2_status_t *status)
+{
+	struct runtime_id_take t = { runtime_id, len };
+	struct defw2_typed_call call;
+	defw2_dir_runtime_id_out_t out;
+	defw2_dir_runtime_id_in_t in;
+
+	if (dir == NULL || runtime_id == NULL || len == 0)
+		return DEFW2_ERR_INVALID;
+	runtime_id[0] = '\0';
+	memset(&in, 0, sizeof(in));
+
+	memset(&call, 0, sizeof(call));
+	call.binding = dir->binding;
+	call.method = &defw2_dir_m_get_runtime_id;
+	call.opts = opts;
+	call.in = &in;
+	call.out = &out;
+	call.out_size = sizeof(out);
+	call.take = take_runtime_id;
+	call.arg = &t;
+	return defw2_typed_call(&call, status);
+}

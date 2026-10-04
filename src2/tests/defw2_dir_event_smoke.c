@@ -16,7 +16,8 @@
  * - a subscription whose sink is gone is dropped, without holding up a live
  *   one;
  * - a subscription that names no sink, or the directory's provider, is
- *   refused.
+ *   refused;
+ * - the directory says which runtime it is, the one its events come from.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -276,6 +277,18 @@ int main(void)
 	check("a directory and a subscriber start", start(&w));
 	if (failures != 0)
 		return EXIT_FAILURE;
+	{
+		char id[DEFW2_DIR_RUNTIME_ID_LEN];
+
+		check("the directory says which runtime it is",
+		      defw2_dir_runtime_id(w.dir, &opts, id, sizeof(id),
+					   &status) == DEFW2_OK &&
+		      status.code == DEFW2_OK &&
+		      eq(id, defw2_runtime_id(w.dir_rt)));
+		check("and refuses a buffer too small for it",
+		      defw2_dir_runtime_id(w.dir, &opts, id, 8, &status) ==
+		      DEFW2_ERR_INVALID);
+	}
 
 	all = sink_on(&w, 5);
 	only_a = sink_on(&w, 6);

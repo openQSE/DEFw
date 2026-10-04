@@ -404,6 +404,7 @@ typedef struct defw2_dir_agent defw2_dir_agent_t;
 
 #define DEFW2_DIR_CONNECTED ...
 #define DEFW2_DIR_DISCONNECTED ...
+#define DEFW2_DIR_RUNTIME_ID_LEN ...
 typedef struct {
 	defw2_event_target_t target; const char *service_id;
 	const char *service_type; uint32_t changes;
@@ -443,6 +444,10 @@ defw2_rc_t defw2_dir_subscribe(defw2_dir_t *dir,
 defw2_rc_t defw2_dir_unsubscribe(defw2_dir_t *dir, uint64_t subscription_id,
 				 const defw2_call_opts_t *opts,
 				 defw2_status_t *status);
+defw2_rc_t defw2_dir_runtime_id(defw2_dir_t *dir,
+				const defw2_call_opts_t *opts,
+				char *runtime_id, size_t len,
+				defw2_status_t *status);
 defw2_rc_t defw2_dir_event_accept(defw2_event_sink_t *sink);
 const defw2_dir_change_t *defw2_dir_event_change(const defw2_event_t *event);
 const char *defw2_dirsvc(const defw2_rt_t *rt);
