@@ -562,6 +562,7 @@ there, and adding one needs no DEFw release.
 | `get_generation` | Clients and services | Current generation for a `service_id`. |
 | `subscribe` | Clients, optional | Registers an event sink for record changes, so a client hears of a restarted service without polling. The directory sends `SERVICE_CONNECTED` when a matching record becomes `UP` and `SERVICE_DISCONNECTED` when it stops being `UP`, each with its reason and the record, in the order it records them. Narrows by `service_id` and `service_type`. Lasts until `unsubscribe` or until a delivery to the sink fails. |
 | `unsubscribe` | Clients | Ends a subscription. |
+| `get_runtime_id` | Clients that subscribe | The directory's own runtime ID, which is new each time it starts and is every directory event's source. A client that asks now and then sees a restart, after which its subscriptions are gone. |
 
 ### Liveness
 
@@ -702,7 +703,7 @@ form `defw2.<api>.<method>`. The prototype types the hot path.
 
 | API | Methods typed in the prototype |
 | --- | --- |
-| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe`, `unsubscribe` |
+| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe`, `unsubscribe`, `get_runtime_id` |
 | `qfw.qpm.control` | `is_ready`, `get_service_status` |
 | `qfw.qpm.admission` | `reserve`, `renew`, `release`, `cancel`, `get_reservation` |
 | `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit`, `register_event_notification` |
@@ -1005,10 +1006,15 @@ service takes calls from its queue. A Python service publishes with
 `EventPublisher.publish`, which raises `TargetGone` when the registration
 should go.
 
-Until `defw2.compat` uses sinks, it gives a v1 caller its completion events
-by peeking the completion queue instead, as the Python section describes.
-The pull path is the same one the push path falls back to, so nothing a v1
-caller sees changes when push arrives.
+`defw2.compat` gives v1 code these events unchanged, as the Python section
+describes. Every compat process listens and serves one sink. A v1 QPM keeps
+a client's registration as the event object it makes from the endpoint the
+client gave, which is that sink, and its `put` publishes the completion and
+returns at once. So QFw's QPM, which calls `put` on each client in turn,
+stops waiting on any of them without a line of it changing, which is the
+fix #64 asks for. Delivery is at most once, so a slow sweep of each
+client's own tasks peeks for any completion whose event never came, and the
+completion queue really is the fallback.
 
 ## Language Bindings
 
@@ -1158,9 +1164,9 @@ dictionary the v1 method returns into the typed answer. The module
 registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
 side, `defw.connect_to_binding` returns QFw's own API classes, such as
 `QPMExecution`, built on compat's `BaseRemote`. A call to one of the
-fourteen QPM methods typed in phase 2 goes over the typed APIs, with its
-arguments taken by the names the API class declares. Any other method
-fails, naming itself, until v2 types it. Phase 2 has no document tier.
+fifteen typed QPM methods goes over the typed APIs, with its arguments
+taken by the names the API class declares. Any other method fails, naming
+itself, until v2 types it. There is no document tier yet.
 
 A v1 dictionary crosses the typed APIs unchanged. A value moves into a typed
 field only when the trip back gives the same value: a string that is not
@@ -1184,16 +1190,29 @@ naming it. Each call carries the caller's trace context from v1's
 `defw2_call_traceparent`, so QFw's own spans stay in one trace across the
 hop, as they did on v1.
 
-Three things are emulated, and the log says so. Completion events are
-collected by peeking the completion queue for each task the process
-submitted after it registered, and put on the caller's own event queue,
-until compat's clients serve sinks of their own. Peeking leaves the completion
-queued, as v1's push did. Directory events are accepted and not delivered,
-so a client notices a restarted service when it next resolves. And v1's
-directory records: registering keeps the v1 record's fields as JSON in a
-`v1_record` property, beside the typed selector and string properties a v2
-client resolves by, and `resolve_services` rebuilds the v1 record from it
-and matches with v1's rules.
+v1's events are v2's. Every compat process listens, as every v1 process
+did, and binds its host's name unless its environment names an address, so
+a QPM on another node can reach it. A v1 client's
+`register_event_notification` registers the process's one sink with the
+QPM, under the caller's `class_id` as its tag and its event type as JSON,
+so the type reaches QFw's QPM as itself. A completion arrives as v1's
+`Event` on the caller's own queue. Its statevector is fetched from the
+completion queue first, since v1's event carried it, which leaves the
+completion queued, as v1's push did. A slow sweep, every five seconds by
+default, recovers a completion whose event was lost, and a completion that
+both find reaches the queue once. Directory events arrive the same way, as
+v1's dictionaries, with the v1 record when a service connects.
+
+Two things are emulated. v1 told a process when its link to the directory
+came and went, and QFw's lifecycle binding follows a restarted directory by
+those peer events. v2 has no links, so compat asks the directory for its
+runtime ID every two seconds while something listens, and makes
+`PEER_LOST` when it stops answering or is another runtime and `PEER_READY`
+when it answers again. And v1's directory records: registering keeps the
+v1 record's fields as JSON in a `v1_record` property, beside the typed
+selector and string properties a v2 client resolves by, and
+`resolve_services` rebuilds the v1 record from it and matches with v1's
+rules.
 
 The differences that remain are JSON's. A tuple arrives as a list, a key
 that is not a string arrives as a string, and a value JSON cannot carry
