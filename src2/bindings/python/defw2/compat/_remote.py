@@ -6,15 +6,15 @@ typed QPM APIs, taking the arguments by the names the API class declares,
 and builds the v1 answer back from the typed one. Everything else fails,
 naming the method, until v2 types it.
 
-Fourteen QPM methods are typed. One more is emulated:
-register_event_notification. v1 pushed each completion to the caller as an
-event, and v2 has no events until phase 3. So once a caller registers,
-compat watches every task this process submits through the same QPM, peeks
-the completion queue until each task completes, and puts the completion on
-the caller's event queue, as v1's push would have. Peeking leaves the
-completion queued, as v1's push did, so a read_cq of it still finds it.
-What arrives is what peek_cq answers: the record v1 pushed, saying
-poll_operation peek_cq.
+Fourteen QPM methods go over the typed APIs. The fifteenth,
+register_event_notification, is emulated until compat's clients serve
+sinks of their own. v1 pushed each completion to the caller as an event.
+So once a caller registers, compat watches every task this process submits
+through the same QPM, peeks the completion queue until each task completes,
+and puts the completion on the caller's event queue, as v1's push would
+have. Peeking leaves the completion queued, as v1's push did, so a read_cq
+of it still finds it. What arrives is what peek_cq answers: the record v1
+pushed, saying poll_operation peek_cq.
 
 A failure comes back as the v1 exception the service raised, by name,
 when it is a DEFw exception or a Python built-in one, and as the DEFw
