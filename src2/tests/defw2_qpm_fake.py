@@ -13,6 +13,10 @@ It prints its address and nothing else on stdout, serves until its stdin
 closes, and with --register keeps itself in the directory DEFW2_DIRSVC
 names. --slow-ms makes async_run take that long, which is how the
 concurrency test builds an execution backlog.
+
+It keeps registrations for completion events as the C fake does, and
+publishes the same event for each completion it queues, so a sink in either
+language cannot tell which fake sent it.
 """
 
 import argparse
@@ -29,6 +33,7 @@ except ImportError:
 
 BIG_EXTRA = 200 * 1024
 QUEUED = 64
+REGISTRATIONS = 8
 STR_MAX = 64 * 1024
 
 
@@ -83,6 +88,14 @@ def fp_task(r):
 		s_or(r.reason))
 
 
+def fp_notify(r):
+	return ('rid={} token={} addr={} provider={} tag={} type={} '
+		'extra={}').format(
+		r.reservation_id, s_or(r.token), s_or(r.target.address),
+		r.target.provider_id, s_or(r.target.tag), s_or(r.type),
+		s_or(r.extra_json))
+
+
 def statevector(count):
 	"""Amplitude k is (k, -k), the C fake's pattern."""
 	if numpy is not None:
@@ -107,12 +120,14 @@ def give_statevector(answer, num_qubits, capacity, lie=False):
 class FakeQPM:
 	"""Every QPM method but renew, which it leaves unserved on purpose."""
 
-	def __init__(self, slow_ms=0):
+	def __init__(self, slow_ms=0, publisher=None):
 		self.slow = slow_ms / 1000.0
 		self.lock = threading.Lock()
 		self.done = []
 		self.next_qtask = 1
 		self.big_extra = 'e' * (BIG_EXTRA - 1)
+		self.publisher = publisher
+		self.registrations = []
 
 	# --- control
 
@@ -170,6 +185,8 @@ class FakeQPM:
 				'statevector': r.return_statevector,
 				'queued': True,
 			})
+		# The fake completes a task as it queues it.
+		self._publish(r, 'cid-{}'.format(qtask), qtask)
 		return {'outcome': 'ACCEPTED', 'lifecycle_state': 'queued',
 			'cid': 'cid-{}'.format(qtask), 'qtask_id': qtask,
 			'reservation_id': r.reservation_id, 'extra': fp_run(r)}
@@ -228,6 +245,45 @@ class FakeQPM:
 	cancel_task = _task_answer
 	delete_circuit = _task_answer
 
+	# --- completion events, kept and sent as a QPM does
+
+	def register_event_notification(self, r):
+		with self.lock:
+			if len(self.registrations) >= REGISTRATIONS:
+				raise defw2.ServiceError(
+					'pending-capacity',
+					'the fake keeps no more registrations')
+			self.registrations.append(
+				(r.target, r.type, r.reservation_id))
+		return {'decision': 'accepted',
+			'reservation_id': r.reservation_id,
+			'extra': fp_notify(r)}
+
+	def _publish(self, r, cid, qtask):
+		"""Send a queued completion to every registration that may hear
+		of it, and drop one whose target the publisher reports gone."""
+		if self.publisher is None:
+			return
+		task = {'outcome': 'COMPLETED', 'lifecycle_state': 'completed',
+			'cid': cid, 'qtask_id': qtask,
+			'reservation_id': r.reservation_id,
+			'completion_ready': True, 'extra': fp_run(r)}
+		if r.return_statevector:
+			task['statevector_shape'] = (1 << r.num_qubits,)
+			task['statevector_dtype'] = 'c128'
+		with self.lock:
+			for registration in list(self.registrations):
+				target, event_type, rid = registration
+				if rid and rid != r.reservation_id:
+					continue
+				try:
+					self.publisher.publish(
+						defw2.QPM_COMPLETION, target,
+						task, type=event_type,
+						traceparent=r.traceparent)
+				except defw2.TargetGone:
+					self.registrations.remove(registration)
+
 
 def main(argv):
 	parser = argparse.ArgumentParser(description='The fake QPM, in Python.')
@@ -238,6 +294,7 @@ def main(argv):
 	args = parser.parse_args(argv)
 
 	runtime = defw2.Runtime(role='server', node_name='py-fake-qpm')
+	publisher = defw2.EventPublisher(runtime)
 	host = defw2.ServiceHost(runtime, args.service_id, 'qfw.qpm',
 				 apis=defw2.QPM_APIS)
 	if args.register:
@@ -246,7 +303,7 @@ def main(argv):
 				  'aliases': ['fake-py'],
 				  'resources': ['FAKE-20q']},
 			properties={'provider': 'fake-py', 'num_qubits': 20})
-	host.start(FakeQPM(args.slow_ms),
+	host.start(FakeQPM(args.slow_ms, publisher),
 		   workers={defw2.API_QPM_CONTROL: 1,
 			    defw2.API_QPM_ADMISSION: 1,
 			    defw2.API_QPM_EXECUTION: args.execution_workers})
@@ -256,6 +313,7 @@ def main(argv):
 	sys.stdin.read()
 
 	host.close()
+	publisher.close()
 	runtime.close()
 	return 0
 

@@ -317,6 +317,15 @@ if(BUILD_TESTING)
 				ENVIRONMENT
 					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
 
+		# Python's sinks and publishers, in one process.
+		add_test(NAME defw2_python_event_smoke
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_python_event_smoke.py")
+		set_tests_properties(defw2_python_event_smoke
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
+
 		# The QPM in both languages, against callers in both, the
 		# control queue under an execution backlog, and a Python QPM
 		# in the directory. It runs the C fake and the directory as

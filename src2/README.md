@@ -207,12 +207,43 @@ own process, so its runtime must be a server, and gives the service the
 sink's address, its provider and a tag of its own. The service sends events
 through a publisher.
 
-```c
-defw2_event_sink_opts_t opts = { .callback = on_event, .arg = me };
+A QPM takes that registration through `register_event_notification`, the
+fifteenth typed QPM method:
 
-defw2_event_sink_create(rt, DEFW2_PROVIDER_EVENT, &opts, &sink);
+```c
+defw2_event_sink_opts_t sink_opts = { .callback = on_event, .arg = me };
+defw2_qpm_notify_req_t notify = {
+	.ctx = { .reservation_id = rid },
+	.target = { NULL, DEFW2_PROVIDER_EVENT, "job-7" },
+	.type = "circuit-result",
+};
+
+defw2_event_sink_create(rt, DEFW2_PROVIDER_EVENT, &sink_opts, &sink);
 defw2_qpm_event_accept(sink);
+notify.target.address = defw2_event_sink_address(sink);
+defw2_qpm_register_event_notification(execution, &notify, &opts,
+				      &decision, &status);
 ```
+
+The tag and the type come back on every event, so one sink can tell its
+registrations apart. A reservation limits a registration to that
+reservation's tasks. The QPM keeps the registration, as v1's did, until a
+delivery to the sink fails, so a caller ends it by destroying the sink. The
+provider refuses a registration that names no sink, or names the
+directory's provider, before the service sees it.
+
+Python takes events with `next()`, or by iterating the sink, and holds no
+lock while it waits, the interpreter's included:
+
+```python
+sink = defw2.EventSink(rt)
+qpm.register_event_notification(sink, type='circuit-result', tag='job-7',
+				reservation_id=rid)
+for event in sink:
+	collect(event.payload)		# a defw2.Task
+```
+
+The service sends each completion that matches a registration:
 
 ```c
 defw2_event_publisher_create(rt, NULL, &pub);
@@ -220,6 +251,10 @@ rc = defw2_qpm_publish_completion(pub, &target, "completion", &task, tp);
 if (defw2_event_target_gone(rc))
 	drop_registration(&target);
 ```
+
+A Python service does the same with `defw2.EventPublisher`, whose
+`publish` returns False when a full queue dropped the event and raises
+`defw2.TargetGone` when the registration should go.
 
 Publishing copies the event and returns. The publisher delivers from an
 execution stream of its own: to every target at once, each target's events
@@ -250,7 +285,10 @@ for it.
 `tests/defw2_event_smoke.c` stops a sink's process with SIGSTOP, which is
 the client #64 describes, and checks that every other sink still gets its
 events at once, that no publish waits on the network, and that the stalled
-delivery fails at its time limit.
+delivery fails at its time limit. Both fake QPMs keep registrations and
+publish completions, so the C and the Python client each take both fakes'
+events, and `tests/defw2_python_event_smoke.py` holds the Python classes to
+what `defw2_event.h` promises.
 
 ## v1 code on v2
 

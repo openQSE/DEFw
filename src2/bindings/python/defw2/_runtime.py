@@ -177,6 +177,10 @@ class Runtime:
 		return self._rt
 
 	@property
+	def closed(self):
+		return self._rt is None
+
+	@property
 	def runtime_id(self):
 		return _text(lib.defw2_runtime_id(self.handle))
 

@@ -166,6 +166,71 @@ The cost is one hand-off per call. The server's span reports it as its
 `queue` event, separately from the time the service itself took, so the two
 can be told apart in a report.
 
+## Events
+
+A caller that wants events serves a sink, a provider in its own runtime,
+so the runtime is a server. `QPM.register_event_notification` readies the
+sink for completions and registers it:
+
+```python
+with defw2.Runtime(role='server') as rt:
+	with defw2.EventSink(rt) as sink, defw2.QPM(rt, address) as qpm:
+		qpm.register_event_notification(sink, type='circuit-result',
+						tag='job-7', reservation_id=rid)
+		task = qpm.async_run(qasm, num_qubits=20,
+				     return_statevector=True,
+				     reservation_id=rid)
+		event = sink.next(timeout_ms=60000)
+		done = qpm.read_cq(cid=event.payload.cid, reservation_id=rid,
+				   result=event.payload.statevector.nbytes)
+```
+
+`next()` returns the next event, or None when the timeout passes first, and
+raises `DefwError` once the sink is closed. Iterating the sink yields every
+event until it closes, so a reader thread can be a plain loop, and closing
+the sink from another thread ends it. No thread runs Python for a sink: C
+queues each event as it arrives, and `next()` takes it with the interpreter
+lock released, as a `ServiceHost` worker takes calls.
+
+An event says what it is, `api` and `name`, and whose it is, `type` and
+`tag`, which are the registration's. `payload` is what its kind carries,
+a `Task` for a QPM completion: the record `read_cq` answers with, its
+statevector described and never carried, so `statevector.nbytes` is the
+buffer to lend `read_cq` for it. `seq` counts one sender's events to one
+target from 1, so a gap shows a loss.
+
+A service sends events through a publisher. `publish` copies the event and
+returns at once, and the publisher's own execution stream delivers it.
+For a completion, the payload is the dict the service would answer
+`read_cq` with:
+
+```python
+class QPM:
+	def __init__(self, rt):
+		self.publisher = defw2.EventPublisher(rt)
+		self.registrations = []
+
+	def register_event_notification(self, request):
+		# request.target, .type, .reservation_id, .extra
+		self.registrations.append((request.target, request.type))
+		return {'decision': 'accepted'}
+
+	def completed(self, completion):
+		for target, kind in list(self.registrations):
+			try:
+				self.publisher.publish(defw2.QPM_COMPLETION,
+						       target, completion,
+						       type=kind)
+			except defw2.TargetGone:
+				self.registrations.remove((target, kind))
+```
+
+`publish` returns False when a full queue dropped the event, and raises
+`TargetGone` when an earlier event to that target was not delivered, which
+means the registration should go. The next event to the same target is
+tried afresh. Delivery is at most once, and the completion queue is how a
+caller recovers a lost event.
+
 ## v1 code on v2
 
 QFw's QPM services and its Qiskit backend are written against v1. They run
@@ -187,13 +252,15 @@ error that says it has no v2 counterpart.
 
 A served v1 QPM answers the typed QPM APIs through `QPMAdapter`, so C and
 Python v2 callers reach it as they reach any QPM. A v1 client's API classes
-send the fourteen typed QPM methods over the same APIs, and the dictionary
-the service returned comes back key for key, its exceptions as the same v1
-classes, and a statevector through the bulk path, put back into the v1
-payload. A v1 client's `register_event_notification` is answered by peeking
-the completion queue until phase 3 brings events. `_mapping.py` says
-exactly what moves into a typed field and what stays in `extra`, and the
-design document's Python section says why.
+send fourteen of the typed QPM methods over the same APIs, and the
+dictionary the service returned comes back key for key, its exceptions as
+the same v1 classes, and a statevector through the bulk path, put back into
+the v1 payload. The fifteenth, `register_event_notification`, waits for
+compat to serve sinks and publish events. Until then the adapter does not
+serve it, and a v1 client's registration is answered by peeking the
+completion queue. `_mapping.py` says exactly what moves into a typed field
+and what stays in `extra`, and the design document's Python section says
+why.
 
 ## Layout
 
@@ -202,7 +269,8 @@ design document's Python section says why.
 | `cffi_build.py` | The declarations, compiled against the real headers |
 | `defw2/_runtime.py` | `Runtime`, `Status`, `DefwError`, telemetry, process stats |
 | `defw2/_echo.py` | The `qfw.echo` client |
-| `defw2/_qpm.py` | The QPM client, its answers, and the codecs that read a typed call's request and write its answer |
+| `defw2/_qpm.py` | The QPM client, its answers, the codecs that read a typed call's request and write its answer, and the completion event |
+| `defw2/_event.py` | `EventSink`, `EventPublisher`, `EventTarget` and `TargetGone` |
 | `defw2/_dir.py` | The directory client, records as dictionaries, and the record a host registers |
 | `defw2/_service.py` | `ServiceHost`: one provider, queue and set of workers per API, and directory registration |
 | `defw2/compat/__init__.py` | `install`, which makes the v1 names importable, and the finder that refuses the rest |

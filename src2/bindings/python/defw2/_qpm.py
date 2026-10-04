@@ -22,11 +22,22 @@ Every answer has the typed fields and extra, a JSON object carrying the rest
 of what the service said. Outcomes such as INVALID_RESERVATION are data and
 come back in the answer; a call that fails raises DefwError with the status
 category, and a service fails one by raising ServiceError.
+
+A completion event is QPM_COMPLETION. Its payload is a Task, the record
+read_cq answers with, its statevector described and never carried. A caller
+registers a sink for them, and a service publishes one with the dict it
+would answer read_cq with:
+
+	qpm.register_event_notification(sink, type='done', tag='job-7',
+					reservation_id=rid)
+	publisher.publish(QPM_COMPLETION, request.target, task,
+			  type=request.type)
 """
 
 import json
 
 from ._defw2 import ffi, lib
+from ._event import EventKind, EventSink, EventTarget
 from ._runtime import DefwError, _status_out, _take_status, _text
 
 __all__ = [
@@ -34,7 +45,7 @@ __all__ = [
 	'Reservation', 'Task', 'API_QPM_CONTROL', 'API_QPM_ADMISSION',
 	'API_QPM_EXECUTION', 'QPM_APIS', 'PROVIDER_QPM_CONTROL',
 	'PROVIDER_QPM_ADMISSION', 'PROVIDER_QPM_EXECUTION', 'QPM_VERSION',
-	'DTYPE',
+	'DTYPE', 'QPM_COMPLETION',
 ]
 
 API_QPM_CONTROL = 'qfw.qpm.control'
@@ -228,6 +239,26 @@ def _delivered(buffer, tensor):
 	return memoryview(buffer)[:tensor.nbytes]
 
 
+def _task_of(out, buffer=None):
+	"""A Task from a C task, with its statevector in buffer when the C
+	task says it was delivered there."""
+	tensor = _tensor(out.statevector)
+	delivered = bool(out.statevector_delivered)
+	return Task(
+		outcome=_text(out.outcome),
+		lifecycle_state=_text(out.lifecycle_state),
+		cid=_text(out.cid), qtask_id=out.qtask_id,
+		reservation_id=out.reservation_id,
+		reason=_text(out.reason),
+		message=_text(out.message),
+		completion_ready=bool(out.completion_ready),
+		statevector=tensor,
+		statevector_delivered=delivered,
+		statevector_data=(_delivered(buffer, tensor)
+				  if delivered else None),
+		extra_json=_text(out.extra))
+
+
 class QPM:
 	"""A client of one QPM's three APIs.
 
@@ -345,9 +376,10 @@ class QPM:
 
 	# --- admission
 
-	def _decision(self, what, stub, call, req, timeout_ms, traceparent):
+	def _decision(self, what, stub, call, req, timeout_ms, traceparent,
+		      api=API_QPM_ADMISSION):
 		out = ffi.new('defw2_qpm_decision_t *')
-		self._invoke(what, API_QPM_ADMISSION, stub, call, req, out,
+		self._invoke(what, api, stub, call, req, out,
 			     lib.defw2_qpm_decision_free, None, timeout_ms,
 			     traceparent)
 		try:
@@ -451,21 +483,7 @@ class QPM:
 			     lib.defw2_qpm_task_free, lent if lends else None,
 			     timeout_ms, traceparent)
 		try:
-			tensor = _tensor(out.statevector)
-			delivered = bool(out.statevector_delivered)
-			return Task(
-				outcome=_text(out.outcome),
-				lifecycle_state=_text(out.lifecycle_state),
-				cid=_text(out.cid), qtask_id=out.qtask_id,
-				reservation_id=out.reservation_id,
-				reason=_text(out.reason),
-				message=_text(out.message),
-				completion_ready=bool(out.completion_ready),
-				statevector=tensor,
-				statevector_delivered=delivered,
-				statevector_data=(_delivered(buffer, tensor)
-						  if delivered else None),
-				extra_json=_text(out.extra))
+			return _task_of(out, buffer)
 		finally:
 			lib.defw2_qpm_task_free(out)
 
@@ -573,6 +591,40 @@ class QPM:
 		return self._task('delete_circuit', lib.defw2_qpm_delete_circuit,
 				  call, req, None, False, timeout_ms,
 				  traceparent)
+
+	def register_event_notification(self, target, type=None, tag=None,
+					extra=None, reservation_id=0,
+					token=None, timeout_ms=None,
+					traceparent=None):
+		"""Ask the QPM for completion events, and return its Decision.
+
+		target is an EventSink of this process, which this readies for
+		completions first, or an EventTarget naming any sink. tag comes
+		back on every event, so one sink can tell its registrations
+		apart, and so does type, the caller's name for the events. A
+		reservation limits them to its tasks. extra is a JSON object
+		for the rest, such as QFw's filters. The QPM keeps the
+		registration until a delivery to the sink fails, so closing the
+		sink ends it.
+		"""
+		if isinstance(target, EventSink):
+			target.accept(QPM_COMPLETION)
+			target = target.target(tag)
+		elif tag is not None:
+			target = EventTarget(target[0], target[1], tag)
+		address, provider_id, tag = target
+		call = _Call()
+		req = ffi.new('defw2_qpm_notify_req_t *')
+		call.ctx(req.ctx, reservation_id, token)
+		req.target.address = call.str(address)
+		req.target.provider_id = provider_id
+		req.target.tag = call.str(tag)
+		req.type = call.str(type)
+		req.extra = call.json(extra)
+		return self._decision('register_event_notification',
+				      lib.defw2_qpm_register_event_notification,
+				      call, req, timeout_ms, traceparent,
+				      api=API_QPM_EXECUTION)
 
 	def close(self):
 		for binding in self._bindings.values():
@@ -693,6 +745,16 @@ def _read_task(pointer):
 	return values, None
 
 
+def _read_notify(pointer):
+	req = ffi.cast('defw2_qpm_notify_req_t *', pointer)
+	values = _ctx_values(req.ctx)
+	values.update(target=EventTarget(_text(req.target.address),
+					 req.target.provider_id,
+					 _text(req.target.tag)),
+		      type=_text(req.type))
+	return values, _text(req.extra)
+
+
 class _Writer:
 	"""Writes a Python answer into the call's C answer.
 
@@ -715,6 +777,30 @@ class _Writer:
 
 	def json(self, value):
 		return self.str(_json_text(value))
+
+	def carry(self, source, nbytes):
+		"""Hand the call a result, which the provider pushes into the
+		caller's buffer."""
+		reply = lib.defw2_call_bulk_reply(self.call, nbytes)
+		if reply == ffi.NULL:
+			raise MemoryError('no room for a {} byte result'.format(
+				nbytes))
+		ffi.memmove(reply, source, nbytes)
+
+
+class _EventWriter(_Call):
+	"""Writes a task into a completion event, as _Writer writes one into
+	an answer. Its strings are Python's, kept until the publish has
+	copied them, and a statevector is described and never carried, so
+	its data stays behind."""
+
+	def str(self, value):
+		if value is not None and not isinstance(value, (bytes, str)):
+			value = str(value)
+		return super().str(value)
+
+	def carry(self, source, nbytes):
+		pass
 
 
 def _answer_values(answer):
@@ -779,11 +865,15 @@ def _write_statevector(writer, out, answer):
 	With data, from bytes or a numpy array, the call holds a copy that
 	the provider pushes into the caller's buffer. With only a shape, the
 	answer says what the result is without sending it, which is how a
-	service tells a caller its buffer is too small.
+	service tells a caller its buffer is too small. A Tensor, such as a
+	Task's, is a description too.
 	"""
 	data = answer.get('statevector')
 	shape = answer.get('statevector_shape')
-	dtype = _dtype_of(data, answer.get('statevector_dtype'))
+	given = answer.get('statevector_dtype')
+	if isinstance(data, Tensor):
+		data, shape, given = None, data.shape, data.dtype
+	dtype = _dtype_of(data, given)
 	size = lib.defw2_dtype_size(dtype)
 	if data is None and shape is None:
 		return
@@ -798,11 +888,7 @@ def _write_statevector(writer, out, answer):
 		nbytes = len(source)
 		if shape is None:
 			shape = (nbytes // size if size else 0,)
-		reply = lib.defw2_call_bulk_reply(writer.call, nbytes)
-		if reply == ffi.NULL:
-			raise MemoryError('no room for a {} byte result'.format(
-				nbytes))
-		ffi.memmove(reply, source, nbytes)
+		writer.carry(source, nbytes)
 	else:
 		nbytes = size
 		for extent in shape:
@@ -852,6 +938,7 @@ _METHODS = {
 		'task_status': (_read_task, _write_task),
 		'cancel_task': (_read_task, _write_task),
 		'delete_circuit': (_read_task, _write_task),
+		'register_event_notification': (_read_notify, _write_decision),
 	},
 }
 
@@ -879,3 +966,27 @@ def write_answer(api, method, call, answer):
 	codec = _METHODS[api][method]
 	codec[1](_Writer(call), lib.defw2_call_response(call),
 		 _answer_values(answer))
+
+
+# --- the completion event ----------------------------------------------
+
+
+def _read_completion(event):
+	"""A completion event's payload, as a Task."""
+	task = lib.defw2_qpm_event_task(event)
+	return None if task == ffi.NULL else _task_of(task)
+
+
+def _send_completion(publisher, target, type, task, traceparent):
+	"""Publish a completion from the dict a service would answer read_cq
+	with, or from a Task."""
+	writer = _EventWriter()
+	out = ffi.new('defw2_qpm_task_t *')
+	_write_task(writer, out, _answer_values(task))
+	return lib.defw2_qpm_publish_completion(publisher, target, type, out,
+						traceparent)
+
+
+QPM_COMPLETION = EventKind(API_QPM_EXECUTION, 'completion',
+			   lib.defw2_qpm_event_accept, _read_completion,
+			   _send_completion)
