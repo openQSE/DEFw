@@ -577,3 +577,24 @@ defw2_rc_t defw2_qpm_delete_circuit(defw2_binding_t *qpm,
 	return ref_call(&defw2_qpm_m_delete_circuit, qpm, req, NULL, opts,
 			out, status);
 }
+
+defw2_rc_t defw2_qpm_register_event_notification(
+	defw2_binding_t *qpm, const defw2_qpm_notify_req_t *req,
+	const defw2_call_opts_t *opts, defw2_qpm_decision_t *out,
+	defw2_status_t *status)
+{
+	defw2_qpm_notify_in_t in;
+
+	if (qpm == NULL || req == NULL || out == NULL)
+		return DEFW2_ERR_INVALID;
+	memset(out, 0, sizeof(*out));
+	memset(&in, 0, sizeof(in));
+	ctx_to_wire(&req->ctx, &in.ctx);
+	in.address = req->target.address;
+	in.provider_id = req->target.provider_id;
+	in.tag = req->target.tag;
+	in.type = req->type;
+	in.extra = req->extra;
+	return decision_call(&defw2_qpm_m_register_event_notification, qpm,
+			     &in, opts, out, status);
+}

@@ -244,6 +244,10 @@ typedef struct {
 	const char *reason;
 } defw2_qpm_task_req_t;
 typedef struct {
+	defw2_qpm_ctx_t ctx; defw2_event_target_t target; const char *type;
+	const char *extra;
+} defw2_qpm_notify_req_t;
+typedef struct {
 	const char *state; bool ready; bool initialized;
 	bool accepting_requests; bool provider_ready;
 	uint32_t active_task_count; uint32_t active_reservation_count;
@@ -334,6 +338,10 @@ defw2_rc_t defw2_qpm_delete_circuit(defw2_binding_t *qpm,
 				    const defw2_call_opts_t *opts,
 				    defw2_qpm_task_t *out,
 				    defw2_status_t *status);
+defw2_rc_t defw2_qpm_register_event_notification(
+	defw2_binding_t *qpm, const defw2_qpm_notify_req_t *req,
+	const defw2_call_opts_t *opts, defw2_qpm_decision_t *out,
+	defw2_status_t *status);
 defw2_rc_t defw2_qpm_event_accept(defw2_event_sink_t *sink);
 defw2_rc_t defw2_qpm_publish_completion(defw2_event_publisher_t *pub,
 					const defw2_event_target_t *target,

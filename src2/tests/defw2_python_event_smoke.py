@@ -3,8 +3,9 @@
 
 Two runtimes in one process over na+sm: a server whose sinks take events,
 and a client whose publisher sends them. defw2_event_smoke.c holds the C
-side to the same promises. This is what is left for the Python classes
-themselves:
+side to the same promises, and defw2_python_qpm_smoke.py shows a Python
+sink taking a C QPM's events and a C sink a Python QPM's. This is what is
+left for the Python classes themselves:
 
 - a sink needs a runtime that listens, and a provider has one sink;
 - a completion published from a dict arrives as the Task it describes,

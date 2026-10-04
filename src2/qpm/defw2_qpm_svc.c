@@ -1,5 +1,5 @@
 /*
- * The QPM provider: fourteen handlers over three operations tables.
+ * The QPM provider: fifteen handlers over three operations tables.
  *
  * Decoding, the version check, the span and the respond are
  * defw2_typed_serve's. What is left here is each method's conversions: build
@@ -510,6 +510,48 @@ static void serve_delete_circuit(struct defw2_served *served, void *in,
 	serve_task(served, in, out, b->ops.delete_circuit, false);
 }
 
+/*
+ * A registration has to name a sink that events can reach: an address a
+ * publisher will take, and a provider other than the directory's, where no
+ * sink can be. Refusing one here is better than the service accepting it
+ * and its first event failing.
+ */
+static void serve_register_event_notification(struct defw2_served *served,
+					       void *vin, void *vout)
+{
+	struct qpm_execution_bound *b =
+		(struct qpm_execution_bound *)served->bound;
+	defw2_qpm_notify_in_t *in = vin;
+	defw2_qpm_decision_t answer;
+	defw2_qpm_notify_req_t req;
+	defw2_rc_t rc;
+
+	if (unserved(served,
+		     (const void *)b->ops.register_event_notification))
+		return;
+	if (in->address == NULL || in->address[0] == '\0' ||
+	    !fits(in->address, DEFW2_NAME_MAX) || in->provider_id == 0) {
+		defw2_served_fail(served, DEFW2_ERR_INVALID,
+				  DEFW2_CAT_INVALID_ARGUMENT,
+				  "a registration needs a sink's address and "
+				  "provider");
+		return;
+	}
+	memset(&answer, 0, sizeof(answer));
+	memset(&req, 0, sizeof(req));
+	ctx_from_wire(&in->ctx, &req.ctx);
+	req.target.address = in->address;
+	req.target.provider_id = in->provider_id;
+	req.target.tag = in->tag;
+	req.type = in->type;
+	req.extra = in->extra;
+	call_frame(served, &req, sizeof(req), &answer);
+	rc = QPM_RUN(served, b->ops.register_event_notification, b->ops.ctx,
+		     &served->call, &req, &answer);
+	if (defw2_served_finish(served, rc))
+		decision_to_wire(served, &answer, vout);
+}
+
 /* --- the handlers ---------------------------------------------------- */
 
 /*
@@ -544,6 +586,8 @@ DEFW2_QPM_HANDLER(peek_cq, defw2_qpm_task_in_t, defw2_qpm_task_out_t)
 DEFW2_QPM_HANDLER(task_status, defw2_qpm_task_in_t, defw2_qpm_task_out_t)
 DEFW2_QPM_HANDLER(cancel_task, defw2_qpm_task_in_t, defw2_qpm_task_out_t)
 DEFW2_QPM_HANDLER(delete_circuit, defw2_qpm_task_in_t, defw2_qpm_task_out_t)
+DEFW2_QPM_HANDLER(register_event_notification, defw2_qpm_notify_in_t,
+		  defw2_qpm_decision_out_t)
 
 #define DEFW2_QPM_ENTRY(name)						\
 	{ &defw2_qpm_m_##name, _handler_for_defw2_qpm_##name##_ult }
@@ -606,6 +650,7 @@ defw2_rc_t defw2_qpm_execution_bind(defw2_service_t *svc,
 		DEFW2_QPM_ENTRY(task_status),
 		DEFW2_QPM_ENTRY(cancel_task),
 		DEFW2_QPM_ENTRY(delete_circuit),
+		DEFW2_QPM_ENTRY(register_event_notification),
 	};
 	struct qpm_execution_bound *bound;
 

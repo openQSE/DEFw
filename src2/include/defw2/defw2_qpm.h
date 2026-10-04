@@ -68,9 +68,12 @@ extern "C" {
 /*
  * The version the three QPM APIs speak, major in the high sixteen bits. A
  * provider refuses a different major before it uses the request.
+ *
+ * 1.1 added register_event_notification. A 1.0 QPM never registered it, so
+ * a caller meets one as a method that is not found.
  */
 #define DEFW2_QPM_VERSION_MAJOR		1
-#define DEFW2_QPM_VERSION_MINOR		0
+#define DEFW2_QPM_VERSION_MINOR		1
 #define DEFW2_QPM_VERSION	(((uint32_t)DEFW2_QPM_VERSION_MAJOR << 16) | \
 				 (uint32_t)DEFW2_QPM_VERSION_MINOR)
 
@@ -201,6 +204,21 @@ typedef struct {
 	const char		*reason;	/* cancel_task only, may be NULL */
 } defw2_qpm_task_req_t;
 
+/*
+ * register_event_notification. target is the sink the events go to, by the
+ * address and provider defw2_event_sink_address and
+ * defw2_event_sink_provider_id give, with a tag of the caller's own that
+ * comes back on every event, as type does. A reservation limits the events
+ * to that reservation's tasks. Without one, the service decides which tasks
+ * a caller may hear about. extra carries the rest, such as QFw's filters.
+ */
+typedef struct {
+	defw2_qpm_ctx_t		ctx;
+	defw2_event_target_t	target;
+	const char		*type;		/* may be NULL */
+	const char		*extra;		/* JSON object, may be NULL */
+} defw2_qpm_notify_req_t;
+
 /* --- answers --------------------------------------------------------- */
 
 /*
@@ -223,7 +241,7 @@ typedef struct {
 	void		*arena;			/* internal */
 } defw2_qpm_service_status_t;
 
-/* reserve, renew, release and cancel. */
+/* reserve, renew, release, cancel and register_event_notification. */
 typedef struct {
 	const char	*decision;		/* DEFW2_QPM_DECISION_* */
 	uint64_t	reservation_id;		/* 0 when none was granted */
@@ -361,6 +379,18 @@ defw2_rc_t defw2_qpm_delete_circuit(defw2_binding_t *qpm,
 				    defw2_qpm_task_t *out,
 				    defw2_status_t *status);
 
+/*
+ * Ask for completion events, which the events section below describes. An
+ * accepted registration answers with DEFW2_QPM_DECISION_ACCEPTED. It lasts
+ * until a delivery to its sink fails, as v1's did, so a caller ends it by
+ * destroying the sink. Make the sink accept completions first, or the
+ * service's first event to it ends the registration.
+ */
+defw2_rc_t defw2_qpm_register_event_notification(
+	defw2_binding_t *qpm, const defw2_qpm_notify_req_t *req,
+	const defw2_call_opts_t *opts, defw2_qpm_decision_t *out,
+	defw2_status_t *status);
+
 /* --- serving --------------------------------------------------------- */
 
 /*
@@ -431,6 +461,10 @@ typedef struct {
 	defw2_rc_t	(*delete_circuit)(void *ctx, defw2_call_t *call,
 					  const defw2_qpm_task_req_t *req,
 					  defw2_qpm_task_t *out);
+	defw2_rc_t	(*register_event_notification)(
+				void *ctx, defw2_call_t *call,
+				const defw2_qpm_notify_req_t *req,
+				defw2_qpm_decision_t *out);
 } defw2_qpm_execution_ops_t;
 
 /*
@@ -454,10 +488,13 @@ defw2_rc_t defw2_qpm_execution_bind(defw2_service_t *svc,
  * lend read_cq or peek_cq for it. A large result never rides in an event,
  * which is what held v1's clients up behind one another.
  *
- * A caller's sink takes completion events once defw2_qpm_event_accept says
- * so. A service sends one with defw2_qpm_publish_completion, which returns
- * what defw2_event.h says publishing returns. type is what the caller's
- * registration asked for, and comes back on the event.
+ * A caller readies its sink with defw2_qpm_event_accept and registers it
+ * with defw2_qpm_register_event_notification. The service keeps its
+ * registrations, decides which completions match each one, and sends each
+ * with defw2_qpm_publish_completion, which returns what defw2_event.h says
+ * publishing returns. When that says the target is gone, the service drops
+ * the registration. The registration's type and tag come back on its
+ * events.
  */
 #define DEFW2_QPM_EVENT_COMPLETION	"completion"
 

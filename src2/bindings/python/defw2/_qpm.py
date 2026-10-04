@@ -24,16 +24,20 @@ come back in the answer; a call that fails raises DefwError with the status
 category, and a service fails one by raising ServiceError.
 
 A completion event is QPM_COMPLETION. Its payload is a Task, the record
-read_cq answers with, its statevector described and never carried. A
-service publishes one with the dict it would answer read_cq with:
+read_cq answers with, its statevector described and never carried. A caller
+registers a sink for them, and a service publishes one with the dict it
+would answer read_cq with:
 
-	publisher.publish(QPM_COMPLETION, target, task, type='done')
+	qpm.register_event_notification(sink, type='done', tag='job-7',
+					reservation_id=rid)
+	publisher.publish(QPM_COMPLETION, request.target, task,
+			  type=request.type)
 """
 
 import json
 
 from ._defw2 import ffi, lib
-from ._event import EventKind
+from ._event import EventKind, EventSink, EventTarget
 from ._runtime import DefwError, _status_out, _take_status, _text
 
 __all__ = [
@@ -372,9 +376,10 @@ class QPM:
 
 	# --- admission
 
-	def _decision(self, what, stub, call, req, timeout_ms, traceparent):
+	def _decision(self, what, stub, call, req, timeout_ms, traceparent,
+		      api=API_QPM_ADMISSION):
 		out = ffi.new('defw2_qpm_decision_t *')
-		self._invoke(what, API_QPM_ADMISSION, stub, call, req, out,
+		self._invoke(what, api, stub, call, req, out,
 			     lib.defw2_qpm_decision_free, None, timeout_ms,
 			     traceparent)
 		try:
@@ -587,6 +592,40 @@ class QPM:
 				  call, req, None, False, timeout_ms,
 				  traceparent)
 
+	def register_event_notification(self, target, type=None, tag=None,
+					extra=None, reservation_id=0,
+					token=None, timeout_ms=None,
+					traceparent=None):
+		"""Ask the QPM for completion events, and return its Decision.
+
+		target is an EventSink of this process, which this readies for
+		completions first, or an EventTarget naming any sink. tag comes
+		back on every event, so one sink can tell its registrations
+		apart, and so does type, the caller's name for the events. A
+		reservation limits them to its tasks. extra is a JSON object
+		for the rest, such as QFw's filters. The QPM keeps the
+		registration until a delivery to the sink fails, so closing the
+		sink ends it.
+		"""
+		if isinstance(target, EventSink):
+			target.accept(QPM_COMPLETION)
+			target = target.target(tag)
+		elif tag is not None:
+			target = EventTarget(target[0], target[1], tag)
+		address, provider_id, tag = target
+		call = _Call()
+		req = ffi.new('defw2_qpm_notify_req_t *')
+		call.ctx(req.ctx, reservation_id, token)
+		req.target.address = call.str(address)
+		req.target.provider_id = provider_id
+		req.target.tag = call.str(tag)
+		req.type = call.str(type)
+		req.extra = call.json(extra)
+		return self._decision('register_event_notification',
+				      lib.defw2_qpm_register_event_notification,
+				      call, req, timeout_ms, traceparent,
+				      api=API_QPM_EXECUTION)
+
 	def close(self):
 		for binding in self._bindings.values():
 			lib.defw2_binding_free(binding)
@@ -704,6 +743,16 @@ def _read_task(pointer):
 	values.update(cid=_text(req.cid), qtask_id=req.qtask_id,
 		      reason=_text(req.reason))
 	return values, None
+
+
+def _read_notify(pointer):
+	req = ffi.cast('defw2_qpm_notify_req_t *', pointer)
+	values = _ctx_values(req.ctx)
+	values.update(target=EventTarget(_text(req.target.address),
+					 req.target.provider_id,
+					 _text(req.target.tag)),
+		      type=_text(req.type))
+	return values, _text(req.extra)
 
 
 class _Writer:
@@ -889,6 +938,7 @@ _METHODS = {
 		'task_status': (_read_task, _write_task),
 		'cancel_task': (_read_task, _write_task),
 		'delete_circuit': (_read_task, _write_task),
+		'register_event_notification': (_read_notify, _write_decision),
 	},
 }
 

@@ -1,5 +1,5 @@
 /*
- * Do the QPM's fourteen methods survive the wire?
+ * Do the QPM's fifteen methods survive the wire?
  *
  * One process, two runtimes over na+sm: a fake QPM serving all three APIs on
  * their default providers, and a client that calls every method. The fake
@@ -13,6 +13,14 @@
  * A buffer that is too small gets the size it needs and leaves the completion
  * queued. A service whose answer is malformed or too large to send is
  * reported as a provider failure instead of leaving the caller waiting.
+ *
+ * And it holds completion events to theirs. The client listens, as one that
+ * wants events must, and registers a sink in its own runtime for one
+ * reservation's tasks, twice under two tags. The fake keeps the
+ * registrations as a QPM does and publishes each completion it queues. Every
+ * completion of that reservation reaches the sink once per tag, as the
+ * record read_cq answers with, its statevector described and then fetched
+ * by read_cq into a buffer of the size the event gave.
  *
  * Given a directory, both runtimes profile into it, which is how the spans
  * the shared typed code records get checked: defw2_otlp_check.py reads them
@@ -43,6 +51,12 @@
 #define BIG_EXTRA	(200u * 1024u)
 #define BIG_CIRCUIT	(1024u * 1024u)
 #define QUEUED		64
+#define REGISTRATIONS	8
+#define EVENT_WAIT_MS	10000
+
+/* The W3C example, so the event's trace can be told from any other. */
+#define TRACE_ID	"0af7651916cd43dd8448eb211c80319c"
+#define TRACEPARENT	"00-" TRACE_ID "-b7ad6b7169203331-01"
 
 static int failures;
 
@@ -132,6 +146,16 @@ static void fp_task(char *buf, const defw2_qpm_task_req_t *r)
 		 r->qtask_id, s_or(r->reason));
 }
 
+static void fp_notify(char *buf, const defw2_qpm_notify_req_t *r)
+{
+	snprintf(buf, FP_LEN,
+		 "rid=%" PRIu64 " token=%s addr=%s provider=%u tag=%s type=%s "
+		 "extra=%s",
+		 r->ctx.reservation_id, s_or(r->ctx.token),
+		 s_or(r->target.address), r->target.provider_id,
+		 s_or(r->target.tag), s_or(r->type), s_or(r->extra));
+}
+
 /* The statevector the fake produces: amplitude k is (k, -k). */
 static void sv_fill(double *amps, uint64_t count)
 {
@@ -167,11 +191,26 @@ struct completion {
 	bool		queued;
 };
 
+/*
+ * A registration for completion events, kept as a QPM keeps one. The
+ * strings are copies, because a request lasts only as long as its call.
+ */
+struct registration {
+	char		*address;
+	uint16_t	provider_id;
+	char		*tag;
+	char		*type;
+	uint64_t	reservation_id;
+	bool		used;
+};
+
 static struct {
 	pthread_mutex_t		lock;
 	struct completion	done[QUEUED];
 	uint64_t		next_qtask;
 	char			big_extra[BIG_EXTRA];
+	struct registration	regs[REGISTRATIONS];
+	defw2_event_publisher_t	*pub;
 } fake = { .lock = PTHREAD_MUTEX_INITIALIZER, .next_qtask = 1 };
 
 static char *fingerprint(defw2_call_t *call, void (*fp)(char *, const void *),
@@ -302,6 +341,111 @@ static defw2_rc_t give_statevector(defw2_call_t *call, uint32_t num_qubits,
 	return DEFW2_OK;
 }
 
+/* --- completion events, kept and sent as a QPM does ------------------ */
+
+static void registration_drop(struct registration *r)
+{
+	free(r->address);
+	free(r->tag);
+	free(r->type);
+	memset(r, 0, sizeof(*r));
+}
+
+static bool copy_into(char **dst, const char *src)
+{
+	*dst = src != NULL ? strdup(src) : NULL;
+	return src == NULL || *dst != NULL;
+}
+
+static defw2_rc_t fake_register(void *ctx, defw2_call_t *call,
+				const defw2_qpm_notify_req_t *req,
+				defw2_qpm_decision_t *out)
+{
+	struct registration *r = NULL;
+	bool copied = false;
+	int i;
+
+	(void)ctx;
+	pthread_mutex_lock(&fake.lock);
+	for (i = 0; i < REGISTRATIONS && r == NULL; i++)
+		if (!fake.regs[i].used)
+			r = &fake.regs[i];
+	if (r != NULL) {
+		copied = copy_into(&r->address, req->target.address) &&
+			 copy_into(&r->tag, req->target.tag) &&
+			 copy_into(&r->type, req->type);
+		r->provider_id = req->target.provider_id;
+		r->reservation_id = req->ctx.reservation_id;
+		r->used = copied;
+		if (!copied)
+			registration_drop(r);
+	}
+	pthread_mutex_unlock(&fake.lock);
+	if (r == NULL) {
+		defw2_call_set_status(call, DEFW2_ERR_BUSY,
+				      DEFW2_CAT_PENDING_CAPACITY,
+				      "the fake keeps no more registrations");
+		return DEFW2_ERR_BUSY;
+	}
+	if (!copied)
+		return DEFW2_ERR_NOMEM;
+	out->decision = DEFW2_QPM_DECISION_ACCEPTED;
+	out->reservation_id = req->ctx.reservation_id;
+	out->extra = FP(call, fp_notify, req);
+	return DEFW2_OK;
+}
+
+/*
+ * Send a queued completion to every registration that may hear of it: one
+ * under the run's reservation, or under none. Publishing returns at once,
+ * so the lock is held only while the event is copied. A target the
+ * publisher reports gone loses its registration, as v1 dropped one whose
+ * put failed.
+ */
+static void publish_completion(defw2_call_t *call,
+			       const defw2_qpm_run_req_t *req, const char *cid,
+			       uint64_t qtask)
+{
+	defw2_qpm_task_t task;
+	defw2_event_target_t target;
+	char extra[FP_LEN];
+	defw2_rc_t rc;
+	int i;
+
+	if (fake.pub == NULL)
+		return;
+	memset(&task, 0, sizeof(task));
+	task.outcome = DEFW2_QPM_COMPLETED;
+	task.lifecycle_state = "completed";
+	task.cid = cid;
+	task.qtask_id = qtask;
+	task.reservation_id = req->ctx.reservation_id;
+	task.completion_ready = true;
+	if (req->return_statevector)
+		defw2_tensor_vector(&task.statevector, DEFW2_DTYPE_C128,
+				    1ull << req->num_qubits);
+	fp_run(extra, req);
+	task.extra = extra;
+
+	pthread_mutex_lock(&fake.lock);
+	for (i = 0; i < REGISTRATIONS; i++) {
+		struct registration *r = &fake.regs[i];
+
+		if (!r->used || (r->reservation_id != 0 &&
+				 r->reservation_id != req->ctx.reservation_id))
+			continue;
+		target.address = r->address;
+		target.provider_id = r->provider_id;
+		target.tag = r->tag;
+		rc = defw2_qpm_publish_completion(fake.pub, &target, r->type,
+						  &task,
+						  defw2_call_traceparent(call));
+		if (defw2_event_target_gone(rc))
+			registration_drop(r);
+	}
+	pthread_mutex_unlock(&fake.lock);
+}
+
 static defw2_rc_t fake_async_run(void *ctx, defw2_call_t *call,
 				 const defw2_qpm_run_req_t *req,
 				 defw2_qpm_task_t *out)
@@ -335,6 +479,8 @@ static defw2_rc_t fake_async_run(void *ctx, defw2_call_t *call,
 				      "the fake's queue is full");
 		return DEFW2_ERR_BUSY;
 	}
+	/* The fake completes a task as it queues it. */
+	publish_completion(call, req, cid, qtask);
 	out->outcome = DEFW2_QPM_ACCEPTED;
 	out->lifecycle_state = "queued";
 	out->cid = defw2_call_strdup(call, cid);
@@ -742,6 +888,162 @@ static void execution_calls(defw2_binding_t *execution)
 	defw2_status_free(&status);
 }
 
+/*
+ * Completion events. Two registrations of one sink, told apart by their
+ * tags, for reservation 7002. A run under 7001 goes first, so an event for
+ * it would arrive ahead of the 7002 run's on each tag.
+ */
+static void event_calls(defw2_rt_t *rt, defw2_binding_t *execution)
+{
+	static const char qasm[] = "OPENQASM 2.0;\nqreg q[3];\nh q[0];\n";
+	defw2_qpm_notify_req_t notify = {
+		.ctx = { .reservation_id = 7002, .token = "tok-ev" },
+		.target = { NULL, DEFW2_PROVIDER_EVENT, "c-tag" },
+		.type = "circuit-result",
+		.extra = "{\"filters\":{\"user\":\"doug\"}}",
+	};
+	defw2_qpm_run_req_t run = {
+		.ctx = { .reservation_id = 7001 },
+		.circuit = { DEFW2_QPM_FORMAT_OPENQASM2, qasm,
+			     sizeof(qasm) - 1 },
+		.num_qubits = 3,
+		.num_shots = 64,
+		.return_statevector = true,
+	};
+	defw2_call_opts_t traced = { .timeout_ms = 20000,
+				     .traceparent = TRACEPARENT };
+	defw2_qpm_task_req_t ref = { .ctx = { .reservation_id = 7002 } };
+	const defw2_event_t *mine = NULL, *other = NULL;
+	defw2_qpm_decision_t decision = { 0 };
+	defw2_qpm_task_t task = { 0 }, done = { 0 };
+	defw2_result_buffer_t sv = { 0 };
+	defw2_event_sink_t *sink = NULL;
+	defw2_status_t status = { 0 };
+	const defw2_qpm_task_t *t;
+	defw2_event_t ev[3];
+	char expect[FP_LEN];
+	char cid[32] = "";
+	uint64_t qtask = 0;
+	int i, got = 0;
+
+	check("a listening client serves a sink for completions",
+	      defw2_event_sink_create(rt, DEFW2_PROVIDER_EVENT, NULL,
+				      &sink) == DEFW2_OK &&
+	      defw2_qpm_event_accept(sink) == DEFW2_OK);
+	if (sink == NULL)
+		return;
+	notify.target.address = defw2_event_sink_address(sink);
+
+	fp_notify(expect, &notify);
+	check("register_event_notification is accepted",
+	      defw2_qpm_register_event_notification(execution, &notify, &opts,
+						    &decision, &status) ==
+	      DEFW2_OK && status.code == DEFW2_OK &&
+	      eq(decision.decision, DEFW2_QPM_DECISION_ACCEPTED) &&
+	      decision.reservation_id == 7002);
+	check("every registration field arrived",
+	      decision.extra != NULL && eq(decision.extra, expect));
+	defw2_qpm_decision_free(&decision);
+
+	notify.target.tag = "c-other";
+	notify.type = "other";
+	notify.extra = NULL;
+	check("and the same sink again under another tag",
+	      defw2_qpm_register_event_notification(execution, &notify, &opts,
+						    &decision, &status) ==
+	      DEFW2_OK && status.code == DEFW2_OK &&
+	      eq(decision.decision, DEFW2_QPM_DECISION_ACCEPTED));
+	defw2_qpm_decision_free(&decision);
+
+	check("a run under another reservation is accepted",
+	      defw2_qpm_async_run(execution, &run, &opts, &task, &status) ==
+	      DEFW2_OK && status.code == DEFW2_OK);
+	defw2_qpm_task_free(&task);
+	run.ctx.reservation_id = 7002;
+	check("and so is one under the registered reservation",
+	      defw2_qpm_async_run(execution, &run, &traced, &task, &status) ==
+	      DEFW2_OK && status.code == DEFW2_OK && task.cid != NULL);
+	if (task.cid != NULL)
+		snprintf(cid, sizeof(cid), "%s", task.cid);
+	qtask = task.qtask_id;
+	defw2_qpm_task_free(&task);
+
+	memset(ev, 0, sizeof(ev));
+	for (i = 0; i < 2; i++)
+		if (defw2_event_sink_next(sink, EVENT_WAIT_MS, &ev[got]) ==
+		    DEFW2_OK)
+			got++;
+	for (i = 0; i < got; i++) {
+		if (eq(ev[i].tag, "c-tag"))
+			mine = &ev[i];
+		else if (eq(ev[i].tag, "c-other"))
+			other = &ev[i];
+	}
+	check("its completion reaches the sink once per registration",
+	      mine != NULL && other != NULL);
+	check("and the other reservation's never does",
+	      mine != NULL && mine->seq == 1 && other != NULL &&
+	      other->seq == 1 &&
+	      defw2_event_sink_next(sink, 250, &ev[2]) == DEFW2_ERR_TIMEOUT);
+	check("each event says what it is and whose it is",
+	      mine != NULL && eq(mine->api, DEFW2_API_QPM_EXECUTION) &&
+	      eq(mine->name, DEFW2_QPM_EVENT_COMPLETION) &&
+	      eq(mine->type, "circuit-result") && mine->source != NULL &&
+	      mine->source[0] != '\0' && other != NULL &&
+	      eq(other->type, "other"));
+
+	t = defw2_qpm_event_task(mine);
+	fp_run(expect, &run);
+	check("it carries the task read_cq answers with",
+	      t != NULL && eq(t->outcome, DEFW2_QPM_COMPLETED) &&
+	      eq(t->lifecycle_state, "completed") && eq(t->cid, cid) &&
+	      t->qtask_id == qtask && t->reservation_id == 7002 &&
+	      t->completion_ready && t->reason == NULL &&
+	      t->message == NULL && eq(t->extra, expect));
+	check("and describes its statevector without carrying it",
+	      t != NULL && !t->statevector_delivered &&
+	      t->statevector.dtype == DEFW2_DTYPE_C128 &&
+	      t->statevector.rank == 1 && t->statevector.shape[0] == 8 &&
+	      t->statevector.nbytes == 128);
+	check("the event joins the run's trace",
+	      mine != NULL && mine->traceparent != NULL &&
+	      strlen(mine->traceparent) == strlen(TRACEPARENT) &&
+	      strncmp(mine->traceparent + 3, TRACE_ID,
+		      strlen(TRACE_ID)) == 0);
+
+	/* What the event described is what a collecting read needs. */
+	sv.capacity = t != NULL ? t->statevector.nbytes : 0;
+	sv.data = calloc(1, sv.capacity + 1);
+	ref.cid = cid;
+	check("read_cq into a buffer of the size it gave collects it",
+	      defw2_qpm_read_cq(execution, &ref, &sv, &opts, &done,
+				&status) == DEFW2_OK &&
+	      status.code == DEFW2_OK && done.statevector_delivered &&
+	      sv.capacity == 128 && sv_check(sv.data, 8));
+	defw2_qpm_task_free(&done);
+	free(sv.data);
+	for (i = 0; i < 3; i++)
+		defw2_event_free(&ev[i]);
+
+	notify.target.address = NULL;
+	check("a registration that names no sink is refused",
+	      defw2_qpm_register_event_notification(execution, &notify, &opts,
+						    &decision, &status) ==
+	      DEFW2_OK && status.category == DEFW2_CAT_INVALID_ARGUMENT);
+	defw2_qpm_decision_free(&decision);
+	notify.target.address = defw2_event_sink_address(sink);
+	notify.target.provider_id = 0;
+	check("and so is one on the directory's provider",
+	      defw2_qpm_register_event_notification(execution, &notify, &opts,
+						    &decision, &status) ==
+	      DEFW2_OK && status.category == DEFW2_CAT_INVALID_ARGUMENT);
+	defw2_qpm_decision_free(&decision);
+	defw2_status_free(&status);
+
+	/* The service hears it is gone on its next completion for 7002. */
+	defw2_event_sink_destroy(sink);
+}
+
 /* Serve until whoever started us closes our stdin. */
 static void serve_until_stdin_closes(defw2_rt_t *rt)
 {
@@ -777,6 +1079,7 @@ int main(int argc, char **argv)
 		.task_status = fake_task_answer,
 		.cancel_task = fake_task_answer,
 		.delete_circuit = fake_task_answer,
+		.register_event_notification = fake_register,
 	};
 	defw2_config_t server_cfg, client_cfg;
 	defw2_rt_t *server_rt = NULL, *client_rt = NULL;
@@ -836,6 +1139,9 @@ int main(int argc, char **argv)
 	      DEFW2_OK &&
 	      defw2_qpm_execution_bind(execution_svc, &execution_ops) ==
 	      DEFW2_OK);
+	check("the fake publishes completion events",
+	      defw2_event_publisher_create(server_rt, NULL, &fake.pub) ==
+	      DEFW2_OK);
 
 	if (serve) {
 		serve_until_stdin_closes(server_rt);
@@ -843,10 +1149,12 @@ int main(int argc, char **argv)
 	}
 
 client:
+	/* A server, because the sink its completion events come to is a
+	 * provider in its own runtime. */
 	memset(&client_cfg, 0, sizeof(client_cfg));
 	client_cfg.address = "na+sm://";
 	client_cfg.node_name = "qpm-client";
-	client_cfg.role = DEFW2_ROLE_CLIENT;
+	client_cfg.role = DEFW2_ROLE_SERVER;
 	client_cfg.log_level = DEFW2_LOG_ERROR;
 	client_cfg.profile = telemetry != NULL;
 	if (defw2_init(&client_cfg, &client_rt) != DEFW2_OK) {
@@ -870,6 +1178,7 @@ client:
 		control_calls(control);
 		admission_calls(admission);
 		execution_calls(execution);
+		event_calls(client_rt, execution);
 	}
 
 	/* A method on the wrong provider is answered, not lost. */
@@ -907,6 +1216,11 @@ server_down:
 	defw2_service_destroy(control_svc);
 	defw2_service_destroy(admission_svc);
 	defw2_service_destroy(execution_svc);
+	/* No handler is left to publish, so the publisher can go. */
+	defw2_event_publisher_destroy(fake.pub);
+	fake.pub = NULL;
+	for (i = 0; i < REGISTRATIONS; i++)
+		registration_drop(&fake.regs[i]);
 	defw2_finalize(server_rt);
 	if (serve)
 		return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -1,14 +1,13 @@
 """Events from Python: sinks that take them, publishers that send them.
 
 A caller that wants events serves a sink, which is a provider in its own
-runtime, so the runtime must be a server. It gives a service the sink's
-target, through whatever registration the service's API offers, and takes
-what arrives with next(), or by iterating:
+runtime, so the runtime must be a server. It registers the sink with a
+service, and takes what arrives with next(), or by iterating:
 
 	with defw2.Runtime(role='server') as rt:
 		sink = defw2.EventSink(rt)
-		sink.accept(defw2.QPM_COMPLETION)
-		# register sink.target('job-7') with the service
+		qpm.register_event_notification(sink, type='done', tag='job-7',
+						reservation_id=rid)
 		for event in sink:
 			task = event.payload	# a defw2.Task, for a completion
 
@@ -21,10 +20,10 @@ returns at once, and delivers from an execution stream of its own:
 
 	publisher = defw2.EventPublisher(rt)
 	try:
-		publisher.publish(defw2.QPM_COMPLETION, target, task,
-				  type='done')
+		publisher.publish(defw2.QPM_COMPLETION, request.target, task,
+				  type=request.type)
 	except defw2.TargetGone:
-		forget(target)
+		forget(request.target)
 
 Delivery is at most once. A full sink or a full queue loses an event, and
 the service's own record, such as a completion queue, is how a caller
@@ -139,7 +138,8 @@ class EventSink:
 
 	The runtime must be a server, since a sink is a provider. Close the
 	sink before the runtime, or use it as a context manager. A sink takes
-	only the kinds it has accepted.
+	only the kinds it has accepted. QPM.register_event_notification
+	accepts completions for the sink it is given.
 	"""
 
 	def __init__(self, runtime, provider_id=PROVIDER_EVENT, depth=0,
