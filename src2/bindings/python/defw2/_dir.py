@@ -9,12 +9,28 @@ and gets records back as plain dictionaries:
 
 A service registers through ServiceHost.register, which starts the C agent
 that keeps the record alive with heartbeats and deregisters it on close.
+
+A client that wants to hear of services coming and going subscribes a sink,
+and takes DIR_SERVICE events from it. Each one's type is SERVICE_CONNECTED
+or SERVICE_DISCONNECTED, as v1 named them, and its payload a dict of
+connected, reason and the record:
+
+	sink = defw2.EventSink(rt)
+	directory.subscribe(sink, service_type='qfw.qpm')
+	for event in sink:
+		record = event.payload['record']
 """
 
 from ._defw2 import ffi, lib
-from ._runtime import DefwError, _status_out, _take_status, _text
+from ._event import EventKind, EventSink, EventTarget
+from ._runtime import DefwError, _Kept, _status_out, _take_status, _text
 
-__all__ = ['Directory', 'STATE']
+__all__ = ['Directory', 'STATE', 'API_DIR', 'DIR_SERVICE',
+	   'SERVICE_CONNECTED', 'SERVICE_DISCONNECTED']
+
+API_DIR = 'qfw.directory'
+SERVICE_CONNECTED = 'SERVICE_CONNECTED'
+SERVICE_DISCONNECTED = 'SERVICE_DISCONNECTED'
 
 STATE = {
 	lib.DEFW2_DIR_STATE_UP: 'UP',
@@ -45,7 +61,14 @@ def _binding(cdata):
 
 def record_from_entry(entry):
 	"""A resolve result's entry as a dictionary, copied out of C."""
-	record = entry.record
+	values = _record(entry.record)
+	values['binding'] = (_binding(entry.binding)
+			     if entry.binding.api_id != ffi.NULL else None)
+	return values
+
+
+def _record(record):
+	"""A record as a dictionary, copied out of C."""
 	selector = record.selector
 	return {
 		'service_id': _text(record.service_id),
@@ -76,31 +99,23 @@ def record_from_entry(entry):
 		'registered_at_ns': record.registered_at_ns,
 		'last_heartbeat_ns': record.last_heartbeat_ns,
 		'retention_deadline_ns': record.retention_deadline_ns,
-		'binding': (_binding(entry.binding)
-			    if entry.binding.api_id != ffi.NULL else None),
 	}
 
 
-class _Kept:
-	"""C strings and arrays a call borrows, alive until it returns."""
+def _read_change(event):
+	"""A directory event's payload: which way the record went, why, and
+	the record as the directory now holds it."""
+	change = lib.defw2_dir_event_change(event)
+	if change == ffi.NULL:
+		return None
+	return {'connected': bool(change.connected),
+		'reason': _text(change.reason),
+		'record': _record(change.record)}
 
-	def __init__(self):
-		self.kept = []
 
-	def str(self, value):
-		if value is None:
-			return ffi.NULL
-		held = ffi.new('char[]', str(value).encode('utf-8'))
-		self.kept.append(held)
-		return held
-
-	def strs(self, values):
-		values = list(values or ())
-		array = ffi.new('const char *[]', max(len(values), 1))
-		for index, value in enumerate(values):
-			array[index] = self.str(value)
-		self.kept.append(array)
-		return array, len(values)
+# Only the directory sends these, so Python has nothing to send them with.
+DIR_SERVICE = EventKind(API_DIR, 'service', lib.defw2_dir_event_accept,
+			_read_change, None)
 
 
 def build_record(kept, service_id, service_type, bindings, selector=None,
@@ -237,6 +252,66 @@ class Directory:
 				    selector_name, resource, binding_name,
 				    api_version, filters, limit)
 		return self._records(lib.defw2_dir_query, query, kept)
+
+	def subscribe(self, target, service_id=None, service_type=None,
+		      connected=True, disconnected=True, tag=None):
+		"""Have the directory send target the records that come and go,
+		and return the subscription's id.
+
+		target is an EventSink of this process, which this readies for
+		directory events first, or an EventTarget naming any sink.
+		service_id and service_type narrow it to the records that match
+		exactly. connected and disconnected say which changes it hears
+		of. It lasts until unsubscribe, or until a delivery to the sink
+		fails.
+		"""
+		changes = ((lib.DEFW2_DIR_CONNECTED if connected else 0) |
+			   (lib.DEFW2_DIR_DISCONNECTED if disconnected else 0))
+		if changes == 0:
+			raise ValueError('a subscription has to hear of '
+					 'something')
+		if isinstance(target, EventSink):
+			target.accept(DIR_SERVICE)
+			target = target.target(tag)
+		elif tag is not None:
+			target = EventTarget(target[0], target[1], tag)
+		address, provider_id, tag = target
+		kept = _Kept()
+		req = ffi.new('defw2_dir_subscribe_req_t *')
+		kept.kept.append(req)
+		req.target.address = kept.str(address)
+		req.target.provider_id = provider_id
+		req.target.tag = kept.str(tag)
+		req.service_id = kept.str(service_id)
+		req.service_type = kept.str(service_type)
+		req.changes = changes
+		out = ffi.new('uint64_t *')
+		holder = _status_out()
+		opts = self._options(kept)
+		rc = lib.defw2_dir_subscribe(self._dir, req, opts, out, holder)
+		status = _take_status(holder)
+		if rc != lib.DEFW2_OK:
+			raise DefwError(rc, 'transport',
+					'the directory did not answer')
+		status.raise_for_status()
+		return out[0]
+
+	def unsubscribe(self, subscription_id):
+		"""End a subscription. False when the directory held no such
+		one, which is also what a subscription whose sink went
+		becomes."""
+		kept = _Kept()
+		holder = _status_out()
+		rc = lib.defw2_dir_unsubscribe(self._dir, subscription_id,
+					       self._options(kept), holder)
+		status = _take_status(holder)
+		if rc != lib.DEFW2_OK:
+			raise DefwError(rc, 'transport',
+					'the directory did not answer')
+		if status.category == 'not-found':
+			return False
+		status.raise_for_status()
+		return True
 
 	def generation(self, service_id):
 		kept = _Kept()

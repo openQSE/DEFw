@@ -116,6 +116,28 @@ def _take_status(holder):
 	return Status(code, category, message)
 
 
+class _Kept:
+	"""C strings and arrays a call borrows, alive until it returns."""
+
+	def __init__(self):
+		self.kept = []
+
+	def str(self, value):
+		if value is None:
+			return ffi.NULL
+		held = ffi.new('char[]', str(value).encode('utf-8'))
+		self.kept.append(held)
+		return held
+
+	def strs(self, values):
+		values = list(values or ())
+		array = ffi.new('const char *[]', max(len(values), 1))
+		for index, value in enumerate(values):
+			array[index] = self.str(value)
+		self.kept.append(array)
+		return array, len(values)
+
+
 def _check(rc, what):
 	if rc != lib.DEFW2_OK:
 		raise DefwError(rc, 'transport', '{}: {}'.format(

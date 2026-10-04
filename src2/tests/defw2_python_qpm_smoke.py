@@ -16,7 +16,8 @@ queue, so is_ready should not wait for any of them.
 
 The directory. A Python QPM registers itself, a client resolves it and
 calls it through the record's bindings, and closing the service takes it
-out of the directory again.
+out of the directory again. A Python sink subscribed to the C directory
+hears of both, with the record each time.
 
 	defw2_python_qpm_smoke.py --qpm-smoke PATH --dirsvc PATH
 """
@@ -171,12 +172,42 @@ def control_not_behind_execution(runtime):
 	server.stop()
 
 
+def next_change(sink, expect_type):
+	"""The next directory event, when it is the change expected."""
+	event = sink.next(timeout_ms=10000)
+	if event is None or event.type != expect_type or event.tag != 'qpms':
+		print('    took {!r}'.format(event))
+		return None
+	return event.payload
+
+
 def directory(runtime, dirsvc_binary):
 	env = python_env()
 	dirsvc = Server('dirsvc', [dirsvc_binary], env)
 	check('the directory serves', dirsvc.address.startswith('na+sm'))
 	env['DEFW2_DIRSVC'] = dirsvc.address
+
+	# A runtime that listens, for the sink the directory tells.
+	listener = defw2.Runtime(role='server', node_name='py-dir-listener')
+	sink = defw2.EventSink(listener)
+	watching = defw2.Directory(listener, dirsvc.address)
+	subscription = watching.subscribe(sink, service_type='qfw.qpm',
+					  tag='qpms')
+	check('a Python sink subscribes to the C directory',
+	      subscription > 0)
+
 	fake = Server('registered-fake', fake_command('--register'), env)
+	change = next_change(sink, defw2.SERVICE_CONNECTED)
+	record = (change or {}).get('record', {})
+	check('and hears the QPM register, with its record',
+	      change is not None and change['connected'] and
+	      change['reason'] == 'registered' and
+	      record.get('service_id') == 'qpm:fake:fake-20q-py' and
+	      record.get('state') == 'UP' and
+	      record.get('address') == fake.address and
+	      len(record.get('bindings', [])) == 3 and
+	      record.get('properties') == {'provider': 'fake-py',
+					   'num_qubits': '20'})
 
 	with defw2.Directory(runtime, dirsvc.address) as found:
 		records = []
@@ -216,12 +247,25 @@ def directory(runtime, dirsvc_binary):
 				      status.extra_json == 'rid=1 token=(null)')
 
 		check('the service stops cleanly', fake.stop() == 0)
+		change = next_change(sink, defw2.SERVICE_DISCONNECTED)
+		record = (change or {}).get('record', {})
+		check('the sink hears it deregister',
+		      change is not None and not change['connected'] and
+		      change['reason'] == 'deregistered' and
+		      record.get('state') == 'DEREGISTERED' and
+		      record.get('address') is None)
+		check('and an unsubscribe ends the subscription',
+		      watching.unsubscribe(subscription) and
+		      not watching.unsubscribe(subscription))
 		check('and is gone from what clients resolve',
 		      found.resolve(service_type='qfw.qpm') == [])
 		gone = found.query(service_type='qfw.qpm')
 		check('though an operator still sees it deregistered',
 		      len(gone) == 1 and gone[0]['state'] == 'DEREGISTERED'
 		      and gone[0]['address'] is None)
+	watching.close()
+	sink.close()
+	listener.close()
 	dirsvc.process.terminate()
 	dirsvc.process.wait(timeout=30)
 	dirsvc.log.close()

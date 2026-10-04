@@ -20,11 +20,18 @@ and on the other side:
 The QPM's typed APIs work the same way, through defw2.QPM on the calling
 side and a ServiceHost serving defw2.QPM_APIS on the other, and
 defw2.Directory resolves what a host registers. A caller takes events, such
-as a QPM's completions, from a defw2.EventSink, and a service sends them
-with a defw2.EventPublisher.
+as a QPM's completions or the directory's word of a service coming and going,
+from a defw2.EventSink, and a service sends them with a defw2.EventPublisher.
 """
 
-from ._dir import STATE, Directory
+from ._dir import (
+	API_DIR,
+	DIR_SERVICE,
+	SERVICE_CONNECTED,
+	SERVICE_DISCONNECTED,
+	STATE,
+	Directory,
+)
 from ._echo import API_ECHO, PROVIDER_ECHO, Echo
 from ._event import (
 	PROVIDER_EVENT,
@@ -67,12 +74,14 @@ from ._runtime import (
 from ._service import ServiceHost
 
 __all__ = [
+	'API_DIR',
 	'API_ECHO',
 	'API_QPM_ADMISSION',
 	'API_QPM_CONTROL',
 	'API_QPM_EXECUTION',
 	'CATEGORY',
 	'CATEGORY_CODE',
+	'DIR_SERVICE',
 	'DTYPE',
 	'Decision',
 	'DefwError',
@@ -95,6 +104,8 @@ __all__ = [
 	'Request',
 	'Reservation',
 	'Runtime',
+	'SERVICE_CONNECTED',
+	'SERVICE_DISCONNECTED',
 	'STATE',
 	'ServiceError',
 	'ServiceHost',
