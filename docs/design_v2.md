@@ -82,6 +82,8 @@ Slurm plugin calling DEFw directly in C and the gateway daemon being deleted.
 - [Phased Plan](#phased-plan)
 - [Success Criteria](#success-criteria)
 - [Phase 0 Results](#phase-0-results)
+- [Phase 2 Results](#phase-2-results)
+- [Phase 3 Results](#phase-3-results)
 - [Appendix A: DEFw v1 Inventory](#appendix-a-defw-v1-inventory)
 - [Appendix B: Dependencies and Licenses](#appendix-b-dependencies-and-licenses)
 - [Appendix C: References](#appendix-c-references)
@@ -1512,6 +1514,12 @@ them rather than left to the leak sanitizer, which cannot see it: the decoded
 structure lives on a handler stack that Argobots keeps pooled, so a stale
 pointer to the stranded string survives and counts as a reference.
 
+One path loads code a peer chooses. `defw2.compat` keeps v1's
+`connect_to_binding`, which imports the module a directory record names and
+instantiates the class the record names. It is not deserialization, but
+whoever can register in the directory chooses what a client imports.
+Accepting only the API modules QFw ships would close it.
+
 Authentication is not in the prototype. The RPC header has room for a token
 and the status model has a category for authorization failure, so the QFw
 authentication milestone can land in v2 without a wire change. Until then v2
@@ -1576,6 +1584,7 @@ met.
 
 Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
 Phase 2's was met on 3 October 2026. See Phase 2 Results.
+Phase 3's was met on 5 October 2026. See Phase 3 Results.
 
 ## Success Criteria
 
@@ -1849,6 +1858,29 @@ Two are not fixed.
 
 **Not run.** The shared-memory pair Phase 0 set beside `ofi+tcp`. QFw's plane
 finds its directory from a host and a port, which `na+sm` does not have.
+
+## Phase 3 Results
+
+Phase 3's exit criterion is met. Events, the document tier and the
+comparison campaign are built, and the campaign ran on 5 October 2026. The
+[comparison report](comparison_report_v2.md) evaluates every success
+criterion.
+
+| Criterion | Verdict |
+| --- | --- |
+| Small RPC round trip, C client, `ofi+tcp` | Met, one 44th of v1 |
+| Small RPC round trip, Python client through the binding | Met, one 40th |
+| Small RPC round trip, Python service, C client | Met, one 32nd |
+| Throughput at eight concurrent clients | Met, 58 times v1 on `ofi+tcp` |
+| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88% |
+| Framework overhead per job in W5 | Met, one 15th to one 17th |
+| Unsafe deserialization on any path | Met, none found |
+| Application-level regressions in W7 | Met, none |
+| DEFw-owned lines of code for equivalent function | Not met, 9,349 against 9,337 |
+| C caller experience | Met, 93 lines |
+
+Phase 0 left peak memory unsettled. Its spread was the kernel's transparent
+huge pages, which the harness now turns off for every process it measures.
 
 ## Appendix A: DEFw v1 Inventory
 
