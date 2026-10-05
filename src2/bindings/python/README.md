@@ -246,7 +246,10 @@ A change says whether the record `connected`, the `reason`, which is
 `registered`, `heartbeat-resumed`, `deregistered` or `heartbeat-timeout`,
 and the `record` as the directory then holds it, a dict like the ones
 `resolve` returns. `unsubscribe` ends a subscription, and returns False for
-one the directory no longer holds.
+one the directory no longer holds. `runtime_id` says which runtime the
+directory is, the `source` of every event it sends, which is new each time
+it starts. Its `timeout_ms` limits that one call, for a caller asking
+whether the directory is still there.
 
 ## v1 code on v2
 

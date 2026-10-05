@@ -15,7 +15,12 @@ defw2-dirsvc. tests/compat/svc_v1_qpm, a v1 QPM service module written
 against v1 alone, is served by defw2-python --serve. defw2_compat_client.py
 runs under defw2-python and calls it the way QFw's client code does,
 comparing every answer with v1's. Then the service is told to stop, and
-must leave cleanly and leave the directory.
+must leave cleanly and leave the directory. Then a directory of its own
+stops answering under defw2_compat_watch.py, a v1 process that follows it
+by its peer events, and must be lost within the watch's time limit.
+
+Last, in this process again, compat must stop its events before what their
+threads use when it closes, whatever order they were made in.
 
 	defw2_compat_smoke.py --dirsvc PATH --launcher PATH
 """
@@ -24,10 +29,12 @@ import argparse
 import base64
 import json
 import os
+import queue
 import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 import zlib
 
@@ -363,6 +370,99 @@ def end_to_end(dirsvc_binary, launcher):
 	dirsvc.stop()
 
 
+def directory_stops(dirsvc_binary, launcher):
+	"""A directory that stops answering, as one whose node went would,
+	under a v1 process that follows it by its peer events. The directory is
+	one of its own, so nothing else waits on it while it is stopped."""
+	dirsvc = Process('dirsvc-stopped', [dirsvc_binary], environment(None),
+			 address=True)
+	env = environment(dirsvc.address)
+	# A check every fifth of a second, with half a second to answer, so a
+	# stopped directory is lost in under a second. A call's usual 10 s
+	# limit would take more than ten.
+	env['DEFW2_COMPAT_DIRSVC_TIMEOUT_MS'] = '500'
+	log = open(os.path.join(os.getcwd(), 'compat-watch.log'), 'w')
+	watcher = subprocess.Popen(
+		[launcher, os.path.join(HERE, 'defw2_compat_watch.py')],
+		stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+		text=True, env=env)
+	lines = queue.Queue()
+
+	def read():
+		for line in watcher.stdout:
+			try:
+				lines.put(json.loads(line))
+			except ValueError:
+				lines.put({'text': line.strip()})
+
+	def next_line(seconds):
+		try:
+			return lines.get(timeout=seconds)
+		except queue.Empty:
+			return None
+
+	threading.Thread(target=read, daemon=True).start()
+	watching = (next_line(60) or {}).get('watching')
+	check('a v1 process follows the directory by its peer events',
+	      bool(watching))
+
+	pid = dirsvc.process.pid
+	os.kill(pid, signal.SIGSTOP)
+	os.waitpid(pid, os.WUNTRACED)
+	start = time.monotonic()
+	lost = next_line(30)
+	waited = time.monotonic() - start
+	os.kill(pid, signal.SIGCONT)
+	check('a directory that stops answering is lost within the limit',
+	      lost == {'event_type': 'PEER_LOST', 'runtime_id': watching,
+		       'reason': 'unreachable'} and waited < 2, lost)
+	print('    it took {:.2f} s'.format(waited))
+	ready = next_line(30)
+	check('and is ready again, the same runtime, once it goes on',
+	      ready == {'event_type': 'PEER_READY', 'runtime_id': watching,
+			'reason': 'reconnected'}, ready)
+
+	watcher.stdin.close()
+	try:
+		code = watcher.wait(timeout=30)
+	except subprocess.TimeoutExpired:
+		watcher.kill()
+		code = watcher.wait()
+	log.close()
+	check('the watcher leaves cleanly', code == 0, code)
+	dirsvc.process.terminate()
+	dirsvc.stop()
+
+
+def close_order_checks():
+	"""compat's events must stop before the remote QPMs and the directory
+	their threads use, even when the events came first, as they do under
+	QFw's lifecycle binding. This closes compat in this process, so it
+	runs last."""
+	from defw2.compat import _events, _state
+
+	order = []
+
+	class Events:
+		def __init__(self, runtime):
+			pass
+
+		def close(self):
+			order.append('events')
+
+	hub, runtime = _events.Hub, _state.runtime
+	_events.Hub = Events
+	_state.runtime = lambda: None
+	try:
+		_state.events()
+		_state.on_close(lambda: order.append('a remote QPM'))
+		_state.close()
+	finally:
+		_events.Hub, _state.runtime = hub, runtime
+	check('compat stops its events before a remote QPM made after them',
+	      order == ['events', 'a remote QPM'], order)
+
+
 def main(argv):
 	parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 	parser.add_argument('--dirsvc', required=True)
@@ -373,6 +473,8 @@ def main(argv):
 	address_checks()
 	watch_checks()
 	end_to_end(args.dirsvc, args.launcher)
+	directory_stops(args.dirsvc, args.launcher)
+	close_order_checks()
 
 	print('COMPAT SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

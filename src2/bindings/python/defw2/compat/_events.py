@@ -52,6 +52,12 @@ log = logging.getLogger('defw2.compat')
 SWEEP_MS = int(os.environ.get('DEFW2_COMPAT_SWEEP_MS', '5000'))
 CHECK_MS = int(os.environ.get('DEFW2_COMPAT_DIRSVC_CHECK_MS', '2000'))
 
+# How long the directory has to answer. Over ofi+tcp a call to a process
+# that has gone fails only when its time is up, so this, not a call's usual
+# 10 s, decides how soon a directory that has stopped is seen to be gone.
+CHECK_TIMEOUT_MS = int(os.environ.get('DEFW2_COMPAT_DIRSVC_TIMEOUT_MS',
+				      '2000'))
+
 # How many deliveries to remember, so a completion that both its event and
 # the sweep found reaches each queue once.
 DELIVERED_MAX = 4096
@@ -459,7 +465,7 @@ class Hub:
 		if directory is None:
 			raise DefwError(lib.DEFW2_ERR_CONFIG, 'transport',
 					'no directory')
-		return directory.v2.runtime_id()
+		return directory.v2.runtime_id(timeout_ms=CHECK_TIMEOUT_MS)
 
 	def _orphan(self, runtime_id):
 		"""The directory's subscriptions are not this process's any

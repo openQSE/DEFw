@@ -428,6 +428,7 @@ section. The names v2 adds:
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
 | `DEFW2_COMPAT_SWEEP_MS` | 5000 | How often `defw2.compat` looks for a completion whose event was lost |
 | `DEFW2_COMPAT_DIRSVC_CHECK_MS` | 2000 | How often `defw2.compat` asks the directory which runtime it is, while v1 code listens for its peer events |
+| `DEFW2_COMPAT_DIRSVC_TIMEOUT_MS` | 2000 | How long the directory has to answer each of those questions. Over `ofi+tcp` a call to a directory that has stopped fails only when its time is up, so this decides how soon one is lost |
 
 `defw2-python` finds the v1 tree it reuses at `DEFW_PATH`, as v1's launcher
 did. It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,

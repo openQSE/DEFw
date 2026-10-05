@@ -1208,7 +1208,9 @@ came and went, and QFw's lifecycle binding follows a restarted directory by
 those peer events. v2 has no links, so compat asks the directory for its
 runtime ID every two seconds while something listens, and makes
 `PEER_LOST` when it stops answering or is another runtime and `PEER_READY`
-when it answers again. And v1's directory records: registering keeps the
+when it answers again. Each question has two seconds to be answered,
+because over `ofi+tcp` a call to a process that has gone fails only when
+its time is up. And v1's directory records: registering keeps the
 v1 record's fields as JSON in a `v1_record` property, beside the typed
 selector and string properties a v2 client resolves by, and
 `resolve_services` rebuilds the v1 record from it and matches with v1's
