@@ -187,7 +187,7 @@ extern const struct defw2_event_kind defw2_qpm_completion_kind;
 #define DEFW2_QPM_METHOD(var, api, name, in_t, out_t)			\
 	static const struct defw2_method var = {			\
 		api, #name, "defw2." api "." #name, DEFW2_QPM_VERSION,	\
-		hg_proc_##in_t, hg_proc_##out_t,			\
+		hg_proc_##in_t, hg_proc_##out_t, DEFW2_TIER_TYPED,	\
 	}
 
 DEFW2_QPM_METHOD(defw2_qpm_m_is_ready, DEFW2_API_QPM_CONTROL, is_ready,

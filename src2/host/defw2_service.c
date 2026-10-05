@@ -17,6 +17,8 @@
 #include <string.h>
 #include <time.h>
 
+#include <defw2/defw2_doc.h>
+
 #include "defw2_host.h"
 #include "defw2_trace.h"
 
@@ -323,6 +325,11 @@ void *defw2_call_response(defw2_call_t *call)
 	return call != NULL ? call->response : NULL;
 }
 
+const char *defw2_call_document(const defw2_call_t *call)
+{
+	return call != NULL ? call->document : NULL;
+}
+
 const void *defw2_call_request(const defw2_call_t *call, size_t *len)
 {
 	if (call == NULL) {
@@ -360,6 +367,30 @@ defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 	call->status.category = DEFW2_CAT_OK;
 	ABT_eventual_set(call->done, NULL, 0);
 	return DEFW2_OK;
+}
+
+/*
+ * The answer goes into the call's own storage, where the provider reads it
+ * from once the consumer has woken it.
+ */
+defw2_rc_t defw2_service_respond_document(defw2_call_t *call,
+					  const char *answer)
+{
+	const char **slot;
+
+	if (call == NULL || call->document == NULL || call->response == NULL)
+		return DEFW2_ERR_INVALID;
+	slot = call->response;
+	if (answer != NULL) {
+		*slot = defw2_call_strdup(call, answer);
+		if (*slot == NULL) {
+			defw2_service_fail(call, DEFW2_ERR_NOMEM,
+					   DEFW2_CAT_PROVIDER_FAILURE,
+					   "no memory for the answer");
+			return DEFW2_ERR_NOMEM;
+		}
+	}
+	return defw2_service_respond(call, NULL, 0);
 }
 
 /*

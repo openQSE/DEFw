@@ -486,6 +486,7 @@ MERCURY_GEN_PROC(defw2_dir_wire_change_t,
 	static const struct defw2_method var = {			\
 		DEFW2_API_DIR, #name, "defw2." DEFW2_API_DIR "." #name,	\
 		DEFW2_API_VERSION, hg_proc_##in_t, hg_proc_##out_t,	\
+		DEFW2_TIER_TYPED,					\
 	}
 
 DEFW2_DIR_METHOD(defw2_dir_m_subscribe, subscribe,

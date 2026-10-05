@@ -29,6 +29,7 @@ struct defw2_method {
 	uint32_t	version;	/* the API's, carried in the header */
 	hg_proc_cb_t	in_proc;
 	hg_proc_cb_t	out_proc;
+	uint8_t		tier;		/* DEFW2_TIER_*, for the span */
 };
 
 /* --- calling --------------------------------------------------------- */
