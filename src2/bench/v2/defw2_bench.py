@@ -22,6 +22,9 @@ directory, and measures the C client, the Python client, or QFw's own client
 code on the run's DEFw, which may be v1:
 
 	defw2_bench.py W5 --qfw-run-dir RUN --client qfw --clients 8
+
+With --events a job learns it is done from its completion event rather
+than by polling, and one read_cq collects it.
 """
 
 import argparse
@@ -96,6 +99,10 @@ def parse_args(argv):
 		'--shots', type=int,
 		help='W5 and W6: shots per job (default: set by the workload)')
 	parser.add_argument(
+		'--events', action='store_true',
+		help='W5 and W6: wait for each job\'s completion event rather '
+		'than poll, then collect it with one read_cq')
+	parser.add_argument(
 		'--service', choices=('c', 'python'), default='c',
 		help='which echo service to measure against (default: c)')
 	parser.add_argument(
@@ -149,6 +156,12 @@ def parse_args(argv):
 					     args.workload))
 	elif args.client == 'qfw':
 		parser.error('the qfw client runs only W5 and W6')
+	if args.events and not args.qpm:
+		parser.error('--events is for W5 and W6')
+	# QFw's events carry the statevector, so collecting it again would
+	# move it twice.
+	if args.events and args.client == 'qfw' and args.statevector:
+		parser.error('the qfw client takes no --events for W6')
 	if args.resolve and args.service != 'c':
 		parser.error('W4 measures the directory, which is C')
 	if args.payload_bytes is None:
@@ -255,11 +268,15 @@ def _flavour(args):
 	return ''
 
 
+def _workload_name(args):
+	return args.workload + ('-events' if args.events else '')
+
+
 def make_run_dir(args, trace_id):
 	stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 	name = ('{}-v{}{}-{}-{}-c{}-{}'.format(stamp, args.defw_major,
 					    _flavour(args),
-					    args.workload,
+					    _workload_name(args),
 					    args.transport.replace('+', ''),
 					    args.clients, trace_id[:8]))
 	run_dir = os.path.join(os.path.abspath(args.out), name)
@@ -271,7 +288,7 @@ def make_run_dir(args, trace_id):
 def write_config(args, run_dir, trace_id, root_span_id, binaries):
 	label = args.label or 'v{}{}-{}-{}-{}-c{}'.format(
 		args.defw_major, _flavour(args),
-		args.workload, args.transport,
+		_workload_name(args), args.transport,
 		common.format_size(args.payload_bytes).replace(' ', ''),
 		args.clients)
 	config = {
@@ -437,6 +454,8 @@ def start_clients(args, config, binaries, address):
 				command += ['--service-id', args.service_id]
 			if args.statevector:
 				command.append('--statevector')
+			if args.events:
+				command.append('--events')
 		elif args.resolve:
 			command += ['--resolve', '--resolve-type', SERVICE_API]
 		else:
@@ -673,6 +692,7 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 			'qubits': args.qubits,
 			'shots': args.shots,
 			'statevector': args.statevector,
+			'events': args.events,
 			# The one the clients found, which a QFw run names.
 			'service_id': results[0].get('service_id'),
 		})
@@ -702,11 +722,12 @@ def wire_summary(args, config, results, total_calls, go_unix_ns,
 
 
 def qpm_summary(args, results):
-	"""A job is async_run plus the read_cq calls it took. Overhead is the
-	job less the QPM's own run time, which is what the framework costs:
-	the design's qfw.app.job minus backend time. Collect is the read_cq
-	that found the completion, which carries a W6 statevector."""
-	backend, overhead, collect, polls = [], [], [], []
+	"""A job is async_run plus the read_cq calls it took, and in event
+	mode the wait for its completion event too. Overhead is the job less
+	the QPM's own run time, which is what the framework costs: the
+	design's qfw.app.job minus backend time. Collect is the read_cq that
+	found the completion, which carries a W6 statevector."""
+	backend, overhead, collect, polls, events = [], [], [], [], []
 	for result in results:
 		skipped = set(result['failed_calls'])
 		for job, duration in enumerate(result['durations_ns']):
@@ -716,6 +737,7 @@ def qpm_summary(args, results):
 			overhead.append(duration - result['backend_ns'][job])
 			collect.append(result['collect_ns'][job])
 			polls.append(result['polls'][job])
+			events.append(result['events'][job])
 	summary = {
 		'backend': common.latency_summary(backend),
 		'overhead': common.latency_summary(overhead),
@@ -724,6 +746,12 @@ def qpm_summary(args, results):
 			'mean': sum(polls) / len(polls) if polls else None,
 			'p50': common.percentile(sorted(polls), 0.50),
 			'max': max(polls) if polls else None,
+		},
+		# The completion events a job took: one on events, and none
+		# when it polled.
+		'events': {
+			'mean': sum(events) / len(events) if events else None,
+			'max': max(events) if events else None,
 		},
 	}
 	if args.statevector and collect:
@@ -815,9 +843,11 @@ def print_table(report):
 			      qpm['overhead']['p50_us'] / 1e3,
 			      qpm['overhead']['p99_us'] / 1e3,
 			      qpm['backend']['p50_us'] / 1e3))
-		print('  collect p50 {:.3f} ms, polls p50 {}, max {}'.format(
-			qpm['collect']['p50_us'] / 1e3, qpm['polls']['p50'],
-			qpm['polls']['max']))
+		polls, events = qpm['polls'], qpm['events']
+		print('  collect p50 {:.3f} ms, polls p50 {}, max {}, events '
+		      'a job {}'.format(qpm['collect']['p50_us'] / 1e3,
+					polls['p50'], polls['max'],
+					events['mean']))
 		if 'statevector_mib_per_s' in qpm:
 			print('  statevector  {:.1f} MiB/s on collect'.format(
 				qpm['statevector_mib_per_s']))

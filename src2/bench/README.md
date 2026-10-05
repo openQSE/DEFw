@@ -148,9 +148,23 @@ python3 src2/bench/v2/defw2_bench.py W5 --qfw-run-dir <run> \
 | `--directory` | A directory to use instead of the run's, for the typed clients |
 | `--service-id` | The QPM's service_id. By default the directory's only QPM, as in a QFw run, which names its QPM for the run |
 | `--qubits`, `--shots` | Per job, instead of the workload's |
+| `--events` | Learn that a job is done from its completion event rather than by polling, then collect it with one `read_cq` |
 
 On a v1 run, `--transport` sets the v1 clients' `DEFW_TRANSPORT`, so give
 it the transport the plane runs on.
+
+### Events
+
+With `--events` a client registers for its reservation's completions, then
+each job is `async_run`, a wait for that job's completion event, and one
+`read_cq`. The `read_cq` takes the completion off the QPM's queue, as the
+last poll would have, so the QPM's work per job differs only by the polls
+and the event. The typed clients serve a sink and register it with
+`register_event_notification`, so they run as servers. QFw's client
+registers a `BaseEventAPI` of its own, as QFw's Qiskit backend does, on v1
+and on v2 through `defw2.compat`. Each registers for QFw's evtype for a
+circuit's result, `1`. QFw's client takes no `--events` for W6, since its
+events carry the statevector and the `read_cq` would move it again.
 
 A job gets the call timeout, `--timeout-ms` in the clients and 60 s by
 default, to complete in, so a completion the QPM loses fails that job
@@ -164,7 +178,10 @@ which is the framework's cost per job and W5's headline. `qpm.collect` is
 the `read_cq` that found the completion. For W6 it carries the statevector,
 and for QFw's client it includes decoding it, since an application has not
 got its result until then. `qpm.polls` counts the `read_cq` calls a job
-took. The QPM runs on another node, so its CPU and memory are not reported.
+took, one in event mode, and `qpm.events` the completion events, one in
+event mode and none when it polls. Wire bytes per job include the event and its
+acknowledgement in event mode. The QPM runs on another node, so its CPU
+and memory are not reported.
 
 ## What a v2 run does
 
