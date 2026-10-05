@@ -18,6 +18,7 @@ compare field by field.
 | `v2/defw2_bench_client.py` | The same measurement through the Python binding, with the same arguments and the same result file. |
 | `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
 | `qfw_qpm_client.py` | W5 and W6 through QFw's own client code, on v1 or on v2 through `defw2.compat`. It runs under `qfw-srun`, and the launcher starts it. |
+| `defw_loc.py` | Counts the lines of code each version owns, in all and for equivalent function, for the line-count criterion. See Lines of code below. |
 | `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. |
 
 ## Running the v1 harness
@@ -266,6 +267,28 @@ off, peak memory measures what the framework uses. The report's
 `environment.placement` records the CPUs, the kernel's policy and whether
 the run turned huge pages off, and under `seen` what each process had while
 it ran, read from `/proc`.
+
+## Lines of code
+
+The design's criterion is DEFw-owned lines of code for equivalent function,
+v2 fewer than v1's C and Python combined. `defw_loc.py` counts what both
+halves of that need:
+
+```bash
+python3 src2/bench/defw_loc.py --json loc.json
+```
+
+A line of code holds something other than whitespace or a comment, and a
+docstring counts as a comment. It counts the C and Python files git tracks
+under `src` and `python` for v1 and `src2` for v2, without tests,
+benchmarks, examples or generated files, and groups them into areas. The
+equivalent-function subset leaves out the areas one version has and the
+other has no counterpart for, and the table says why for each. For v1
+those are its telnet shell, its launcher service, its test services and
+its experiments. For v2 they are the echo service, the typed QPM API,
+compat and telemetry. `--files` lists every file with its count. The
+`defw2_loc_check` test checks the counter on the cases that trip counters,
+and fails when a source file belongs to no area.
 
 ## Output
 

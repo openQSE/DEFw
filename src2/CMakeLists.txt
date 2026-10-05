@@ -330,6 +330,14 @@ if(BUILD_TESTING)
 		set_tests_properties(defw2_event_otlp_check
 			PROPERTIES
 				FIXTURES_REQUIRED defw2_event_otlp_files)
+
+		# The line counter the comparison's line-count criterion
+		# rests on, and both versions counted with it, so a new
+		# source file that belongs to no area fails here.
+		add_test(NAME defw2_loc_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_loc_check.py"
+				"${CMAKE_CURRENT_SOURCE_DIR}/..")
 	else()
 		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
 	endif()
