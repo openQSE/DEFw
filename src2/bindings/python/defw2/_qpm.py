@@ -18,6 +18,11 @@ C answer structure the same way:
 		def is_ready(self, request):
 			return {'state': 'running', 'ready': True}
 
+A method with no typed form goes as a document, a dict of named arguments
+in and the service's JSON out:
+
+	answer = qpm.document(API_QPM_CONTROL, 'test')
+
 Every answer has the typed fields and extra, a JSON object carrying the rest
 of what the service said. Outcomes such as INVALID_RESERVATION are data and
 come back in the answer; a call that fails raises DefwError with the status
@@ -36,6 +41,7 @@ would answer read_cq with:
 
 import json
 
+from . import _doc
 from ._defw2 import ffi, lib
 from ._event import EventKind, EventSink, EventTarget
 from ._runtime import DefwError, _status_out, _take_status, _text
@@ -625,6 +631,19 @@ class QPM:
 				      lib.defw2_qpm_register_event_notification,
 				      call, req, timeout_ms, traceparent,
 				      api=API_QPM_EXECUTION)
+
+	# --- documents
+
+	def document(self, api, method, request=None, timeout_ms=None,
+		     traceparent=None):
+		"""Any method of one of the QPM's APIs as a document: request
+		is a dict of named arguments, and the answer is the JSON the
+		service answered with. This is how a method with no typed
+		form is called."""
+		call = _Call()
+		opts = call.options(self._timeout_ms if timeout_ms is None
+				    else timeout_ms, traceparent)
+		return _doc.call(self._binding(api), api, method, request, opts)
 
 	def close(self):
 		for binding in self._bindings.values():

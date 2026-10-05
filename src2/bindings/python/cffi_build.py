@@ -121,6 +121,26 @@ defw2_rc_t defw2_service_respond(defw2_call_t *call, const void *reply,
 defw2_rc_t defw2_service_fail(defw2_call_t *call, defw2_rc_t code,
 			      uint32_t category, const char *message);
 
+/* documents */
+#define DEFW2_DOC_VERSION ...
+#define DEFW2_DOC_METHOD_MAX ...
+defw2_rc_t defw2_doc_call(defw2_binding_t *binding, const char *api,
+			  const char *method, const char *request,
+			  const defw2_call_opts_t *opts, char **answer,
+			  defw2_status_t *status);
+bool defw2_doc_method_ok(const char *method);
+typedef defw2_rc_t (*defw2_doc_fn)(void *arg, defw2_call_t *call,
+				   const char *method, const char *request,
+				   const char **answer);
+typedef struct { defw2_doc_fn call; void *arg; } defw2_doc_ops_t;
+defw2_rc_t defw2_doc_bind(defw2_service_t *svc, const char *api,
+			  const defw2_doc_ops_t *ops);
+const char *defw2_call_document(const defw2_call_t *call);
+defw2_rc_t defw2_service_respond_document(defw2_call_t *call,
+					  const char *answer);
+/* A document's answer is the caller's, from malloc. */
+void free(void *ptr);
+
 /* bulk results */
 typedef enum {
 	DEFW2_DTYPE_NONE, DEFW2_DTYPE_U8, DEFW2_DTYPE_I32, DEFW2_DTYPE_I64,
@@ -468,11 +488,14 @@ void defw2_process_stats(defw2_process_stats_t *stats);
 """
 
 SOURCE = """
+#include <stdlib.h>
+
 #include <defw2/defw2.h>
 #include <defw2/defw2_rpc.h>
 #include <defw2/defw2_service.h>
 #include <defw2/defw2_bulk.h>
 #include <defw2/defw2_dir.h>
+#include <defw2/defw2_doc.h>
 #include <defw2/defw2_echo.h>
 #include <defw2/defw2_event.h>
 #include <defw2/defw2_qpm.h>

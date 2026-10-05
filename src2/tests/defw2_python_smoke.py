@@ -6,6 +6,10 @@ client runtime calling in, all in one process over na+sm. It also checks
 the property the whole design rests on: that a blocking C call releases the
 interpreter lock, so a worker waiting for work does not stop the rest of
 Python.
+
+And the rules for documents: an API with no typed methods answers nothing
+but documents, a document reaches a handler only through its document(),
+and an answer JSON cannot carry fails the call.
 """
 
 import sys
@@ -14,6 +18,11 @@ import time
 import warnings
 
 import defw2
+
+try:
+	import numpy
+except ImportError:
+	numpy = None
 
 PAYLOAD = bytes(range(64))
 CALLS = 200
@@ -52,6 +61,110 @@ def count_while_workers_wait(seconds):
 	while time.monotonic() < deadline:
 		ticks += 1
 	return ticks
+
+
+class Documents:
+	"""A handler with documents, and a public method no caller may
+	reach by naming it."""
+
+	def __init__(self):
+		self.closed = False
+
+	def document(self, api, method, request, traceparent):
+		if method == 'echo':
+			return {'api': api, 'request': request}
+		if method == 'trace':
+			return traceparent
+		if method == 'numpy':
+			return {'f': numpy.float32(1.5), 'i': numpy.int64(7),
+				'a': numpy.arange(3), 'got': request}
+		if method == 'raw':
+			return b'bytes'
+		if method == 'raise':
+			raise ValueError('the documents said no')
+		raise defw2.ServiceError('not-found', 'no document ' + method)
+
+	def close(self):
+		self.closed = True
+
+
+def check_documents():
+	server = defw2.Runtime(role='server', node_name='py-docs')
+	host = defw2.ServiceHost(server, 'py-docs', 'qfw.test',
+				 apis=[('qfw.test.docs', 21)])
+	handler = Documents()
+	host.start(handler)
+	bare = defw2.ServiceHost(server, 'py-bare', 'qfw.test',
+				 apis=[('qfw.test.bare', 23)])
+	bare.start(lambda method, request: request)
+	echo = defw2.ServiceHost(server, 'py-docs-echo')
+	echo.start(Reverser())
+
+	client = defw2.Runtime(role='client', node_name='py-docs-client')
+	where = host.address
+	qpm = defw2.QPM(client, bindings={
+		'qfw.test.docs': (where, 21), 'qfw.test.bare': (where, 23),
+		defw2.API_ECHO: (where, defw2.PROVIDER_ECHO)})
+
+	request = {'x': [1, 2.5, 'three', None, False], 'y': {'z': {}}}
+	check('an API of documents alone answers one',
+	      qpm.document('qfw.test.docs', 'echo', request) ==
+	      {'api': 'qfw.test.docs', 'request': request})
+	check('no request arrives as no arguments',
+	      qpm.document('qfw.test.docs', 'echo') ==
+	      {'api': 'qfw.test.docs', 'request': {}})
+	trace = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
+	check("the caller's trace context reaches the handler",
+	      qpm.document('qfw.test.docs', 'trace', traceparent=trace) ==
+	      trace)
+
+	def category(*args):
+		try:
+			qpm.document(*args)
+		except defw2.DefwError as error:
+			return error.category, error.message
+		return None, None
+
+	if numpy is not None:
+		try:
+			got = qpm.document('qfw.test.docs', 'numpy',
+					   {'n': numpy.uint16(9)})
+		except (TypeError, defw2.DefwError) as error:
+			got = error
+		check('a numpy value goes as the Python value it holds',
+		      got == {'f': 1.5, 'i': 7, 'a': [0, 1, 2],
+			      'got': {'n': 9}})
+	raised = category('qfw.test.docs', 'raw')
+	check('an answer JSON cannot carry fails the call',
+	      raised[0] == 'provider-failure' and
+	      'JSON cannot carry' in raised[1])
+	raised = category('qfw.test.docs', 'raise')
+	check("a handler's exception becomes its status",
+	      raised[0] == 'provider-failure' and
+	      'the documents said no' in raised[1])
+	check('a document names a method, never a handler attribute',
+	      category('qfw.test.docs', 'close')[0] == 'not-found' and
+	      not handler.closed)
+	raised = category('qfw.test.bare', 'echo')
+	check('a handler with no document() answers none',
+	      raised[0] == 'not-found' and 'answers no documents' in raised[1])
+	check('echo answers no documents at all',
+	      category(defw2.API_ECHO, 'echo')[0] == 'not-found')
+
+	try:
+		defw2.ServiceHost(server, 'py-nowhere', 'qfw.test',
+				  apis=['qfw.test.nowhere'])
+		named = False
+	except ValueError:
+		named = True
+	check('an API with no default provider needs one named', named)
+
+	qpm.close()
+	client.close()
+	host.close()
+	bare.close()
+	echo.close()
+	server.close()
 
 
 def check_close_does_not_free_under_a_worker():
@@ -185,6 +298,7 @@ def main():
 	host.close()
 	server.close()
 
+	check_documents()
 	check_close_does_not_free_under_a_worker()
 	check_host_names_resolve()
 
