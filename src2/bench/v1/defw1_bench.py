@@ -7,7 +7,8 @@ The launcher does not join DEFw itself. It prepares a run directory, then
 starts a DEFw v1 directory service with defwp and runs defw1_bench_driver.py
 inside it. The driver spawns the svc_test_echo service and the client
 processes, releases the clients together, and writes the report once they
-finish.
+finish. W4's clients resolve the echo service through the directory rather
+than call it, so the directory is the service W4 measures.
 
 Run it where DEFw v1 is installed, such as a QFw-SLURM-Cluster node after
 sourcing qfw-activate, so that DEFW_PATH names the installation and the
@@ -64,7 +65,7 @@ CLEARED_ENV = (
 def parse_args(argv):
 	parser = argparse.ArgumentParser(
 		description='Run a DEFw v1 benchmark workload.')
-	parser.add_argument('workload', choices=common.ECHO_WORKLOADS)
+	parser.add_argument('workload', choices=common.V1_WORKLOADS)
 	parser.add_argument(
 		'--payload', type=common.parse_size, dest='payload_bytes',
 		help='payload size such as 64, 4KiB or 16MiB '
@@ -128,7 +129,10 @@ def parse_args(argv):
 		args.calls = common.default_calls(args.workload, args.payload_bytes)
 	if args.warmup is None:
 		args.warmup = workload['warmup']
-	if args.payload_bytes < 1:
+	args.resolve = workload.get('resolve', False)
+	if args.resolve:
+		args.payload_kind = 'none'
+	elif args.payload_bytes < 1:
 		parser.error('--payload must be at least one byte')
 	if args.calls < 1 or args.warmup < 0 or args.clients < 1:
 		parser.error('--calls and --clients must be positive, '
@@ -271,6 +275,7 @@ def write_config(args, run_dir, trace_id, defwp, defw_config):
 		'root_span_id': os.urandom(8).hex(),
 		'label': label,
 		'workload': args.workload,
+		'resolve': args.resolve,
 		'payload_bytes': args.payload_bytes,
 		'payload_kind': args.payload_kind,
 		'calls': args.calls,

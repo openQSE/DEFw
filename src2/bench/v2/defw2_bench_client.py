@@ -6,7 +6,8 @@ so a run with this one and a run with that one differ only in the language
 the caller is written in. It takes the same arguments and writes the same
 result file, so the launcher does not care which it started.
 
-W5 and W6 time whole QPM jobs, as the C client does: async_run, then
+W4 resolves through the directory at --address instead, as the C client
+does. W5 and W6 time whole QPM jobs, as the C client does: async_run, then
 read_cq until the completion is ready, against a QPM found by its
 service_id in the directory at --address, or the directory's only one.
 """
@@ -49,6 +50,8 @@ def parse_args(argv):
 	parser.add_argument('--timeout-ms', type=int, default=60000)
 	parser.add_argument('--wait-s', type=int, default=300)
 	parser.add_argument('--bulk', action='store_true')
+	parser.add_argument('--resolve', action='store_true')
+	parser.add_argument('--resolve-type')
 	parser.add_argument('--qpm', action='store_true')
 	parser.add_argument('--service-id')
 	parser.add_argument('--qubits', type=int, default=4)
@@ -315,10 +318,66 @@ def run_qpm(args):
 	return 0
 
 
+def run_resolve(args):
+	"""W4, as the C client runs it: one checked resolve, which waits for
+	the service the run resolves to register, then the warmup and the
+	measured resolves. An empty answer is still an answer, so only a
+	failed call counts as a failure."""
+	name = 'bench-py-client-{}'.format(args.index)
+	runtime = defw2.Runtime(role='client', node_name=name)
+	directory = defw2.Directory(runtime, args.address,
+				    timeout_ms=args.timeout_ms)
+	try:
+		deadline = time.monotonic() + args.wait_s
+		while not directory.resolve(service_type=args.resolve_type):
+			if time.monotonic() > deadline:
+				print('the directory at {} has no {}'.format(
+					args.address,
+					args.resolve_type or 'record'),
+				      file=sys.stderr)
+				return 1
+			time.sleep(0.01)
+		for _ in range(args.warmup):
+			directory.resolve(service_type=args.resolve_type)
+
+		if args.ready:
+			with open(args.ready, 'w', encoding='ascii'):
+				pass
+		if not wait_for(args.go, args.wait_s):
+			print('no go signal at {}'.format(args.go),
+			      file=sys.stderr)
+			return 1
+
+		def resolve(_):
+			return directory.resolve(
+				service_type=args.resolve_type,
+				traceparent=args.traceparent)
+
+		results = measure(resolve, args, None, lambda value, sent: True)
+	finally:
+		directory.close()
+		runtime.close()
+	results.update({
+		'index': args.index,
+		'calls': args.calls,
+		'resource': {'process.pid': os.getpid()},
+		'bytes_moved': 0,
+	})
+	write_results(args, results)
+	if results['failed_call_count']:
+		print('client {}: {} of {} resolves failed'.format(
+			args.index, results['failed_call_count'], args.calls),
+		      file=sys.stderr)
+		return 1
+	return 0
+
+
 def main(argv):
 	args = parse_args(argv)
 	if args.qpm:
 		return run_qpm(args)
+	if args.resolve:
+		return run_resolve(args)
 	payload = build_payload(args.payload)
 
 	runtime = defw2.Runtime(role='client',

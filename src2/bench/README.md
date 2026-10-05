@@ -12,8 +12,8 @@ compare field by field.
 | `defw_bench_common.py` | Workload table, payloads, statistics and the OTLP/JSON writer. It imports nothing from DEFw, so both harnesses share it. |
 | `v1/defw1_bench.py` | v1 launcher. It prepares a run and starts a v1 directory service with `defwp`. |
 | `v1/defw1_bench_driver.py` | Runs inside that directory service. It spawns the echo service and the clients, then writes the report. |
-| `v1/defw1_bench_client.py` | Runs inside each client process. It connects, warms up and measures. |
-| `v2/defw2_bench.py` | v2 launcher. It starts `defw2-echo`, runs the clients and writes the report. |
+| `v1/defw1_bench_client.py` | Runs inside each client process. It connects, warms up and measures echo calls, or for W4 resolves. |
+| `v2/defw2_bench.py` | v2 launcher. It starts `defw2-echo`, or for W4 `defw2-dirsvc` and an echo registered there, runs the clients and writes the report. |
 | `v2/defw2_bench.c` | The measured v2 client, built as `defw2-bench`. It knows nothing about workloads or reports. |
 | `v2/defw2_bench_client.py` | The same measurement through the Python binding, with the same arguments and the same result file. |
 | `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
@@ -33,7 +33,7 @@ python3 /workspace/qfw-container-base/QFw/DEFw/src2/bench/v1/defw1_bench.py W1 -
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `W1`, `W2`, `W3` | | Workload from the design's Workloads table |
+| `W1` to `W4` | | Workload from the design's Workloads table. W4 is below |
 | `--payload` | per workload | Payload size, such as `64`, `4KiB` or `16MiB` |
 | `--payload-kind` | `bytes` | Send the payload as `bytes` or as an ASCII `str` |
 | `--calls` | per workload | Measured calls per client |
@@ -53,6 +53,7 @@ The workload defaults are:
 | W1 | 64 B | 10,000 | 100 |
 | W2 | 4 KiB | 10,000 | 100 |
 | W3 | 1 MiB | 1600 MiB divided by the payload size, between 5 and 100 | 2 |
+| W4 | none | 1,000 | 100 |
 
 ## Running the v2 harness
 
@@ -69,7 +70,7 @@ python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `W1`, `W2`, `W3`, `W5`, `W6` | | Workload from the design's Workloads table. W5 and W6 are below |
+| `W1` to `W6` | | Workload from the design's Workloads table. W4, W5 and W6 are below |
 | `--payload` | per workload | Payload size, such as `64`, `4KiB` or `16MiB` |
 | `--calls` | per workload | Measured calls per client |
 | `--warmup` | per workload | Unmeasured calls per client before measuring |
@@ -92,6 +93,28 @@ says which pair it was: no suffix for C to C, then `pycli`, `pysvc` or
 `na+sm` with one client, a 64 byte round trip is 0.067 ms C to C, 0.065 ms
 from the Python client, 0.102 ms to the Python service and 0.087 ms for
 both, against v1's 4.591 ms.
+
+## Running W4
+
+W4 times directory resolves, the control plane's cost before a client can
+call anything. Each harness runs it against its own directory with one
+echo service registered there, and every resolve asks for that service's
+type, so every answer is one record:
+
+```bash
+python3 src2/bench/v2/defw2_bench.py W4 --transport ofi+tcp --client python
+python3 src2/bench/v1/defw1_bench.py W4 --transport ofi+tcp
+```
+
+On v2 the launcher starts `defw2-dirsvc`, and a `defw2-echo` that
+registers with it. A resolve is `defw2_dir_resolve`, or `Directory.resolve`
+from Python. On v1 a resolve is `dirsvc.resolve_services`, which is how v1
+finds any service, and the directory is the `defwp` the driver runs in. The
+directory is the service measured, so its CPU and memory are what the
+report gives as the service's. On v1 that includes the driver, which polls
+every 50 ms. Each client's first resolve waits until the echo service has
+registered, and the measured resolves are not checked, since an empty
+answer is an answer too.
 
 ## Running W5 and W6
 

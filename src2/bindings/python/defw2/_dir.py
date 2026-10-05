@@ -182,10 +182,11 @@ class Directory:
 					'opening the directory at ' + address)
 		self._dir = out[0]
 
-	def _options(self, kept, timeout_ms=None):
+	def _options(self, kept, timeout_ms=None, traceparent=None):
 		opts = ffi.new('defw2_call_opts_t *')
 		opts.timeout_ms = (self._timeout_ms if timeout_ms is None
 				   else timeout_ms)
+		opts.traceparent = kept.str(traceparent)
 		kept.kept.append(opts)
 		return opts
 
@@ -214,10 +215,12 @@ class Directory:
 			query.filter_count = len(filters)
 		return query
 
-	def _records(self, call, query, kept):
+	def _records(self, call, query, kept, traceparent=None):
 		result = ffi.new('defw2_dir_result_t *')
 		holder = _status_out()
-		rc = call(self._dir, query, self._options(kept), result, holder)
+		rc = call(self._dir, query,
+			  self._options(kept, traceparent=traceparent), result,
+			  holder)
 		status = _take_status(holder)
 		try:
 			if rc != lib.DEFW2_OK:
@@ -231,18 +234,20 @@ class Directory:
 
 	def resolve(self, service_type=None, service_id=None,
 		    selector_name=None, resource=None, binding_name=None,
-		    api_version=0, filters=None, limit=0):
+		    api_version=0, filters=None, limit=0, traceparent=None):
 		"""UP records that match, each with its selected binding.
 
 		filters are (name, value) or (name, value, match) where match
 		is 'equal', 'bits_all' or 'bits_any'. An empty list is an
-		answer, not an error: nothing serves that yet.
+		answer, not an error: nothing serves that yet. traceparent
+		puts the call in the caller's trace.
 		"""
 		kept = _Kept()
 		query = self._query(kept, service_id, service_type,
 				    selector_name, resource, binding_name,
 				    api_version, filters, limit)
-		return self._records(lib.defw2_dir_resolve, query, kept)
+		return self._records(lib.defw2_dir_resolve, query, kept,
+				     traceparent)
 
 	def query(self, service_type=None, service_id=None,
 		  selector_name=None, resource=None, binding_name=None,

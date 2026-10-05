@@ -9,7 +9,8 @@ otlp/, and a short table on stdout.
 
 Service CPU time and peak memory are read from /proc around the measured
 window. That works because defw_spawn_services starts the service on this
-node.
+node. For W4 the service measured is the directory, which is this process,
+so its figures include this driver's own waiting, a poll every 50 ms.
 """
 
 import json
@@ -30,6 +31,8 @@ import defw_bench_common as common
 SERVICE_MODULE = 'svc_test_echo'
 SERVICE_API = 'TestEcho'
 SERVICE_METHOD = 'echo'
+DIRECTORY_API = 'svc_dirsvc'
+DIRECTORY_METHOD = 'resolve_services'
 CLIENT_MODULES = 'api_dirsvc,api_test_echo'
 SCOPE_NAME = 'defw.bench.v1'
 SCOPE_VERSION = '0.1'
@@ -261,8 +264,10 @@ class BenchRun:
 			'module': SERVICE_MODULE,
 			'agent_name': f'bench-echo-{config["trace_id"][:8]}',
 		})
-		service_pid = self.services[0].pid
-		self.record_pid('service', service_pid)
+		self.record_pid('service', self.services[0].pid)
+		# W4's clients call the directory, which is this process.
+		service_pid = (os.getpid() if config.get('resolve')
+			       else self.services[0].pid)
 
 		for index in range(config['clients']):
 			self.start_client(index)
@@ -443,9 +448,12 @@ def write_spans(config, results, report, go_unix_ns, end_unix_ns):
 		if not config['spans']:
 			return
 
+		resolve = config.get('resolve')
 		call_attributes = common.otlp_attributes({
-			'qfw.rpc.api': SERVICE_API,
-			'qfw.rpc.method': SERVICE_METHOD,
+			'qfw.rpc.api': (DIRECTORY_API if resolve
+					else SERVICE_API),
+			'qfw.rpc.method': (DIRECTORY_METHOD if resolve
+					   else SERVICE_METHOD),
 			'qfw.transport.kind': config['transport'],
 			'qfw.bench.payload.bytes': config['payload_bytes'],
 		})

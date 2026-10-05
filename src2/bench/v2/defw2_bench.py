@@ -12,6 +12,10 @@ every client, so one run is one trace across every process in it.
 
 	defw2_bench.py W1 --transport ofi+tcp --clients 8
 
+W4 resolves through the directory instead. The launcher starts
+defw2-dirsvc, which is the service measured, and an echo service that
+registers there, so every resolve finds one record.
+
 W5 and W6 run QPM jobs against QFw's fake IQM QPM instead, which a QFw run
 serves. The launcher starts no service for them. It finds the run's
 directory, and measures the C client, the Python client, or QFw's own client
@@ -39,6 +43,7 @@ SCOPE_NAME = 'defw.bench.v2'
 SCOPE_VERSION = '0.1'
 REPORT_SCHEMA = 'defw-bench-summary/1'
 SERVICE_API = 'qfw.echo'
+DIRECTORY_API = 'qfw.directory'
 QPM_API = 'qfw.qpm.execution'
 POLL_S = 0.05
 STOP_GRACE_S = 10
@@ -129,6 +134,7 @@ def parse_args(argv):
 
 	workload = common.WORKLOADS[args.workload]
 	args.qpm = workload.get('qpm', False)
+	args.resolve = workload.get('resolve', False)
 	if args.qpm:
 		args.qubits = args.qubits or workload['qubits']
 		args.shots = args.shots or workload['shots']
@@ -143,6 +149,8 @@ def parse_args(argv):
 					     args.workload))
 	elif args.client == 'qfw':
 		parser.error('the qfw client runs only W5 and W6')
+	if args.resolve and args.service != 'c':
+		parser.error('W4 measures the directory, which is C')
 	if args.payload_bytes is None:
 		args.payload_bytes = workload['payload_bytes']
 	if args.calls is None:
@@ -299,6 +307,8 @@ def write_config(args, run_dir, trace_id, root_span_id, binaries):
 def payload_kind(args):
 	if args.qpm:
 		return 'statevector' if args.statevector else 'none'
+	if args.resolve:
+		return 'none'
 	return 'bulk' if args.bulk else 'bytes'
 
 
@@ -353,21 +363,41 @@ def service_command(args, binaries):
 
 
 def start_service(args, config, binaries):
-	"""Start the echo service and read back the address it prints."""
+	"""Start the measured service and read back the address it prints:
+	the echo service, or for W4 the directory."""
+	if args.resolve:
+		return start_process(args, config, [binaries['defw2-dirsvc']],
+				     'bench-dirsvc', 'dirsvc')
+	return start_process(args, config, service_command(args, binaries),
+			     'bench-echo', 'echo')
+
+
+def start_process(args, config, command, agent, name, extra_env=None):
+	"""Start a service that prints its address, and read it back."""
 	run_dir = config['run_dir']
-	env = process_env(args, run_dir, 'bench-echo')
+	env = process_env(args, run_dir, agent)
 	if args.rpc_threads is not None:
 		env['DEFW2_RPC_THREADS'] = str(args.rpc_threads)
-	log = open(os.path.join(run_dir, 'logs', 'echo.log'), 'w',
+	env.update(extra_env or {})
+	log = open(os.path.join(run_dir, 'logs', name + '.log'), 'w',
 		   encoding='utf-8')
-	service = subprocess.Popen(service_command(args, binaries),
-				   stdout=subprocess.PIPE, stderr=log,
-				   env=env, text=True)
+	service = subprocess.Popen(command, stdout=subprocess.PIPE,
+				   stderr=log, env=env, text=True)
+	service.name = name
 	address = service.stdout.readline().strip()
 	if not address:
 		service.wait(timeout=STOP_GRACE_S)
-		fail('the echo service did not start, see logs/echo.log')
+		fail('the {} service did not start, see logs/{}.log'.format(
+			name, name))
 	return service, address
+
+
+def start_registered_echo(args, config, binaries, directory):
+	"""W4's echo service, which registers with the directory so that it
+	has one record to answer every resolve with. It is not measured."""
+	return start_process(args, config, [binaries['defw2-echo'], 'serve'],
+			     'bench-echo', 'echo',
+			     {'DEFW2_DIRSVC': directory})[0]
 
 
 def client_command(args, binaries):
@@ -407,6 +437,8 @@ def start_clients(args, config, binaries, address):
 				command += ['--service-id', args.service_id]
 			if args.statevector:
 				command.append('--statevector')
+		elif args.resolve:
+			command += ['--resolve', '--resolve-type', SERVICE_API]
 		else:
 			command += ['--payload', str(args.payload_bytes)]
 		if args.bulk:
@@ -431,10 +463,11 @@ def check_service(service, run_dir):
 	code = service.poll()
 	if code is None:
 		return
-	for line in tail(os.path.join(run_dir, 'logs', 'echo.log')):
+	for line in tail(os.path.join(run_dir, 'logs',
+				      service.name + '.log')):
 		print('  ' + line, file=sys.stderr)
-	fail('the echo service stopped with {} {}'.format(
-		'signal' if code < 0 else 'status', abs(code)))
+	fail('the {} service stopped with {} {}'.format(
+		service.name, 'signal' if code < 0 else 'status', abs(code)))
 
 
 def wait_for_ready(args, config, clients, service):
@@ -719,7 +752,9 @@ def write_run_span(args, config, report, go_unix_ns, end_unix_ns):
 				'qfw.bench.warmup': args.warmup,
 				'qfw.bench.clients': args.clients,
 				'qfw.transport.kind': args.transport,
-				'qfw.rpc.api': QPM_API if args.qpm else SERVICE_API,
+				'qfw.rpc.api': (QPM_API if args.qpm else
+						DIRECTORY_API if args.resolve
+						else SERVICE_API),
 			}),
 			kind=common.SPAN_KIND_INTERNAL,
 			error='{} calls failed'.format(failed) if failed else None)
@@ -744,6 +779,9 @@ def print_table(report):
 	print('{}  {} clients  {}'.format(report['run']['label'],
 					  report['workload']['clients'],
 					  report['transport']['kind']))
+	if not latency['count']:
+		print('  every call FAILED, see results/ for why')
+		return
 	print('  latency p50 {:.3f} ms, p99 {:.3f} ms, max {:.3f} ms'.format(
 		latency['p50_us'] / 1e3, latency['p99_us'] / 1e3,
 		latency['max_us'] / 1e3))
@@ -804,6 +842,8 @@ def main(argv):
 		needed.append('defw2-bench')
 	if not args.qpm:
 		needed.append('defw2-echo')
+	if args.resolve:
+		needed.append('defw2-dirsvc')
 	binaries = {name: find_binary(name, args.bin_dir) for name in needed}
 	trace_id = os.urandom(16).hex()
 	root_span_id = os.urandom(8).hex()
@@ -812,6 +852,7 @@ def main(argv):
 	print('run {}'.format(run_dir))
 
 	service = None
+	registered = None
 	clients = []
 	try:
 		if args.qpm:
@@ -819,6 +860,12 @@ def main(argv):
 			address = directory
 			print('QPM {} in the directory at {}'.format(
 				args.service_id or 'of the run', address))
+		elif args.resolve:
+			service, address = start_service(args, config,
+							 binaries)
+			registered = start_registered_echo(args, config,
+							   binaries, address)
+			print('directory at {}'.format(address))
 		else:
 			service, address = start_service(args, config,
 							 binaries)
@@ -844,6 +891,7 @@ def main(argv):
 			'max_rss_kib': (proc_peak_rss_kib(service.pid)
 					if service is not None else None),
 		}
+		stop(registered)
 		stop(service)
 
 		results = read_results(args, config)
@@ -859,6 +907,7 @@ def main(argv):
 	finally:
 		for client in clients:
 			stop(client)
+		stop(registered)
 		stop(service)
 
 

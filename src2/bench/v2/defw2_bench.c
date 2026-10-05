@@ -236,6 +236,43 @@ static void run_eager(defw2_binding_t *echo, const struct options *opts,
  * depend on what else happens to be registered; what W4 measures is the cost
  * of asking.
  */
+/*
+ * The run's one checked call, for W4: the directory must hold what the run
+ * resolves, or every measured call would answer with nothing. The service
+ * registers as the run starts, so this waits for it, as v1's lookup helper
+ * waits for a service to appear.
+ */
+static bool resolve_check(defw2_dir_t *dir, const struct options *opts,
+			  const defw2_call_opts_t *call)
+{
+	struct timespec nap = { 0, 10 * 1000 * 1000 };
+	uint64_t deadline = mono_ns() + (uint64_t)opts->wait_s * 1000000000ull;
+	defw2_dir_query_t query;
+
+	memset(&query, 0, sizeof(query));
+	query.service_type = opts->resolve_type;
+	for (;;) {
+		defw2_dir_result_t result = { 0 };
+		defw2_status_t status = { 0 };
+		size_t found = 0;
+
+		if (defw2_dir_resolve(dir, &query, call, &result, &status) ==
+		    DEFW2_OK && status.category == DEFW2_CAT_OK)
+			found = result.entry_count;
+		defw2_dir_result_free(&result);
+		defw2_status_free(&status);
+		if (found > 0)
+			return true;
+		if (mono_ns() > deadline) {
+			fprintf(stderr, "the directory at %s has no %s\n",
+				opts->address, opts->resolve_type ?
+				opts->resolve_type : "record");
+			return false;
+		}
+		nanosleep(&nap, NULL);
+	}
+}
+
 static void run_resolve(defw2_dir_t *dir, const struct options *opts,
 			struct results *results,
 			const defw2_call_opts_t *call)
@@ -972,6 +1009,8 @@ int main(int argc, char **argv)
 				opts.address);
 			goto out;
 		}
+		if (!resolve_check(dir, &opts, &warm))
+			goto out;
 		for (w = 0; w < opts.warmup; w++) {
 			defw2_dir_result_t warm_result = { 0 };
 
