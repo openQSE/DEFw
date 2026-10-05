@@ -9,8 +9,9 @@ Each measured call is timed with perf_counter_ns around the public proxy
 call, echo.echo(payload). That is the boundary a DEFw application sees, so
 the round trip includes everything v1 does for a call: building the request,
 YAML encoding, the transport, dispatch in the service, and the response's
-way back. Correctness is checked after the clock stops. Results go to one
-JSON file for the driver.
+way back. Correctness is checked after the clock stops. The measured calls'
+messages are counted too, for wire bytes per call. Results go to one JSON
+file for the driver.
 
 The client never calls the service's shutdown method. In v1 that
 deregisters the whole service, which other clients may still be using.
@@ -22,6 +23,7 @@ import time
 import traceback
 
 import defw
+import defw_workers
 from defw_app_util import (
 	defw_connect_service_by_name,
 	defw_get_directory_service,
@@ -82,9 +84,11 @@ def measure():
 	durations = [0] * calls
 	failures = {}
 	clock = time.perf_counter_ns
+	messages = common.V1Messages(defw_workers)
 
 	usage_before = resource.getrusage(resource.RUSAGE_SELF)
 	loop_start_unix_ns = time.time_ns()
+	messages.start()
 	loop_start = clock()
 	for call in range(calls):
 		started = clock()
@@ -100,6 +104,7 @@ def measure():
 		start_offsets[call] = started - loop_start
 		durations[call] = ended - started
 	loop_ns = clock() - loop_start
+	messages.stop()
 	usage_after = resource.getrusage(resource.RUSAGE_SELF)
 
 	attributes = common.process_attributes('defw1-bench-client')
@@ -120,5 +125,6 @@ def measure():
 				     for call in first_failures},
 		'cpu_ns': cpu_ns(usage_after) - cpu_ns(usage_before),
 		'max_rss_kib': usage_after.ru_maxrss,
+		'wire': messages.counts(),
 	})
 	return 0

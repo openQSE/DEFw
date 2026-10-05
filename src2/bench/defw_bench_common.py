@@ -20,6 +20,7 @@ import platform
 import re
 import socket
 import subprocess
+import threading
 
 MIB = 1024 * 1024
 
@@ -54,6 +55,7 @@ W3_MIN_CALLS = 5
 W3_MAX_CALLS = 100
 
 SPAN_KIND_INTERNAL = 1
+SPAN_KIND_SERVER = 2
 SPAN_KIND_CLIENT = 3
 STATUS_OK = 1
 STATUS_ERROR = 2
@@ -173,6 +175,150 @@ def latency_summary(durations_ns):
 	if count >= 1000:
 		summary['p999_us'] = percentile(ordered, 0.999) / 1e3
 	return summary
+
+
+# Wire bytes per call count each message's body as the framework encoded
+# it: v1's YAML text and the NUL that ends it, and the message Mercury
+# encodes for v2, which carries v2's own header and trace context. Neither
+# version's fixed transport header is counted, 28 bytes a message for v1
+# and Mercury's own for v2, so what is compared is the two encodings. Both
+# directions count: the requests a client sends and their answers, and
+# the events a service sends it and its acknowledgements.
+
+def _message_bytes(text):
+	"""A v1 message's body: its text, and the NUL that ends it."""
+	return len(text.encode('utf-8')) + 1
+
+
+class V1Messages:
+	"""Counts the RPC messages a DEFw v1 process sends and receives.
+
+	Every v1 request leaves through defw_workers.defw_send_req, the C call
+	that sends its YAML text, and every answer through defw_send_rsp. The
+	C runtime hands each request and answer it receives to
+	defw_workers.put_request and put_response, looking them up by name for
+	every message. Wrapping the four sees every call, the events a service
+	sends included. Counting is off until start(), so a run counts only
+	its measured calls."""
+
+	def __init__(self, workers):
+		self.counting = False
+		self.lock = threading.Lock()
+		self.totals = {'rpcs': 0, 'request_bytes': 0, 'responses': 0,
+			       'response_bytes': 0}
+		send_req = workers.defw_send_req
+		send_rsp = workers.defw_send_rsp
+		put_req = workers.put_request
+		put_rsp = workers.put_response
+
+		def count(messages, nbytes, text):
+			if not self.counting:
+				return
+			size = _message_bytes(text)
+			with self.lock:
+				self.totals[messages] += 1
+				self.totals[nbytes] += size
+
+		def counted_send_req(remote_uuid, blk_uuid, msg):
+			count('rpcs', 'request_bytes', msg)
+			return send_req(remote_uuid, blk_uuid, msg)
+
+		def counted_send_rsp(remote_uuid, blk_uuid, msg):
+			count('responses', 'response_bytes', msg)
+			return send_rsp(remote_uuid, blk_uuid, msg)
+
+		def counted_put_req(msg, uuid):
+			count('rpcs', 'request_bytes', msg)
+			return put_req(msg, uuid)
+
+		def counted_put_rsp(msg, uuid):
+			count('responses', 'response_bytes', msg)
+			return put_rsp(msg, uuid)
+
+		workers.defw_send_req = counted_send_req
+		workers.defw_send_rsp = counted_send_rsp
+		workers.put_request = counted_put_req
+		workers.put_response = counted_put_rsp
+
+	def start(self):
+		self.counting = True
+
+	def stop(self):
+		self.counting = False
+
+	def counts(self):
+		with self.lock:
+			return dict(self.totals)
+
+
+def run_wire_bytes(otlp_dir, trace_id, start_ns, end_ns):
+	"""What a v2 run's clients sent and received, from the span files of
+	the client processes, whose names the launcher gives them: each
+	client span of the run's trace, which counts one call's request and
+	answer, and each span a client served while the run was measured,
+	which is an event its sink took in. A client serves nothing else.
+	Whether an event carries the job's trace is the sender's choice, so
+	the window decides rather than the trace. The services' files are
+	left alone, since they count the same calls again."""
+	counts = {'rpcs': 0, 'request_bytes': 0, 'responses': 0,
+		  'response_bytes': 0}
+	for name in sorted(os.listdir(otlp_dir)):
+		if not re.match(r'spans-bench(-py)?-client-\d+\.jsonl$',
+				name):
+			continue
+		for span in _file_spans(os.path.join(otlp_dir, name)):
+			if span['name'] != 'qfw.transport.rpc':
+				continue
+			started = int(span['startTimeUnixNano'])
+			if (span['kind'] == SPAN_KIND_CLIENT and
+			    span['traceId'] == trace_id) or \
+			   (span['kind'] == SPAN_KIND_SERVER and
+			    start_ns <= started <= end_ns):
+				_count_span(span, counts)
+	return counts
+
+
+def _file_spans(path):
+	"""Every span of one OTLP/JSON file."""
+	with open(path, encoding='utf-8') as stream:
+		for line in stream:
+			for resource in json.loads(line)['resourceSpans']:
+				for scope in resource['scopeSpans']:
+					yield from scope['spans']
+
+
+def _count_span(span, counts):
+	sizes = {item['key']: int(item['value'].get('intValue', 0))
+		 for item in span['attributes']
+		 if item['key'] in ('qfw.rpc.request.bytes',
+				    'qfw.rpc.response.bytes')}
+	counts['rpcs'] += 1
+	counts['request_bytes'] += sizes.get('qfw.rpc.request.bytes', 0)
+	response = sizes.get('qfw.rpc.response.bytes', 0)
+	if response:
+		counts['responses'] += 1
+		counts['response_bytes'] += response
+
+
+def wire_summary(counts, calls, source):
+	"""Wire bytes per measured call, or per job for a QPM workload, from
+	counts that add up every client's."""
+	if not calls or not counts['rpcs']:
+		return None
+	return {
+		'source': source,
+		'rpcs_per_call': counts['rpcs'] / calls,
+		'request_bytes_per_call': counts['request_bytes'] / calls,
+		'response_bytes_per_call': counts['response_bytes'] / calls,
+		'bytes_per_call': (counts['request_bytes'] +
+				   counts['response_bytes']) / calls,
+	}
+
+
+def add_counts(total, counts):
+	for key, value in counts.items():
+		total[key] = total.get(key, 0) + value
+	return total
 
 
 def libfabric_version():

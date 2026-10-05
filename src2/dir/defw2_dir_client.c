@@ -28,14 +28,22 @@ struct defw2_dir {
  * what a trace should show, so it wins over the transport code when there is
  * one.
  */
+/*
+ * The span of one call. handle says what crossed the wire: Mercury counts
+ * the request it encoded and the answer it received, which is zero for a
+ * call that never got one.
+ */
 static void trace_finish(struct defw2_rt *rt, struct defw2_trace *trace,
-			 const char *method, defw2_rc_t rc,
-			 const defw2_status_t *status)
+			 hg_handle_t handle, const char *method,
+			 defw2_rc_t rc, const defw2_status_t *status)
 {
 	if (trace->recording) {
 		trace->span.api = DEFW2_API_DIR;
 		trace->span.method = method;
 		trace->span.tier = DEFW2_TIER_TYPED;
+		trace->span.request_bytes = HG_Get_input_payload_size(handle);
+		trace->span.response_bytes =
+			HG_Get_output_payload_size(handle);
 		if (rc == DEFW2_OK && status != NULL) {
 			trace->span.code = status->code;
 			trace->span.category = status->category;
@@ -254,7 +262,8 @@ defw2_rc_t defw2_dir_register(defw2_dir_t *dir,
 	margo_free_output(handle, &out);
 
 out:
-	trace_finish(dir->rt, &trace, "register_service", rc, status);
+	trace_finish(dir->rt, &trace, handle, "register_service", rc,
+		     status);
 	wire_record_free(&in.record);
 	margo_destroy(handle);
 	return rc;
@@ -316,7 +325,7 @@ static defw2_rc_t lease_call(defw2_dir_t *dir, const char *rpc_name,
 	margo_free_output(handle, &out);
 
 out:
-	trace_finish(dir->rt, &trace, method, rc, status);
+	trace_finish(dir->rt, &trace, handle, method, rc, status);
 	margo_destroy(handle);
 	return rc;
 }
@@ -576,7 +585,7 @@ decoded:
 	}
 
 out:
-	trace_finish(dir->rt, &trace, method, rc, status);
+	trace_finish(dir->rt, &trace, handle, method, rc, status);
 	free(filters);
 	margo_destroy(handle);
 	return rc;
@@ -654,7 +663,8 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 	margo_free_output(handle, &out);
 
 out:
-	trace_finish(dir->rt, &trace, "get_generation", rc, status);
+	trace_finish(dir->rt, &trace, handle, "get_generation", rc,
+		     status);
 	margo_destroy(handle);
 	return rc;
 }

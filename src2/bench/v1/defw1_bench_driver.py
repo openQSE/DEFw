@@ -398,6 +398,11 @@ def build_report(config, results, service, go_unix_ns, end_unix_ns,
 		report['bulk'] = {
 			'payload_mib_per_s': payload_mib * len(ok_durations) / busy_s,
 		}
+	counts = {}
+	for result in results:
+		common.add_counts(counts, result['wire'])
+	report['wire'] = common.wire_summary(counts, total_calls,
+					     'client message counts')
 	return report
 
 
@@ -487,6 +492,13 @@ def print_report(report, run_dir):
 		      f'{report["bulk"]["payload_mib_per_s"]:.1f} MiB/s')
 	print(f'  CPU per call (us) client {cpu["client_us_per_call"]:.1f}  '
 	      f'service {cpu["service_us_per_call"]:.1f}')
+	if report.get('wire'):
+		print(f'  wire bytes/call  '
+		      f'{report["wire"]["bytes_per_call"]:.0f}, '
+		      f'{report["wire"]["request_bytes_per_call"]:.0f} in '
+		      f'requests and '
+		      f'{report["wire"]["response_bytes_per_call"]:.0f} in '
+		      f'answers')
 	service_rss = memory['service_max_rss_kib']
 	service_mib = f'{service_rss / 1024:.1f}' if service_rss else 'unknown'
 	print(f'  peak RSS (MiB)   client '

@@ -1353,7 +1353,7 @@ report's environment block.
 | Bulk bandwidth | W3 and W6 | Whether the bulk path reaches the fabric's rate |
 | CPU microseconds per call, client and server | `getrusage` deltas | The cost that scales with load |
 | Peak resident set | `getrusage` | Memory footprint of the runtime |
-| Wire bytes per call | spans | Encoding efficiency |
+| Wire bytes per call | v2's client spans, v1's own count of its messages | Encoding efficiency |
 | Framework overhead per job | W5, `qfw.app.job` minus backend | The headline number tracked by `openQSE/QFw` issue #49, QFw performance optimization |
 | Lines of code owned by DEFw | repository | Maintenance cost proxy |
 | Lines of upstream code relied on | dependency manifests | The leverage being bought |

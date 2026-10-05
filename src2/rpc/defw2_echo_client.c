@@ -45,6 +45,8 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	struct defw2_trace trace;
 	hg_handle_t handle = HG_HANDLE_NULL;
 	uint32_t category = DEFW2_CAT_OK;
+	uint64_t request_bytes = 0;
+	uint64_t response_bytes = 0;
 	struct defw2_rt *rt;
 	int32_t code = 0;
 	hg_return_t hret;
@@ -82,6 +84,7 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 			  binding->address, HG_Error_to_string(hret));
 		goto out;
 	}
+	request_bytes = HG_Get_input_payload_size(handle);
 
 	/* Zeroed, so the free after a decode that fails part way only
 	 * touches the fields it actually decoded. defw2_free_partial
@@ -95,6 +98,7 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 		code = rc;
 		goto out;
 	}
+	response_bytes = HG_Get_output_payload_size(handle);
 
 	category = out.status.category;
 	code = out.status.code;
@@ -116,8 +120,8 @@ out:
 		trace.span.api = DEFW2_API_ECHO;
 		trace.span.method = "echo";
 		trace.span.tier = DEFW2_TIER_TYPED;
-		trace.span.request_bytes = len;
-		trace.span.response_bytes = reply->len;
+		trace.span.request_bytes = request_bytes;
+		trace.span.response_bytes = response_bytes;
 		trace.span.category = category;
 		trace.span.code = code;
 		defw2_trace_end(rt, &trace);
@@ -139,6 +143,8 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 	hg_bulk_t sink_bulk = HG_BULK_NULL;
 	bool shared = (source == sink);
 	uint32_t category = DEFW2_CAT_OK;
+	uint64_t request_bytes = 0;
+	uint64_t response_bytes = 0;
 	uint64_t moved = 0;
 	struct defw2_rt *rt;
 	hg_size_t size = len;
@@ -201,6 +207,7 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 			  binding->address, HG_Error_to_string(hret));
 		goto out;
 	}
+	request_bytes = HG_Get_input_payload_size(handle);
 
 	/* Zeroed, so the free after a decode that fails part way only
 	 * touches the fields it actually decoded. defw2_free_partial
@@ -214,6 +221,7 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 		code = rc;
 		goto out;
 	}
+	response_bytes = HG_Get_output_payload_size(handle);
 	category = out.status.category;
 	code = out.status.code;
 	moved = out.pulled + out.pushed;
@@ -227,6 +235,8 @@ out:
 		trace.span.api = DEFW2_API_ECHO;
 		trace.span.method = "echo_bulk";
 		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.request_bytes = request_bytes;
+		trace.span.response_bytes = response_bytes;
 		trace.span.bulk_bytes = moved;
 		trace.span.category = category;
 		trace.span.code = code;

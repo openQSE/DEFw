@@ -39,6 +39,8 @@ METRICS = (
 	 if r['memory']['service_max_rss_kib'] else None),
 	('bulk MiB/s', 'higher',
 	 lambda r: r.get('bulk', {}).get('payload_mib_per_s')),
+	('wire B/call', 'lower',
+	 lambda r: (r.get('wire') or {}).get('bytes_per_call')),
 )
 
 

@@ -187,8 +187,18 @@ beneath.
   Both include every thread of the process.
 - **Peak memory.** `ru_maxrss` for clients and `VmHWM` for the service.
 - **Bulk rate**, for W3 only. Payload MiB per second of round-trip time.
-
-Wire bytes per call are not measured yet.
+- **Wire bytes per call**, or per job for W5 and W6. Every message the
+  measured calls exchanged, both ways: each request and its answer, and
+  each event a service sent a client and its acknowledgement, each message
+  as the framework encoded it. For v1 that is a message's YAML text and the
+  NUL that ends it, which the client counts around its measured loop. For
+  v2 it is the message Mercury encoded, from the clients' spans: those of
+  the run's trace, and the events their sinks took in while the run was
+  measured. So it needs profiling on. Neither version's fixed transport
+  header is counted, 28 bytes a message for v1 and Mercury's own for v2, so
+  what is compared is the two encodings. A bulk transfer moves outside the
+  messages and is not counted. v2's requests carry the trace context that
+  profiling adds, 55 bytes, and v1's carry none.
 
 ## Output
 

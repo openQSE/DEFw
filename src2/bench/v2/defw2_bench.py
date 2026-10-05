@@ -398,6 +398,8 @@ def start_clients(args, config, binaries, address):
 			'--result', common.result_path(run_dir, index),
 			'--wait-s', str(int(args.timeout)),
 		]
+		if args.client == 'qfw':
+			command += ['--defw-major', str(args.defw_major)]
 		if args.qpm:
 			command += ['--qpm', '--qubits', str(args.qubits),
 				    '--shots', str(args.shots)]
@@ -642,7 +644,28 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 			'service_id': results[0].get('service_id'),
 		})
 		report['qpm'] = qpm_summary(args, results)
+	report['wire'] = wire_summary(args, config, results, total_calls,
+				      go_unix_ns, end_unix_ns)
 	return report
+
+
+def wire_summary(args, config, results, total_calls, go_unix_ns,
+		 end_unix_ns):
+	"""Wire bytes per call, or per job. On v2 every client's calls are
+	libdefw2's spans in the run's trace. v1 records none, so QFw's client
+	counts its own messages there."""
+	if args.defw_major == 1:
+		counts = {}
+		for result in results:
+			common.add_counts(counts, result.get('wire') or {})
+		return common.wire_summary(counts, total_calls,
+					   'client message counts')
+	if not config['spans']:
+		return None
+	counts = common.run_wire_bytes(
+		os.path.join(config['run_dir'], 'otlp'), config['trace_id'],
+		go_unix_ns, end_unix_ns)
+	return common.wire_summary(counts, total_calls, 'client spans')
 
 
 def qpm_summary(args, results):
@@ -738,6 +761,15 @@ def print_table(report):
 	if 'bulk' in report:
 		print('  bulk  {:.1f} MiB/s'.format(
 			report['bulk']['payload_mib_per_s']))
+	if report.get('wire'):
+		wire = report['wire']
+		print('  wire bytes per {}  {:.0f}, {:.0f} in requests and '
+		      '{:.0f} in answers, {:.1f} RPCs'.format(
+			      'job' if 'qpm' in report else 'call',
+			      wire['bytes_per_call'],
+			      wire['request_bytes_per_call'],
+			      wire['response_bytes_per_call'],
+			      wire['rpcs_per_call']))
 	if 'qpm' in report:
 		qpm = report['qpm']
 		print('  per job  overhead p50 {:.3f} ms, p99 {:.3f} ms, '

@@ -15,6 +15,11 @@ It takes the typed clients' arguments and writes their result file, so the
 launcher runs it the way it runs them. --address and --service-id are
 accepted and ignored, because QFw finds its directory and its QPM from the
 run.
+
+For wire bytes per job, v1 counts the measured jobs' messages here, since
+v1 records no spans. On v2 the measured jobs carry the run's trace context,
+through v1's defw_trace hooks as QFw's own telemetry would set them, so
+libdefw2's spans of their calls join the run's trace.
 """
 
 import argparse
@@ -25,10 +30,13 @@ import resource
 import sys
 import time
 
+import defw_trace
 from defw_app_util import defw_get_directory_service
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
 from util.qpm.statevector import decode_statevector_payload
+
+import defw_bench_common as common
 
 PROVIDER = 'fake-iqm'
 MAX_FAILURE_MESSAGES = 10
@@ -60,7 +68,22 @@ def parse_args(argv):
 	parser.add_argument('--go')
 	parser.add_argument('--timeout-ms', type=int, default=60000)
 	parser.add_argument('--wait-s', type=int, default=300)
+	parser.add_argument('--defw-major', type=int, choices=(1, 2),
+			    default=1, help='the DEFw the run is on')
 	return parser.parse_args(argv)
+
+
+def counting(args):
+	"""What counts the measured jobs' bytes: a message counter on v1, and
+	on v2 the run's trace context, so the jobs' spans join the run."""
+	if args.defw_major == 1:
+		import defw_workers
+		return common.V1Messages(defw_workers)
+	if args.traceparent:
+		context = {'traceparent': args.traceparent}
+		defw_trace.set_hooks(
+			inject=lambda carrier: carrier.update(context))
+	return None
 
 
 def wait_for(path, seconds):
@@ -209,8 +232,11 @@ def main(argv):
 		failed = []
 		messages = {}
 		moved = 0
+		counter = counting(args)
 		before = resource.getrusage(resource.RUSAGE_SELF)
 		loop_start_unix_ns = time.time_ns()
+		if counter is not None:
+			counter.start()
 		loop_start = clock()
 		for job in range(args.calls):
 			started = clock()
@@ -232,6 +258,9 @@ def main(argv):
 			elif args.statevector:
 				moved += 16 << args.qubits
 		loop_ns = clock() - loop_start
+		if counter is not None:
+			counter.stop()
+		defw_trace.clear_hooks()
 		after = resource.getrusage(resource.RUSAGE_SELF)
 	finally:
 		admission.release(reservation_id=rid)
@@ -254,6 +283,8 @@ def main(argv):
 		'failed_call_count': len(failed),
 		'failure_messages': messages,
 	}
+	if counter is not None:
+		results['wire'] = counter.counts()
 	partial = args.result + '.partial'
 	with open(partial, 'w', encoding='utf-8') as stream:
 		json.dump(results, stream)
