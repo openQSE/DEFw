@@ -20,6 +20,7 @@ compare field by field.
 | `qfw_qpm_client.py` | W5 and W6 through QFw's own client code, on v1 or on v2 through `defw2.compat`. It runs under `qfw-srun`, and the launcher starts it. |
 | `defw_loc.py` | Counts the lines of code each version owns, in all and for equivalent function, for the line-count criterion. See Lines of code below. |
 | `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. W5 and W6 compare what a job costs, event mode is a group of its own, and runs on CPUs of their own are kept apart from runs on shared ones. |
+| `defw_campaign.py` | Runs the whole comparison on a QFw-SLURM-Cluster, from its host. See Running the campaign below. |
 
 ## Running the v1 harness
 
@@ -267,6 +268,70 @@ off, peak memory measures what the framework uses. The report's
 `environment.placement` records the CPUs, the kernel's policy and whether
 the run turned huge pages off, and under `seen` what each process had while
 it ran, read from `/proc`.
+
+## Running the campaign
+
+`defw_campaign.py` runs every workload on both versions, from one
+installation in one session, and gathers the reports, their comparison and
+the line counts into one directory. It runs on the host of a
+QFw-SLURM-Cluster, because placing containers on CPUs is the host's to do:
+
+```bash
+python3 src2/bench/defw_campaign.py --prefix <install> --plan
+python3 src2/bench/defw_campaign.py --prefix <install> \
+  --out shared-dir/defw2-baselines/<date>-campaign
+```
+
+`--prefix` is a QFw installation built with DEFw v2 from the revision
+under test, as the containers see it. `--plan` lists the runs. `--quick`
+makes every run with fewer calls, which tests the campaign rather than
+measuring anything, and `--only W1,W5` runs some workloads.
+
+| Runs | Providers | Clients |
+| --- | --- | --- |
+| W1, W2 and W4 | v1 on tcp, `ofi+tcp` and `ofi+sm2`, v2 on `ofi+tcp` and `na+sm` | 1 and 8 |
+| W1 with Python on either side, and W4 from Python | v2 on both | 1, and 8 against the Python service |
+| W3, 1, 16 and 256 MiB | v1 on `ofi+tcp` and `ofi+sm2`, v2 on both | 1 |
+| W5, polling and on events | `ofi+tcp`, QFw's client on v1, and the C, Python and QFw clients on v2 | 1 and 8 |
+| W6 | `ofi+tcp`, the same clients | 1 |
+| W7 | the site planes, NWQ-Sim and the fake IQM | 3 runs a version |
+
+v1 makes fewer calls where it would otherwise take hours: five of 16 MiB
+on `ofi+sm2` and none of 256 MiB, which it moves inline at well under a
+MiB a second, and ten W5 jobs a client at eight clients.
+
+The service and the clients get CPUs of their own. The Docker VM needs
+ten. For W1 to W4 the harness's node gets CPUs 0 to 7, and the launcher
+puts the service on 4 to 7 and the clients on 0 to 3. For W5 and W6 the
+clients' node gets 0 to 3 and the QPM's node 4 to 7, and for W7 the
+compute nodes get 0 to 3 and the QPMs' nodes 4 to 7. Every other container
+waits on 8 and 9. Each workload's headline pair, eight clients on
+`ofi+tcp`, runs once more with every container as it was, as Phase 0 and
+Phase 2 ran. The campaign puts every container back when it ends, however
+it ends.
+
+W5 and W6 start a QFw plane of their own for every run, with the fake IQM
+QPM given eight slots as in Phase 2. W7 runs `qfw_qiskit_simple.sh` under
+`salloc` against the site planes, which have to be running: v1 from
+`site.yaml` and v2 from `site-defw2.yaml`.
+
+A run that fails is tried once more, and both tries are kept, since a run
+that fails now and then is a result too. A failed try's run directory goes
+under `failed/`, out of the comparison's way. Before the first run the
+campaign removes the shared-memory regions `na+sm` left in `/dev/shm` for
+processes that no longer exist. A process that is killed cannot remove its
+own, and once a container's 64 MiB fills, libfabric's sm2 refuses to start
+and v1 falls back to tcp.
+
+| Path | Contents |
+| --- | --- |
+| `campaign.json` | The arguments, every container's CPUs before the campaign, and each run's outcome, time and log |
+| `runs/` | Each run's directory, as its launcher wrote it |
+| `failed/` | The directories of tries that failed |
+| `logs/` | Each run's command and output |
+| `plane/` | The runtime configuration and services manifest the W5 and W6 planes start from |
+| `compare.txt`, `compare.json` | `defw_bench_compare.py` over `runs/` |
+| `loc.txt`, `loc.json` | `defw_loc.py` |
 
 ## Lines of code
 
