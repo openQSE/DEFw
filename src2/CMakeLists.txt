@@ -386,6 +386,19 @@ if(BUILD_TESTING)
 				ENVIRONMENT
 					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
 
+		# The benchmark harness end to end, with few calls: the
+		# launcher, both clients, a directory, and the Python fake as
+		# W5's QPM, polling and on events.
+		add_test(NAME defw2_bench_smoke
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_bench_smoke.py"
+				--bin-dir $<TARGET_FILE_DIR:defw2-bench>
+				--fake "${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_qpm_fake.py")
+		set_tests_properties(defw2_bench_smoke
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
+
 		add_test(NAME defw2_python_qpm_smoke
 			COMMAND "${Python3_EXECUTABLE}"
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_python_qpm_smoke.py"
