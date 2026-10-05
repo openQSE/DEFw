@@ -19,7 +19,7 @@ compare field by field.
 | `v2/defw2_echo_service.py` | The echo service in Python, which is what the Python half of Phase 0 is measured against. |
 | `qfw_qpm_client.py` | W5 and W6 through QFw's own client code, on v1 or on v2 through `defw2.compat`. It runs under `qfw-srun`, and the launcher starts it. |
 | `defw_loc.py` | Counts the lines of code each version owns, in all and for equivalent function, for the line-count criterion. See Lines of code below. |
-| `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. |
+| `defw_bench_compare.py` | Joins v1 and v2 reports on the workload and prints the ratios. Each v2 run is set against v1 on the same provider, `ofi+tcp` against `ofi+tcp` and `na+sm` against `ofi+sm2`, and a row without that pair says it is unmatched. W5 and W6 compare what a job costs, event mode is a group of its own, and runs on CPUs of their own are kept apart from runs on shared ones. |
 
 ## Running the v1 harness
 

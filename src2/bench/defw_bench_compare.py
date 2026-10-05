@@ -6,13 +6,18 @@ workload. Give it run directories or summary files, in any mix:
 
 	defw_bench_compare.py /tmp/defw-bench /mnt/defw2-baselines/2026-09-23-tcp
 
-Runs are grouped by workload, payload and client count. Within a group the
-v1 runs are the baselines, and each v2 run is shown against the v1 run on
-the matching provider: v2's ofi+tcp against v1's ofi+tcp, and Mercury's
-shared memory, na+sm, against v1's, ofi+sm2. When the group has no v1 run
-on that provider, the v2 run is shown against the first v1 run it has, and
-the row says the pair is unmatched. A group with only one version is still
-listed, because a missing half is worth seeing.
+Runs are grouped by workload, payload and client count, and W5 and W6 in
+event mode apart from polling. Within a group the v1 runs are the
+baselines, and each v2 run is shown against the v1 run on the matching
+provider: v2's ofi+tcp against v1's ofi+tcp, and Mercury's shared memory,
+na+sm, against v1's, ofi+sm2. When the group has no v1 run on that
+provider, the v2 run is shown against the first v1 run it has, and the row
+says the pair is unmatched. A group with only one version is still listed,
+because a missing half is worth seeing. Runs whose service and clients had
+CPUs of their own are kept apart from runs where they shared them.
+
+W5 and W6 compare what a job costs instead of what a call does: the
+framework's overhead, jobs a second, polls and the collect.
 """
 
 import argparse
@@ -27,7 +32,7 @@ sys.path.insert(0, BENCH_DIR)
 import defw_bench_common as common  # noqa: E402
 
 # What is compared, and which way is better.
-METRICS = (
+CALL_METRICS = (
 	('p50 ms', 'lower', lambda r: r['latency']['p50_us'] / 1e3),
 	('p99 ms', 'lower', lambda r: r['latency']['p99_us'] / 1e3),
 	('calls/s', 'higher', lambda r: r['throughput']['calls_per_s']),
@@ -42,6 +47,35 @@ METRICS = (
 	('wire B/call', 'lower',
 	 lambda r: (r.get('wire') or {}).get('bytes_per_call')),
 )
+
+# A QPM job's, where the overhead is the framework's cost per job.
+JOB_METRICS = (
+	('overhead p50 ms', 'lower',
+	 lambda r: r['qpm']['overhead']['p50_us'] / 1e3),
+	('overhead p99 ms', 'lower',
+	 lambda r: r['qpm']['overhead']['p99_us'] / 1e3),
+	('jobs/s', 'higher', lambda r: r['throughput']['calls_per_s']),
+	('polls', 'lower', lambda r: r['qpm']['polls']['mean']),
+	('collect ms', 'lower', lambda r: r['qpm']['collect']['p50_us'] / 1e3),
+	('client CPU ms', 'lower',
+	 lambda r: r['cpu']['client_us_per_call'] / 1e3),
+	('wire B/job', 'lower',
+	 lambda r: (r.get('wire') or {}).get('bytes_per_call')),
+)
+
+
+def measured(get, report):
+	"""A metric of a report, or None for one it does not have, such as
+	the latency of a run in which every call failed."""
+	try:
+		return get(report)
+	except (KeyError, TypeError, ZeroDivisionError):
+		return None
+
+
+def metrics_of(reports):
+	return JOB_METRICS if any('qpm' in r for r in reports) \
+		else CALL_METRICS
 
 
 def find_summaries(paths):
@@ -66,9 +100,18 @@ def find_summaries(paths):
 	return reports
 
 
+def placement(report):
+	"""'own CPUs' when the service and the clients each had their own,
+	and 'shared CPUs' when the kernel placed them together."""
+	where = report.get('environment', {}).get('placement') or {}
+	return 'own CPUs' if where.get('client_cpus') else 'shared CPUs'
+
+
 def group_key(report):
 	workload = report['workload']
-	return (workload['id'], workload['payload_bytes'], workload['clients'])
+	name = workload['id'] + (' events' if workload.get('events') else '')
+	return (name, workload['payload_bytes'], workload['clients'],
+		placement(report))
 
 
 # Which halves of a v2 run were Python. A report from before the binding
@@ -78,15 +121,19 @@ FLAVOURS = {
 	('python', 'c'): 'v2 py-client',
 	('c', 'python'): 'v2 py-service',
 	('python', 'python'): 'v2 py-both',
+	('c', 'qfw'): 'v2 c',
+	('python', 'qfw'): 'v2 python',
+	('qfw', 'qfw'): 'v2 qfw',
 }
 
 
 def describe(report):
-	if report['run']['defw_major'] == 1:
-		return 'v1 ' + report['transport']['kind']
 	environment = report.get('environment', {})
-	flavour = FLAVOURS[(environment.get('client_language', 'c'),
-			    environment.get('service_language', 'c'))]
+	client = environment.get('client_language', 'c')
+	if report['run']['defw_major'] == 1:
+		prefix = 'v1 qfw' if client == 'qfw' else 'v1'
+		return '{} {}'.format(prefix, report['transport']['kind'])
+	flavour = FLAVOURS[(client, environment.get('service_language', 'c'))]
 	return '{} {}'.format(flavour, report['transport']['kind'])
 
 
@@ -122,7 +169,7 @@ def against_text(baseline, matched):
 
 def ratio(value, baseline, better):
 	"""How much better or worse than the baseline, as a plain number."""
-	if value is None or baseline in (None, 0):
+	if not value or not baseline:
 		return ''
 	times = value / baseline if better == 'higher' else baseline / value
 	return '{:.1f}x'.format(times) if times >= 1 else '{:.2f}x'.format(times)
@@ -137,13 +184,14 @@ def value_text(value):
 
 
 def print_group(key, reports):
-	workload, payload, clients = key
+	workload, payload, clients, where = key
 	baselines = [r for r in reports if r['run']['defw_major'] == 1]
+	metrics = metrics_of(reports)
 
 	print()
-	print('{}  {}  {} client{}'.format(
+	print('{}  {}  {} client{}  {}'.format(
 		workload, common.format_size(payload), clients,
-		'' if clients == 1 else 's'))
+		'' if clients == 1 else 's', where))
 	kinds = [b['transport']['kind'] for b in baselines]
 	for kind in sorted(set(kinds)):
 		if kinds.count(kind) > 1:
@@ -154,8 +202,8 @@ def print_group(key, reports):
 
 	width = max(len(describe(r)) for r in reports)
 	header = '  {:<{w}}'.format('', w=width)
-	for name, _, _ in METRICS:
-		header += '  {:>14}'.format(name)
+	for name, _, _ in metrics:
+		header += '  {:>15}'.format(name)
 	if baselines and len(baselines) < len(reports):
 		header += '  against'
 	print(header)
@@ -165,14 +213,15 @@ def print_group(key, reports):
 		if report['run']['defw_major'] != 1:
 			baseline, matched = baseline_for(report, baselines)
 		line = '  {:<{w}}'.format(describe(report), w=width)
-		for name, better, get in METRICS:
-			value = get(report)
+		for name, better, get in metrics:
+			value = measured(get, report)
 			text = value_text(value)
 			if baseline is not None:
-				against = ratio(value, get(baseline), better)
+				against = ratio(value, measured(get, baseline),
+						better)
 				if against:
 					text += ' ' + against
-			line += '  {:>14}'.format(text)
+			line += '  {:>15}'.format(text)
 		if baseline is not None:
 			line += '  ' + against_text(baseline, matched)
 		print(line)
@@ -181,13 +230,15 @@ def print_group(key, reports):
 				'', report['failed_calls'], w=width))
 
 
-def json_run(report, baselines):
+def json_run(report, baselines, metrics):
 	run = {
 		'version': report['run']['defw_major'],
+		'flavour': describe(report),
 		'transport': report['transport']['kind'],
 		'label': report['run']['label'],
 		'path': report['_path'],
-		'metrics': {name: get(report) for name, _, get in METRICS},
+		'metrics': {name: measured(get, report)
+			    for name, _, get in metrics},
 		'failed_calls': report['failed_calls'],
 	}
 	if report['run']['defw_major'] != 1:
@@ -224,14 +275,17 @@ def main(argv):
 	if args.json:
 		out = []
 		for key in sorted(groups):
-			workload, payload, clients = key
+			workload, payload, clients, where = key
 			baselines = [r for r in groups[key]
 				     if r['run']['defw_major'] == 1]
+			metrics = metrics_of(groups[key])
 			out.append({
 				'workload': workload,
 				'payload_bytes': payload,
 				'clients': clients,
-				'runs': [json_run(r, baselines) for r in groups[key]],
+				'placement': where,
+				'runs': [json_run(r, baselines, metrics)
+					 for r in groups[key]],
 			})
 		common.write_json(args.json, out, indent=2)
 		print('wrote {}'.format(args.json))
