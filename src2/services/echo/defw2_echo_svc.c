@@ -84,7 +84,7 @@ static void defw2_echo_ult(hg_handle_t handle)
 		defw2_trace_backdate(&trace, arrived_wall, arrived_mono);
 		mark = defw2_mono_ns();
 		trace.span.decode_ns = mark - arrived_mono;
-		trace.span.request_bytes = in.payload.len;
+		trace.span.request_bytes = HG_Get_input_payload_size(handle);
 	}
 
 	if (bound == NULL) {
@@ -170,7 +170,7 @@ static void defw2_echo_ult(hg_handle_t handle)
 
 	if (trace.recording) {
 		trace.span.encode_ns = defw2_mono_ns() - mark;
-		trace.span.response_bytes = out.payload.len;
+		trace.span.response_bytes = HG_Get_output_payload_size(handle);
 		trace.span.api = DEFW2_API_ECHO;
 		trace.span.method = "echo";
 		trace.span.tier = DEFW2_TIER_TYPED;
@@ -232,6 +232,7 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 		defw2_trace_backdate(&trace, arrived_wall, arrived_mono);
 		mark = defw2_mono_ns();
 		trace.span.decode_ns = mark - arrived_mono;
+		trace.span.request_bytes = HG_Get_input_payload_size(handle);
 	}
 
 	if (bound == NULL) {
@@ -321,6 +322,7 @@ respond:
 
 	if (trace.recording) {
 		trace.span.encode_ns = defw2_mono_ns() - mark;
+		trace.span.response_bytes = HG_Get_output_payload_size(handle);
 		trace.span.bulk_bytes = out.pulled + out.pushed;
 		trace.span.api = DEFW2_API_ECHO;
 		trace.span.method = "echo_bulk";

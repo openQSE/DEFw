@@ -502,7 +502,16 @@ static void backpressure(defw2_rt_t *receiver, defw2_event_publisher_t *pub,
 
 	check("the publisher has nothing on its way", quiet(pub));
 	defw2_event_publisher_stats(pub, &before);
-	for (i = 0; i < 20; i++)
+	/*
+	 * The first event alone, until the stuck callback holds it. Until the
+	 * sink's thread has handed it over it takes a place in the queue, so
+	 * the rest would find four places or five depending on that race, and
+	 * one freed later would let in an event the test expects refused.
+	 */
+	check("its callback is stuck with the first event",
+	      send_task(pub, &target, 800) == DEFW2_OK &&
+	      wait_count(&gate, 1, 5000));
+	for (i = 1; i < 20; i++)
 		sent = sent && send_task(pub, &target, 800 + i) == DEFW2_OK;
 	check("twenty events are published to it", sent);
 	check("and each is answered",
@@ -510,10 +519,9 @@ static void backpressure(defw2_rt_t *receiver, defw2_event_publisher_t *pub,
 			   before.failed + 20, 5000));
 	defw2_event_publisher_stats(pub, &after);
 	accepted = after.delivered - before.delivered;
-	/* One with the callback, four waiting, give or take the race
-	 * between the first arrival and the callback taking it. */
+	/* One with the callback and four waiting. */
 	check("a full sink turns the rest away",
-	      accepted >= 4 && accepted <= 6 &&
+	      accepted == 5 &&
 	      after.refused - before.refused == 20 - accepted &&
 	      after.failed == before.failed);
 	defw2_event_sink_stats(d, &sink_stats);

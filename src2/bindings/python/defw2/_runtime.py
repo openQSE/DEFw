@@ -163,7 +163,11 @@ class Runtime:
 	"""
 
 	def __init__(self, role='client', address=None, node_name=None,
-		     profile=None, rpc_threads=None):
+		     profile=None, rpc_threads=None, progress_spindown_ms=None):
+		"""progress_spindown_ms is how long Margo's progress loop spins
+		after it has handled something. By default a server does not
+		spin and a client keeps Margo's own default, and
+		DEFW2_PROGRESS_SPINDOWN_MS changes that for both."""
 		config = ffi.new('defw2_config_t *')
 		_check(lib.defw2_config_from_env(config), 'reading the environment')
 
@@ -180,6 +184,13 @@ class Runtime:
 			config.profile = bool(profile)
 		if rpc_threads is not None:
 			config.rpc_thread_count = int(rpc_threads)
+		if progress_spindown_ms is not None:
+			spindown = int(progress_spindown_ms)
+			if spindown < 0:
+				raise ValueError('a spindown is 0 ms or more, '
+						 'not {}'.format(spindown))
+			config.has_progress_spindown = True
+			config.progress_spindown_ms = spindown
 
 		out = ffi.new('defw2_rt_t **')
 		_check(lib.defw2_init(config, out), 'starting the runtime')

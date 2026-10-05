@@ -247,6 +247,12 @@ def directory(runtime, dirsvc_binary):
 		check('resolving one binding selects it',
 		      len(chosen) == 1 and
 		      chosen[0]['binding']['provider_id'] == 4)
+		traceparent = ('00-4bf92f3577b34da6a3ce929d0e0e4736-'
+			       '00f067aa0ba902b7-01')
+		traced = found.resolve(service_type='qfw.qpm',
+				       traceparent=traceparent)
+		check('a resolve can carry the caller\'s trace context',
+		      traced == records)
 
 		if record:
 			with defw2.QPM.from_record(runtime, record) as qpm:

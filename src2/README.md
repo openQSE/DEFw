@@ -111,7 +111,8 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
-| `bench/` | The benchmarks, and the v1 side of the comparison |
+| `bench/` | The benchmarks, the v1 side of the comparison, and the line counter |
+| `examples/` | `defw2-spank-flow`, the Slurm plugin's reserve and release in C |
 
 ## Calling and serving
 
@@ -199,6 +200,23 @@ structure, and responds with no reply bytes, so nothing is encoded between
 C and Python in either direction. `defw2_qpm_smoke --serve` and
 `tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
 the C checks and the Python checks pass against both.
+
+`examples/defw2_spank_flow.c` is what the Slurm plugin would do with these
+calls. QFw's plugin has a gateway reserve and release for it today, over
+QSGP and in Python. The example finds the QPM in the directory, checks it
+is ready, reserves, and later releases, each step a process of its own as
+each is a callback of its own in the plugin:
+
+```bash
+export DEFW2_DIRSVC=<the directory's address>
+rid=$(defw2-spank-flow reserve <service_id> <job_id> <user> 4 1024)
+defw2-spank-flow release <service_id> "$rid"
+```
+
+It is 93 lines of code against the public headers alone, which is the C
+caller experience the design asks for, under one hundred.
+`defw2_spank_flow_check` runs it against the Python fake QPM and counts its
+lines as `bench/defw_loc.py` counts DEFw's.
 
 ## Documents
 
@@ -449,6 +467,7 @@ section. The names v2 adds:
 | `DEFW2_MARGO_CONFIG` | built in | Path to a Margo JSON configuration |
 | `DEFW2_PROFILE` | off | Turns on Margo profiling and diagnostics |
 | `DEFW2_RPC_THREADS` | 2 for a server, 0 for a client | Handler execution streams |
+| `DEFW2_PROGRESS_SPINDOWN_MS` | 0 for a server, Margo's own 10 for a client | How long Margo's progress loop spins after it has handled something before it waits again. See below |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
 | `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
@@ -474,3 +493,14 @@ handlers in the primary pool when it is asked for none, which would mean a
 service only serves while its main thread is donated to Margo. v2 cannot
 promise that thread, because a Python service holds it. A server asking for
 no handler threads is raised to the default instead.
+
+**A server does not spin.** After it has handled something, Margo's progress
+loop spins for 10 ms before it waits again, which answers a call that comes
+right after another sooner. A process that listens, a service or a client
+that takes events, has handlers often enough to spin all the time, and that
+holds a whole CPU. A W5 client taking events spent about 2 ms of CPU a job
+spinning, and a quarter of a millisecond without. So a server spins for
+0 ms, and a client keeps Margo's 10 ms. `DEFW2_PROGRESS_SPINDOWN_MS` sets both, and so does
+`progress_spindown_ms` for a `defw2.Runtime`. A site's own Margo
+configuration, `DEFW2_MARGO_CONFIG`, is used as written, so it sets
+`progress_spindown_msec` itself.

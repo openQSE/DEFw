@@ -65,6 +65,16 @@ typedef struct {
 	defw2_role_t		role;		/* DEFW_AGENT_TYPE */
 	defw2_log_level_t	log_level;	/* DEFW_LOG_LEVEL */
 	int			rpc_thread_count; /* DEFW2_RPC_THREADS */
+	/*
+	 * DEFW2_PROGRESS_SPINDOWN_MS: how long Margo's progress loop spins
+	 * after it has handled something before it waits again, when
+	 * has_progress_spindown says so. Otherwise a server does not spin,
+	 * so a process that listens does not hold a CPU between calls, and a
+	 * client keeps Margo's own default, 10 ms, which shortens a call
+	 * made right after another.
+	 */
+	bool			has_progress_spindown;
+	int			progress_spindown_ms;
 	bool			profile;	/* DEFW2_PROFILE */
 } defw2_config_t;
 

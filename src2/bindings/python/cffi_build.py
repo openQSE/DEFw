@@ -62,6 +62,8 @@ typedef struct {
 	const char *log_dir;
 	defw2_role_t role;
 	int rpc_thread_count;
+	bool has_progress_spindown;
+	int progress_spindown_ms;
 	bool profile;
 	...;
 } defw2_config_t;

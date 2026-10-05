@@ -67,6 +67,12 @@ struct options {
 	uint32_t	qubits;
 	uint32_t	shots;
 	bool		statevector;
+	/*
+	 * Learn that a job is done from its completion event rather than by
+	 * polling, then collect it with one read_cq. The process listens for
+	 * that, so it runs as a server.
+	 */
+	bool		events;
 	uint32_t	timeout_ms;
 	long		wait_s;
 };
@@ -93,6 +99,8 @@ static void usage(void)
 		"  --qubits N          per job (default 4)\n"
 		"  --shots N           per job (default 1024)\n"
 		"  --statevector       W6: return the statevector into a buffer\n"
+		"  --events            W5 and W6: collect each job once its\n"
+		"                      completion event comes, not by polling\n"
 		"  --traceparent S     the run's W3C trace context\n"
 		"  --ready PATH        created once warmed up\n"
 		"  --go PATH           waited for before measuring\n"
@@ -170,12 +178,13 @@ struct results {
 	uint64_t	*durations;	/* per call, nanoseconds */
 	/*
 	 * W5 and W6, per job: the QPM's own run time as it reported it, the
-	 * read_cq that collected the job, and how many read_cq calls that
-	 * took. Absent for the other workloads.
+	 * read_cq that collected the job, how many read_cq calls that took,
+	 * and how many completion events. Absent for the other workloads.
 	 */
 	uint64_t	*backend_ns;
 	uint64_t	*collect_ns;
 	uint64_t	*polls;
+	uint64_t	*events;
 	long		*failed;	/* every failed call's index */
 	long		failures;
 	char		message[256];	/* the first failure's */
@@ -236,6 +245,43 @@ static void run_eager(defw2_binding_t *echo, const struct options *opts,
  * depend on what else happens to be registered; what W4 measures is the cost
  * of asking.
  */
+/*
+ * The run's one checked call, for W4: the directory must hold what the run
+ * resolves, or every measured call would answer with nothing. The service
+ * registers as the run starts, so this waits for it, as v1's lookup helper
+ * waits for a service to appear.
+ */
+static bool resolve_check(defw2_dir_t *dir, const struct options *opts,
+			  const defw2_call_opts_t *call)
+{
+	struct timespec nap = { 0, 10 * 1000 * 1000 };
+	uint64_t deadline = mono_ns() + (uint64_t)opts->wait_s * 1000000000ull;
+	defw2_dir_query_t query;
+
+	memset(&query, 0, sizeof(query));
+	query.service_type = opts->resolve_type;
+	for (;;) {
+		defw2_dir_result_t result = { 0 };
+		defw2_status_t status = { 0 };
+		size_t found = 0;
+
+		if (defw2_dir_resolve(dir, &query, call, &result, &status) ==
+		    DEFW2_OK && status.category == DEFW2_CAT_OK)
+			found = result.entry_count;
+		defw2_dir_result_free(&result);
+		defw2_status_free(&status);
+		if (found > 0)
+			return true;
+		if (mono_ns() > deadline) {
+			fprintf(stderr, "the directory at %s has no %s\n",
+				opts->address, opts->resolve_type ?
+				opts->resolve_type : "record");
+			return false;
+		}
+		nanosleep(&nap, NULL);
+	}
+}
+
 static void run_resolve(defw2_dir_t *dir, const struct options *opts,
 			struct results *results,
 			const defw2_call_opts_t *call)
@@ -369,6 +415,7 @@ static bool write_results(const struct options *opts,
 		write_u64_array(out, "collect_ns", results->collect_ns,
 				opts->calls);
 		write_u64_array(out, "polls", results->polls, opts->calls);
+		write_u64_array(out, "events", results->events, opts->calls);
 	}
 
 	fputs("\"failed_calls\":[", out);
@@ -418,6 +465,10 @@ static bool parse(int argc, char **argv, struct options *opts)
 		}
 		if (strcmp(name, "--statevector") == 0) {
 			opts->statevector = true;
+			continue;
+		}
+		if (strcmp(name, "--events") == 0) {
+			opts->events = true;
 			continue;
 		}
 		if (value == NULL)
@@ -478,6 +529,8 @@ static bool parse(int argc, char **argv, struct options *opts)
 struct qpm_client {
 	defw2_binding_t		*admission;
 	defw2_binding_t		*execution;
+	defw2_event_sink_t	*sink;			/* --events only */
+	uint64_t		events_taken;		/* from the sink */
 	char			service_id[256];	/* the one measured */
 	uint64_t		reservation_id;
 	char			qasm[256];
@@ -671,6 +724,80 @@ static void qpm_release(struct qpm_client *qpm, const struct options *opts)
 	defw2_status_free(&status);
 }
 
+/*
+ * Have the QPM send this client's completions to a sink of its own. The
+ * reservation limits them to this client's jobs, the type is QFw's evtype
+ * for a circuit's result, as JSON, which is how compat reads it, and the
+ * tag says which client the events are for.
+ */
+static bool qpm_listen(defw2_rt_t *rt, struct qpm_client *qpm,
+		       const struct options *opts)
+{
+	defw2_call_opts_t call = { .timeout_ms = opts->timeout_ms };
+	defw2_qpm_decision_t out = { 0 };
+	defw2_status_t status = { 0 };
+	defw2_qpm_notify_req_t req;
+	char tag[64];
+	bool ok;
+
+	if (defw2_event_sink_create(rt, DEFW2_PROVIDER_EVENT, NULL,
+				    &qpm->sink) != DEFW2_OK ||
+	    defw2_qpm_event_accept(qpm->sink) != DEFW2_OK) {
+		fprintf(stderr, "cannot serve a sink for completions\n");
+		return false;
+	}
+	snprintf(tag, sizeof(tag), "defw2-bench-%ld", opts->index);
+	memset(&req, 0, sizeof(req));
+	req.ctx.reservation_id = qpm->reservation_id;
+	req.target.address = defw2_event_sink_address(qpm->sink);
+	req.target.provider_id = defw2_event_sink_provider_id(qpm->sink);
+	req.target.tag = tag;
+	req.type = "1";
+	ok = defw2_qpm_register_event_notification(qpm->execution, &req,
+						   &call, &out, &status) ==
+	     DEFW2_OK && status.category == DEFW2_CAT_OK &&
+	     out.decision != NULL &&
+	     strcmp(out.decision, DEFW2_QPM_DECISION_ACCEPTED) == 0;
+	if (!ok)
+		fprintf(stderr, "the QPM refused to send completions: %s\n",
+			out.message ? out.message :
+			out.reason ? out.reason :
+			defw2_category_name(status.category));
+	defw2_qpm_decision_free(&out);
+	defw2_status_free(&status);
+	return ok;
+}
+
+/*
+ * Wait for the completion event of the job named cid, until deadline. An
+ * event for any other job, which none should be, is passed over.
+ */
+static bool qpm_wait_event(struct qpm_client *qpm, const char *cid,
+			   uint64_t deadline)
+{
+	for (;;) {
+		uint64_t now = mono_ns();
+		defw2_event_t event;
+		const defw2_qpm_task_t *task;
+		bool mine;
+
+		if (now >= deadline)
+			return false;
+		if (defw2_event_sink_next(qpm->sink,
+					  (uint32_t)((deadline - now) /
+						     1000000ull) + 1,
+					  &event) != DEFW2_OK)
+			return false;
+		qpm->events_taken++;
+		task = defw2_qpm_event_task(&event);
+		mine = task != NULL && task->cid != NULL &&
+		       strcmp(task->cid, cid) == 0;
+		defw2_event_free(&event);
+		if (mine)
+			return true;
+	}
+}
+
 /* What failed, in the words of the transport or the service. */
 static const char *qpm_failure(struct qpm_client *qpm, const char *what,
 			       defw2_rc_t rc, const defw2_status_t *status)
@@ -691,6 +818,10 @@ static const char *qpm_failure(struct qpm_client *qpm, const char *what,
  * the size is known: the call that finds the completion delivers it. A job
  * gets the call timeout to complete in, so a completion the QPM loses fails
  * the job rather than the run.
+ *
+ * With --events the polls give way to the job's completion event, and one
+ * read_cq collects the completion, which takes it off the QPM's queue as
+ * the last poll would have.
  *
  * Returns NULL for a job that completed, and what went wrong otherwise.
  */
@@ -731,6 +862,10 @@ static const char *qpm_job(struct qpm_client *qpm, const struct options *opts,
 	read.cid = cid;
 	*polls = 0;
 	deadline = mono_ns() + (uint64_t)opts->timeout_ms * 1000000ull;
+	if (opts->events && !qpm_wait_event(qpm, cid, deadline)) {
+		why = "no completion event came within the call timeout";
+		goto out;
+	}
 	for (;;) {
 		uint64_t started = mono_ns();
 
@@ -746,6 +881,10 @@ static const char *qpm_job(struct qpm_client *qpm, const struct options *opts,
 			break;
 		defw2_qpm_task_free(&task);
 		defw2_status_free(&status);
+		if (opts->events) {
+			why = "read_cq found no completion after its event";
+			goto out;
+		}
 		if (mono_ns() > deadline) {
 			why = "the job did not complete within the call timeout";
 			goto out;
@@ -790,18 +929,21 @@ static int run_qpm(const struct options *opts, defw2_rt_t *rt,
 	results->backend_ns = calloc((size_t)opts->calls, sizeof(uint64_t));
 	results->collect_ns = calloc((size_t)opts->calls, sizeof(uint64_t));
 	results->polls = calloc((size_t)opts->calls, sizeof(uint64_t));
+	results->events = calloc((size_t)opts->calls, sizeof(uint64_t));
 	if (opts->statevector) {
 		qpm.lent.capacity = 16ull << opts->qubits;
 		qpm.lent.data = malloc(qpm.lent.capacity);
 	}
 	if (results->backend_ns == NULL || results->collect_ns == NULL ||
-	    results->polls == NULL ||
+	    results->polls == NULL || results->events == NULL ||
 	    (opts->statevector && qpm.lent.data == NULL)) {
 		fprintf(stderr, "out of memory for %ld jobs\n", opts->calls);
 		goto out;
 	}
 	if (!qpm_open(rt, opts, &qpm) ||
 	    !qpm_reserve(&qpm, opts, (uint64_t)(opts->calls + opts->warmup) + 1))
+		goto out;
+	if (opts->events && !qpm_listen(rt, &qpm, opts))
 		goto out;
 
 	/* One checked job before anything is measured. */
@@ -830,6 +972,7 @@ static int run_qpm(const struct options *opts, defw2_rt_t *rt,
 	results->loop_start_unix_ns = wall_ns();
 	loop_start = mono_ns();
 	for (i = 0; i < opts->calls; i++) {
+		uint64_t taken = qpm.events_taken;
 		uint64_t started;
 
 		/*
@@ -843,6 +986,7 @@ static int run_qpm(const struct options *opts, defw2_rt_t *rt,
 		why = qpm_job(&qpm, opts, call, &results->collect_ns[i],
 			      &results->backend_ns[i], &results->polls[i]);
 		results->durations[i] = mono_ns() - started;
+		results->events[i] = qpm.events_taken - taken;
 
 		/* Checked after the clock stops. */
 		if (why == NULL && opts->statevector &&
@@ -867,12 +1011,15 @@ static int run_qpm(const struct options *opts, defw2_rt_t *rt,
 			results->message);
 out:
 	qpm_release(&qpm, opts);
+	if (qpm.sink != NULL)
+		defw2_event_sink_destroy(qpm.sink);
 	defw2_binding_free(qpm.admission);
 	defw2_binding_free(qpm.execution);
 	free(qpm.lent.data);
 	free(results->backend_ns);
 	free(results->collect_ns);
 	free(results->polls);
+	free(results->events);
 	return rc;
 }
 
@@ -924,7 +1071,7 @@ int main(int argc, char **argv)
 	warm.traceparent = NULL;
 
 	defw2_config_from_env(&cfg);
-	cfg.role = DEFW2_ROLE_CLIENT;
+	cfg.role = opts.events ? DEFW2_ROLE_SERVER : DEFW2_ROLE_CLIENT;
 	if (defw2_init(&cfg, &rt) != DEFW2_OK) {
 		fprintf(stderr, "cannot start a client on %s\n", cfg.address);
 		return 1;
@@ -972,6 +1119,8 @@ int main(int argc, char **argv)
 				opts.address);
 			goto out;
 		}
+		if (!resolve_check(dir, &opts, &warm))
+			goto out;
 		for (w = 0; w < opts.warmup; w++) {
 			defw2_dir_result_t warm_result = { 0 };
 

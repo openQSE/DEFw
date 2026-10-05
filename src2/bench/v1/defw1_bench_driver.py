@@ -9,7 +9,8 @@ otlp/, and a short table on stdout.
 
 Service CPU time and peak memory are read from /proc around the measured
 window. That works because defw_spawn_services starts the service on this
-node.
+node. For W4 the service measured is the directory, which is this process,
+so its figures include this driver's own waiting, a poll every 50 ms.
 """
 
 import json
@@ -30,6 +31,8 @@ import defw_bench_common as common
 SERVICE_MODULE = 'svc_test_echo'
 SERVICE_API = 'TestEcho'
 SERVICE_METHOD = 'echo'
+DIRECTORY_API = 'svc_dirsvc'
+DIRECTORY_METHOD = 'resolve_services'
 CLIENT_MODULES = 'api_dirsvc,api_test_echo'
 SCOPE_NAME = 'defw.bench.v1'
 SCOPE_VERSION = '0.1'
@@ -120,6 +123,7 @@ class BenchRun:
 		self.services = []
 		self.clients = []
 		self.pids = {}
+		self.seen = None
 
 	def record_pid(self, role, pid):
 		# The launcher reads this to clean up if the run is abandoned.
@@ -155,9 +159,11 @@ class BenchRun:
 		stdout = open(os.path.join(log_dir, 'stdout.log'), 'w')
 		stderr = open(os.path.join(log_dir, 'stderr.log'), 'w')
 		try:
+			pin = common.pinned_to(set(config['client_cpus']))
 			process = subprocess.Popen(
 				[config['defwp'], '-c', bootstrap], env=env, cwd=log_dir,
-				stdout=stdout, stderr=stderr, start_new_session=True)
+				stdout=stdout, stderr=stderr,
+				start_new_session=True, preexec_fn=pin)
 		finally:
 			# The child has its own descriptors for both files.
 			stdout.close()
@@ -261,8 +267,10 @@ class BenchRun:
 			'module': SERVICE_MODULE,
 			'agent_name': f'bench-echo-{config["trace_id"][:8]}',
 		})
-		service_pid = self.services[0].pid
-		self.record_pid('service', service_pid)
+		self.record_pid('service', self.services[0].pid)
+		# W4's clients call the directory, which is this process.
+		service_pid = (os.getpid() if config.get('resolve')
+			       else self.services[0].pid)
 
 		for index in range(config['clients']):
 			self.start_client(index)
@@ -270,6 +278,9 @@ class BenchRun:
 		# Checked here to stop a mislabelled run early, and again at the
 		# end, once every process has flushed its log.
 		self.check_transport()
+		self.seen = common.seen(
+			[os.getpid(), self.services[0].pid],
+			[process.pid for _, process in self.clients])
 
 		service_cpu_before = proc_cpu_ns(service_pid)
 		go_unix_ns = time.time_ns()
@@ -292,7 +303,8 @@ class BenchRun:
 					f'client {result["index"]} loaded DEFw from '
 					f'{result["defw_module"]}, not {defw_module}')
 		report = build_report(config, results, service,
-				      go_unix_ns, end_unix_ns, defw_module)
+				      go_unix_ns, end_unix_ns, defw_module,
+				      self.seen)
 		common.write_json(os.path.join(self.run_dir, 'summary.json'),
 				  report, indent=2)
 		write_spans(config, results, report, go_unix_ns, end_unix_ns)
@@ -300,7 +312,7 @@ class BenchRun:
 		return 0 if report['failed_calls'] == 0 else 1
 
 
-def environment(config, defw_module):
+def environment(config, defw_module, seen=None):
 	return {
 		'hostname': socket.gethostname(),
 		'cpu_count': os.cpu_count(),
@@ -317,11 +329,12 @@ def environment(config, defw_module):
 		'defw_py_log_level': config['py_log_level'],
 		'rma_attachments': os.environ.get('DEFW_RMA_ATTACHMENTS'),
 		'rma_threshold': os.environ.get('DEFW_RMA_THRESHOLD'),
+		'placement': dict(config.get('placement') or {}, seen=seen),
 	}
 
 
 def build_report(config, results, service, go_unix_ns, end_unix_ns,
-		 defw_module):
+		 defw_module, seen=None):
 	ok_durations = []
 	clients = []
 	failed = 0
@@ -373,7 +386,7 @@ def build_report(config, results, service, go_unix_ns, end_unix_ns,
 			'fallback_check': ('not needed' if config['transport'] == 'tcp'
 					   else 'passed'),
 		},
-		'environment': environment(config, defw_module),
+		'environment': environment(config, defw_module, seen),
 		'latency': common.latency_summary(ok_durations),
 		'throughput': {
 			'calls_per_s': total_calls / window_s,
@@ -398,6 +411,11 @@ def build_report(config, results, service, go_unix_ns, end_unix_ns,
 		report['bulk'] = {
 			'payload_mib_per_s': payload_mib * len(ok_durations) / busy_s,
 		}
+	counts = {}
+	for result in results:
+		common.add_counts(counts, result['wire'])
+	report['wire'] = common.wire_summary(counts, total_calls,
+					     'client message counts')
 	return report
 
 
@@ -438,9 +456,12 @@ def write_spans(config, results, report, go_unix_ns, end_unix_ns):
 		if not config['spans']:
 			return
 
+		resolve = config.get('resolve')
 		call_attributes = common.otlp_attributes({
-			'qfw.rpc.api': SERVICE_API,
-			'qfw.rpc.method': SERVICE_METHOD,
+			'qfw.rpc.api': (DIRECTORY_API if resolve
+					else SERVICE_API),
+			'qfw.rpc.method': (DIRECTORY_METHOD if resolve
+					   else SERVICE_METHOD),
 			'qfw.transport.kind': config['transport'],
 			'qfw.bench.payload.bytes': config['payload_bytes'],
 		})
@@ -487,6 +508,13 @@ def print_report(report, run_dir):
 		      f'{report["bulk"]["payload_mib_per_s"]:.1f} MiB/s')
 	print(f'  CPU per call (us) client {cpu["client_us_per_call"]:.1f}  '
 	      f'service {cpu["service_us_per_call"]:.1f}')
+	if report.get('wire'):
+		print(f'  wire bytes/call  '
+		      f'{report["wire"]["bytes_per_call"]:.0f}, '
+		      f'{report["wire"]["request_bytes_per_call"]:.0f} in '
+		      f'requests and '
+		      f'{report["wire"]["response_bytes_per_call"]:.0f} in '
+		      f'answers')
 	service_rss = memory['service_max_rss_kib']
 	service_mib = f'{service_rss / 1024:.1f}' if service_rss else 'unknown'
 	print(f'  peak RSS (MiB)   client '

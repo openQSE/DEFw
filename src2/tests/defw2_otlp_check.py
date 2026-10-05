@@ -6,7 +6,9 @@ files the way the report tooling will, with a JSON parser, and checks the
 shape rather than the spelling: identifiers are hex of the right length,
 times are decimal strings in order, histogram buckets add up, and the
 server's spans really are children of the client's, which is the thing
-that proves trace context crossed the wire.
+that proves trace context crossed the wire. A call that was answered counts
+the bytes of both its messages, and where both sides recorded the call they
+count the same bytes, which is what wire bytes per call rests on.
 
 	defw2_otlp_check.py <directory> [--tier TIER]
 
@@ -77,6 +79,13 @@ def attribute(attributes, key):
 	return None
 
 
+def int_attribute(attributes, key):
+	for item in attributes:
+		if item['key'] == key:
+			return int(item['value'].get('intValue', 0))
+	return None
+
+
 def check_spans(path, problems, seen):
 	name = os.path.basename(path)
 	count = 0
@@ -133,10 +142,24 @@ def check_span(where, span, problems, seen):
 			       where + ' is a document span that does not name '
 			       'its method')
 
+	attributes = span['attributes']
+	sizes = (int_attribute(attributes, 'qfw.rpc.request.bytes'),
+		 int_attribute(attributes, 'qfw.rpc.response.bytes'))
 	if span['kind'] == SPAN_CLIENT:
 		seen['client'].add(span['spanId'])
+		# An answered call sent a request and got an answer, so a
+		# zero is a call that did not count its messages.
+		api = attribute(attributes, 'qfw.rpc.api')
+		method = attribute(attributes, 'qfw.rpc.method')
+		if attribute(attributes, 'qfw.rpc.status.category') == 'ok':
+			problems.check(all(sizes),
+				       '{} is an answered {}.{} call without '
+				       'the size of both messages'.format(
+					       where, api, method))
+		seen['client_bytes'][span['spanId']] = (where, sizes)
 	elif span['kind'] == SPAN_SERVER:
 		seen['server_parents'].add(span.get('parentSpanId'))
+		seen['server_bytes'][span.get('parentSpanId')] = (where, sizes)
 		events = {event['name'] for event in span.get('events', [])}
 		problems.check('decode' in events,
 			       where + ' has a server span with no decode event')
@@ -186,7 +209,8 @@ def main():
 				 '[--tier TIER]')
 	directory = args[0]
 	problems = Problems()
-	seen = {'client': set(), 'server_parents': set(), 'tiers': set()}
+	seen = {'client': set(), 'server_parents': set(), 'tiers': set(),
+		'client_bytes': {}, 'server_bytes': {}}
 
 	span_files = sorted(glob.glob(os.path.join(directory, 'spans-*.jsonl')))
 	metric_files = sorted(glob.glob(os.path.join(directory,
@@ -211,6 +235,19 @@ def main():
 		       'no server span is a child of a client span, so trace '
 		       'context did not cross the wire')
 
+	# Both ends of a call that was answered count the same messages.
+	agreed = 0
+	for span_id in sorted(joined):
+		where, (request, response) = seen['client_bytes'][span_id]
+		served_at, served = seen['server_bytes'][span_id]
+		if response:
+			agreed += problems.check(served == (request, response),
+				       '{} counted {} request and {} answer '
+				       'bytes, and its service at {} counted '
+				       '{} and {}'.format(where, request,
+							  response, served_at,
+							  *served))
+
 	if tier is not None:
 		for kind, side in ((SPAN_CLIENT, 'client'),
 				   (SPAN_SERVER, 'server')):
@@ -219,8 +256,9 @@ def main():
 					       side, tier))
 
 	failed = problems.report()
-	print('{} transport spans, {} joined to their caller, {} metrics'.format(
-		spans, len(joined), len(metrics)))
+	print('{} transport spans, {} joined to their caller, {} of them '
+	      'agreeing on their bytes, {} metrics'.format(
+		      spans, len(joined), agreed, len(metrics)))
 	print('OTLP CHECK ' + ('FAILED' if failed else 'PASSED'))
 	return 1 if failed else 0
 

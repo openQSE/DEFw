@@ -10,6 +10,9 @@
 #include <string.h>
 
 #include <defw2/defw2.h>
+#include <margo.h>
+
+#include "defw2_internal.h"	/* the Margo instance, to read its config */
 
 static int check(const char *what, bool ok)
 {
@@ -63,6 +66,75 @@ static int round_trip(defw2_role_t role, const char *label)
 	return failures;
 }
 
+/*
+ * How long a runtime's progress loop spins, as the configuration Margo
+ * runs with says, or -1 when it does not say.
+ */
+static long spindown_of(defw2_rt_t *rt)
+{
+	char *json = margo_get_config(rt->mid);
+	const char *at = NULL;
+	long ms = -1;
+
+	if (json != NULL)
+		at = strstr(json, "\"progress_spindown_msec\"");
+	if (at != NULL && (at = strchr(at, ':')) != NULL)
+		ms = strtol(at + 1, NULL, 10);
+	free(json);
+	return ms;
+}
+
+/* A runtime of role from the environment, and its spindown. */
+static long spindown_for(defw2_role_t role, int set_ms)
+{
+	defw2_config_t cfg;
+	defw2_rt_t *rt = NULL;
+	long ms = -2;
+
+	if (defw2_config_from_env(&cfg) != DEFW2_OK)
+		return -3;
+	cfg.role = role;
+	if (set_ms >= 0) {
+		cfg.has_progress_spindown = true;
+		cfg.progress_spindown_ms = set_ms;
+	}
+	if (defw2_init(&cfg, &rt) == DEFW2_OK) {
+		ms = spindown_of(rt);
+		defw2_finalize(rt);
+	}
+	return ms;
+}
+
+/*
+ * A server does not spin unless told to, since a process that listens has
+ * handlers often enough to spin all the time. A client keeps Margo's own
+ * default, 10 ms in Margo 0.24. DEFW2_PROGRESS_SPINDOWN_MS sets both, and
+ * the config's own field sets one runtime.
+ */
+static int spindown(void)
+{
+	defw2_config_t cfg;
+	int failures = 0;
+
+	unsetenv("DEFW2_PROGRESS_SPINDOWN_MS");
+	failures += check("a server does not spin",
+			  spindown_for(DEFW2_ROLE_SERVER, -1) == 0);
+	failures += check("a client keeps Margo's spindown",
+			  spindown_for(DEFW2_ROLE_CLIENT, -1) == 10);
+	failures += check("a runtime takes the one it is given",
+			  spindown_for(DEFW2_ROLE_SERVER, 7) == 7 &&
+			  spindown_for(DEFW2_ROLE_CLIENT, 0) == 0);
+	setenv("DEFW2_PROGRESS_SPINDOWN_MS", "3", 1);
+	failures += check("DEFW2_PROGRESS_SPINDOWN_MS sets both",
+			  spindown_for(DEFW2_ROLE_SERVER, -1) == 3 &&
+			  spindown_for(DEFW2_ROLE_CLIENT, -1) == 3);
+	setenv("DEFW2_PROGRESS_SPINDOWN_MS", "-1", 1);
+	failures += check("and a spindown that is not one is refused",
+			  defw2_config_from_env(&cfg) == DEFW2_ERR_CONFIG);
+	unsetenv("DEFW2_PROGRESS_SPINDOWN_MS");
+	return failures;
+}
+
 static int status_helpers(void)
 {
 	defw2_status_t status = {
@@ -94,6 +166,7 @@ int main(void)
 	printf("defw2 version %s\n", defw2_version());
 	failures += round_trip(DEFW2_ROLE_CLIENT, "client");
 	failures += round_trip(DEFW2_ROLE_SERVER, "server");
+	failures += spindown();
 	failures += status_helpers();
 
 	printf("%s\n", failures ? "SMOKE FAILED" : "SMOKE PASSED");

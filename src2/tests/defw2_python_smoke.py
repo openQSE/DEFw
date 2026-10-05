@@ -246,6 +246,24 @@ def check_host_names_resolve():
 	server.close()
 
 
+def check_spindown():
+	"""A runtime takes the spindown it is given, and only one there is.
+	The C runtime test reads what Margo then runs with."""
+	try:
+		with defw2.Runtime(role='server', node_name='py-spin',
+				   progress_spindown_ms=5) as spinning:
+			started = spinning.handle is not None
+	except defw2.DefwError:
+		started = False
+	check('a runtime starts with the spindown it is given', started)
+	try:
+		defw2.Runtime(role='server', progress_spindown_ms=-1)
+		refused = False
+	except ValueError:
+		refused = True
+	check('and refuses one that is not a spindown', refused)
+
+
 def main():
 	print('defw2', defw2.version())
 
@@ -301,6 +319,7 @@ def main():
 	check_documents()
 	check_close_does_not_free_under_a_worker()
 	check_host_names_resolve()
+	check_spindown()
 
 	print('PYTHON SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

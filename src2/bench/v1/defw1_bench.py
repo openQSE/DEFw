@@ -7,7 +7,8 @@ The launcher does not join DEFw itself. It prepares a run directory, then
 starts a DEFw v1 directory service with defwp and runs defw1_bench_driver.py
 inside it. The driver spawns the svc_test_echo service and the client
 processes, releases the clients together, and writes the report once they
-finish.
+finish. W4's clients resolve the echo service through the directory rather
+than call it, so the directory is the service W4 measures.
 
 Run it where DEFw v1 is installed, such as a QFw-SLURM-Cluster node after
 sourcing qfw-activate, so that DEFW_PATH names the installation and the
@@ -64,7 +65,7 @@ CLEARED_ENV = (
 def parse_args(argv):
 	parser = argparse.ArgumentParser(
 		description='Run a DEFw v1 benchmark workload.')
-	parser.add_argument('workload', choices=common.ECHO_WORKLOADS)
+	parser.add_argument('workload', choices=common.V1_WORKLOADS)
 	parser.add_argument(
 		'--payload', type=common.parse_size, dest='payload_bytes',
 		help='payload size such as 64, 4KiB or 16MiB '
@@ -116,6 +117,18 @@ def parse_args(argv):
 		'--no-spans', action='store_true',
 		help='skip the per-call spans and write only the summary')
 	parser.add_argument(
+		'--service-cpus', type=common.cpu_set,
+		help='CPUs for the directory, the driver and the service, such '
+		'as 4-7 (default: wherever the kernel puts them)')
+	parser.add_argument(
+		'--client-cpus', type=common.cpu_set,
+		help='CPUs for the clients, such as 0-3 '
+		'(default: wherever the kernel puts them)')
+	parser.add_argument(
+		'--keep-thp', action='store_true',
+		help='leave transparent huge pages to the kernel\'s policy '
+		'rather than turn them off for every process of the run')
+	parser.add_argument(
 		'--force', action='store_true',
 		help='skip the checks for available memory and for libfabric '
 		'support before the run')
@@ -128,13 +141,20 @@ def parse_args(argv):
 		args.calls = common.default_calls(args.workload, args.payload_bytes)
 	if args.warmup is None:
 		args.warmup = workload['warmup']
-	if args.payload_bytes < 1:
+	args.resolve = workload.get('resolve', False)
+	if args.resolve:
+		args.payload_kind = 'none'
+	elif args.payload_bytes < 1:
 		parser.error('--payload must be at least one byte')
 	if args.calls < 1 or args.warmup < 0 or args.clients < 1:
 		parser.error('--calls and --clients must be positive, '
 			     '--warmup must not be negative')
 	try:
 		args.transport_env = common.transport_env(args.transport)
+		for cpus, what in ((args.service_cpus, 'service CPUs'),
+				   (args.client_cpus, 'client CPUs')):
+			if cpus:
+				common.check_cpus(cpus, what)
 	except ValueError as exc:
 		parser.error(str(exc))
 	if not args.defw_path:
@@ -271,6 +291,7 @@ def write_config(args, run_dir, trace_id, defwp, defw_config):
 		'root_span_id': os.urandom(8).hex(),
 		'label': label,
 		'workload': args.workload,
+		'resolve': args.resolve,
 		'payload_bytes': args.payload_bytes,
 		'payload_kind': args.payload_kind,
 		'calls': args.calls,
@@ -293,6 +314,9 @@ def write_config(args, run_dir, trace_id, defwp, defw_config):
 		'spans': not args.no_spans,
 		'log_level': args.log_level,
 		'py_log_level': args.py_log_level,
+		'client_cpus': sorted(args.client_cpus or ()),
+		'placement': common.placement(args.service_cpus,
+					      args.client_cpus, args.keep_thp),
 		'launched_unix_ns': time.time_ns(),
 	}
 	path = os.path.join(run_dir, 'config.json')
@@ -435,7 +459,10 @@ def stop_run(driver, run_dir):
 	stop_leftovers(run_dir)
 
 
-def run_driver(config, env):
+def run_driver(config, env, service_cpus):
+	"""The directory with the driver in it, on the service's CPUs, which
+	the echo service it spawns inherits. The driver puts the clients on
+	theirs."""
 	run_dir = config['run_dir']
 	command = [config['defwp'], '-c',
 		   DRIVER_BOOTSTRAP.format(paths=[V1_DIR, BENCH_DIR])]
@@ -444,7 +471,8 @@ def run_driver(config, env):
 		driver = subprocess.Popen(
 			command, env=env, cwd=run_dir, text=True, bufsize=1,
 			stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-			start_new_session=True)
+			start_new_session=True,
+			preexec_fn=common.pinned_to(service_cpus))
 		pump = threading.Thread(target=tee, args=(driver.stdout, log),
 					daemon=True)
 		pump.start()
@@ -478,12 +506,16 @@ def main(argv=None):
 	defw_config = find_defw_config(args.defw_path)
 	check_transport(args)
 	check_memory(args)
+	# Inherited by every process the run starts.
+	if not args.keep_thp:
+		common.disable_thp()
 	trace_id = os.urandom(16).hex()
 	run_dir = make_run_dir(args, trace_id)
 	config, config_path = write_config(args, run_dir, trace_id, defwp,
 					   defw_config)
 	pref_path = write_pref(config, run_dir)
-	rc = run_driver(config, dirsvc_env(config, config_path, pref_path))
+	rc = run_driver(config, dirsvc_env(config, config_path, pref_path),
+			args.service_cpus)
 	print(f'run directory: {run_dir}')
 	return rc
 

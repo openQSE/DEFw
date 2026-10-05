@@ -6,9 +6,12 @@ so a run with this one and a run with that one differ only in the language
 the caller is written in. It takes the same arguments and writes the same
 result file, so the launcher does not care which it started.
 
-W5 and W6 time whole QPM jobs, as the C client does: async_run, then
+W4 resolves through the directory at --address instead, as the C client
+does. W5 and W6 time whole QPM jobs, as the C client does: async_run, then
 read_cq until the completion is ready, against a QPM found by its
 service_id in the directory at --address, or the directory's only one.
+With --events a job waits for its completion event instead of polling, and
+one read_cq collects it.
 """
 
 import argparse
@@ -49,11 +52,14 @@ def parse_args(argv):
 	parser.add_argument('--timeout-ms', type=int, default=60000)
 	parser.add_argument('--wait-s', type=int, default=300)
 	parser.add_argument('--bulk', action='store_true')
+	parser.add_argument('--resolve', action='store_true')
+	parser.add_argument('--resolve-type')
 	parser.add_argument('--qpm', action='store_true')
 	parser.add_argument('--service-id')
 	parser.add_argument('--qubits', type=int, default=4)
 	parser.add_argument('--shots', type=int, default=1024)
 	parser.add_argument('--statevector', action='store_true')
+	parser.add_argument('--events', action='store_true')
 	return parser.parse_args(argv)
 
 
@@ -142,19 +148,42 @@ def statevector_matches(data, qubits):
 	return True
 
 
-def qpm_job(qpm, args, reservation_id, lent, traceparent=None):
+def wait_event(sink, cid, deadline):
+	"""Wait for the completion event of the job named cid, until
+	deadline, passing over an event for any other job. Returns how many
+	events it took, or 0 when the job's own did not come."""
+	clock = time.perf_counter_ns
+	taken = 0
+	while clock() < deadline:
+		left_ms = (deadline - clock()) // 1000000 + 1
+		event = sink.next(timeout_ms=left_ms)
+		if event is None:
+			continue
+		taken += 1
+		if event.payload.cid == cid:
+			return taken
+	return 0
+
+
+def qpm_job(qpm, args, reservation_id, lent, traceparent=None, sink=None):
 	"""One job: async_run, then read_cq back to back until the completion
-	is ready, within the call timeout. Returns what went wrong, or None,
-	with the read_cq that collected the job, the QPM's own run time and
-	the number of polls."""
+	is ready, within the call timeout. With a sink, the job waits for its
+	completion event instead and one read_cq collects it. Returns what
+	went wrong, or None, with the read_cq that collected the job, the
+	QPM's own run time, the number of polls and of events."""
 	clock = time.perf_counter_ns
 	task = qpm.async_run(QASM.format(args.qubits), num_qubits=args.qubits,
 			     num_shots=args.shots,
 			     return_statevector=args.statevector,
 			     reservation_id=reservation_id,
 			     traceparent=traceparent)
-	polls = 0
+	polls = events = 0
 	deadline = clock() + args.timeout_ms * 1000000
+	if sink is not None:
+		events = wait_event(sink, task.cid, deadline)
+		if not events:
+			return ('no completion event came within the call '
+				'timeout', 0, 0, polls, events)
 	while True:
 		started = clock()
 		done = qpm.read_cq(cid=task.cid, result=lent,
@@ -164,9 +193,12 @@ def qpm_job(qpm, args, reservation_id, lent, traceparent=None):
 		polls += 1
 		if done.completion_ready:
 			break
+		if sink is not None:
+			return ('read_cq found no completion after its event',
+				collect, 0, polls, events)
 		if clock() > deadline:
 			return ('the job did not complete within the call '
-				'timeout', collect, 0, polls)
+				'timeout', collect, 0, polls, events)
 	why = None
 	if done.outcome != 'COMPLETED':
 		why = 'the job did not complete'
@@ -176,14 +208,15 @@ def qpm_job(qpm, args, reservation_id, lent, traceparent=None):
 		why = 'the statevector was not delivered'
 	# A QPM that does not say how long it ran counts as no time.
 	backend = int((done.extra or {}).get('observed_fake_runtime_ns') or 0)
-	return why, collect, backend, polls
+	return why, collect, backend, polls, events
 
 
 def run_qpm(args):
 	"""W5 and W6, shaped like the echo run: one checked job and the warmup
 	outside the run's trace, then the measured jobs."""
 	clock = time.perf_counter_ns
-	runtime = defw2.Runtime(role='client',
+	# A client that hears events listens for them, so it is a server.
+	runtime = defw2.Runtime(role='server' if args.events else 'client',
 				node_name='bench-py-client-{}'.format(args.index))
 	with defw2.Directory(runtime, args.address) as directory:
 		records = directory.resolve(service_id=args.service_id,
@@ -220,11 +253,27 @@ def run_qpm(args):
 	if args.statevector:
 		lent = bytearray(16 << args.qubits)
 		blank = bytes(len(lent))
+	sink = None
+	if args.events:
+		# QFw's evtype for a circuit's result, as JSON, which is how
+		# compat reads it. The reservation limits the events to this
+		# client's jobs.
+		sink = defw2.EventSink(runtime)
+		tag = 'defw2-bench-py-{}'.format(args.index)
+		answer = qpm.register_event_notification(
+			sink, type='1', tag=tag, reservation_id=rid)
+		if answer.decision != 'accepted':
+			print('the QPM refused to send completions: {}'.format(
+				answer.message or answer.reason),
+			      file=sys.stderr)
+			qpm.release(rid)
+			return 1
 
 	try:
 		for _ in range(QPM_CHECK_TRIES):
 			try:
-				why = qpm_job(qpm, args, rid, lent)[0]
+				why = qpm_job(qpm, args, rid, lent,
+					      sink=sink)[0]
 			except Exception as exc:		# noqa: BLE001
 				why = '{}: {}'.format(type(exc).__name__, exc)
 			if why is None and args.statevector and \
@@ -238,7 +287,7 @@ def run_qpm(args):
 			return 1
 		for _ in range(args.warmup):
 			try:
-				qpm_job(qpm, args, rid, lent)
+				qpm_job(qpm, args, rid, lent, sink=sink)
 			except Exception:			# noqa: BLE001
 				pass
 
@@ -254,6 +303,7 @@ def run_qpm(args):
 		collects = [0] * args.calls
 		backends = [0] * args.calls
 		polls = [0] * args.calls
+		events = [0] * args.calls
 		failed = []
 		messages = {}
 		moved = 0
@@ -267,9 +317,10 @@ def run_qpm(args):
 				lent[:] = blank
 			started = clock()
 			try:
-				why, collects[job], backends[job], polls[job] = \
-					qpm_job(qpm, args, rid, lent,
-						args.traceparent)
+				why, collects[job], backends[job], polls[job], \
+					events[job] = qpm_job(
+						qpm, args, rid, lent,
+						args.traceparent, sink)
 			except Exception as exc:		# noqa: BLE001
 				why = '{}: {}'.format(type(exc).__name__, exc)
 			durations[job] = clock() - started
@@ -287,6 +338,8 @@ def run_qpm(args):
 		after = resource.getrusage(resource.RUSAGE_SELF)
 	finally:
 		qpm.release(rid)
+		if sink is not None:
+			sink.close()
 		qpm.close()
 		runtime.close()
 
@@ -304,6 +357,7 @@ def run_qpm(args):
 		'backend_ns': backends,
 		'collect_ns': collects,
 		'polls': polls,
+		'events': events,
 		'failed_calls': failed,
 		'failed_call_count': len(failed),
 		'failure_messages': messages,
@@ -315,10 +369,66 @@ def run_qpm(args):
 	return 0
 
 
+def run_resolve(args):
+	"""W4, as the C client runs it: one checked resolve, which waits for
+	the service the run resolves to register, then the warmup and the
+	measured resolves. An empty answer is still an answer, so only a
+	failed call counts as a failure."""
+	name = 'bench-py-client-{}'.format(args.index)
+	runtime = defw2.Runtime(role='client', node_name=name)
+	directory = defw2.Directory(runtime, args.address,
+				    timeout_ms=args.timeout_ms)
+	try:
+		deadline = time.monotonic() + args.wait_s
+		while not directory.resolve(service_type=args.resolve_type):
+			if time.monotonic() > deadline:
+				print('the directory at {} has no {}'.format(
+					args.address,
+					args.resolve_type or 'record'),
+				      file=sys.stderr)
+				return 1
+			time.sleep(0.01)
+		for _ in range(args.warmup):
+			directory.resolve(service_type=args.resolve_type)
+
+		if args.ready:
+			with open(args.ready, 'w', encoding='ascii'):
+				pass
+		if not wait_for(args.go, args.wait_s):
+			print('no go signal at {}'.format(args.go),
+			      file=sys.stderr)
+			return 1
+
+		def resolve(_):
+			return directory.resolve(
+				service_type=args.resolve_type,
+				traceparent=args.traceparent)
+
+		results = measure(resolve, args, None, lambda value, sent: True)
+	finally:
+		directory.close()
+		runtime.close()
+	results.update({
+		'index': args.index,
+		'calls': args.calls,
+		'resource': {'process.pid': os.getpid()},
+		'bytes_moved': 0,
+	})
+	write_results(args, results)
+	if results['failed_call_count']:
+		print('client {}: {} of {} resolves failed'.format(
+			args.index, results['failed_call_count'], args.calls),
+		      file=sys.stderr)
+		return 1
+	return 0
+
+
 def main(argv):
 	args = parse_args(argv)
 	if args.qpm:
 		return run_qpm(args)
+	if args.resolve:
+		return run_resolve(args)
 	payload = build_payload(args.payload)
 
 	runtime = defw2.Runtime(role='client',

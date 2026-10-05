@@ -66,6 +66,11 @@ struct defw2_rpc_span {
 	uint64_t	parent_id;	/* 0 when there is no parent */
 	uint64_t	start_ns;
 	uint64_t	end_ns;
+	/*
+	 * The two messages as Mercury encoded them, its own headers aside,
+	 * which is what wire bytes per call counts, and what moved by bulk
+	 * transfer outside them.
+	 */
 	uint64_t	request_bytes;
 	uint64_t	response_bytes;
 	uint64_t	bulk_bytes;
