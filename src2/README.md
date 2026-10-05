@@ -10,10 +10,10 @@ the directory and the Python binding: configuration from the environment,
 sink, bindings and typed stubs, the service host with its call queue,
 `qfw.echo` as the reference service with its eager and bulk methods, the
 directory service with its client, agent and binding cache, the QPM's
-control, admission and execution APIs typed in C, the spans and histograms
-the comparison reads, a `defw2` Python package that calls and serves all of
-it, and the benchmarks that measure the lot against v1. The document tier
-and events are still to come.
+control, admission and execution APIs typed in C, the document tier that
+carries every method v2 has not typed, events, the spans and histograms the
+comparison reads, a `defw2` Python package that calls and serves all of it,
+and the benchmarks that measure the lot against v1.
 
 ## Building
 
@@ -107,6 +107,7 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
 | `dir/`, `services/dirsvc/` | The directory: store, wire, service, client, agent, binding cache and events, and the `defw2-dirsvc` daemon |
 | `qpm/` | The QPM's control, admission and execution APIs: wire, client stubs and provider, and its completion event. Nothing outside this directory and `defw2_qpm.h` knows what a QPM is |
+| `rpc/defw2_doc.c` | The document tier, one RPC per API on the typed path |
 | `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
@@ -198,6 +199,31 @@ structure, and responds with no reply bytes, so nothing is encoded between
 C and Python in either direction. `defw2_qpm_smoke --serve` and
 `tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
 the C checks and the Python checks pass against both.
+
+## Documents
+
+A method with no typed form goes as a document, with `defw2_doc.h`: a JSON
+object of named arguments in, and any JSON value out.
+
+```c
+char *answer = NULL;
+
+defw2_doc_call(telemetry, DEFW2_API_QPM_TELEMETRY, "get_backend_info",
+	       "{\"lib\": \"qdmi\"}", &opts, &answer, &status);
+free(answer);
+```
+
+One RPC per API, `defw2.<api>.document`, is registered on the provider that
+serves the API's typed methods, so a document shares its queue, header,
+status and spans. C never parses a document. A method name must be an
+identifier that does not start with an underscore, which both the client
+and the provider check, and a document is at most 4 MiB.
+
+The QPM's other three APIs, `qfw.qpm.admission-policy`, `qfw.qpm.scheduler`
+and `qfw.qpm.telemetry`, are documents alone, on providers 6, 7 and 8. A C
+service answers documents with one function per API, given to
+`defw2_doc_bind`, and a queued service answers them from its queue, where
+`defw2_call_document` tells a document from a typed call.
 
 ## Events
 

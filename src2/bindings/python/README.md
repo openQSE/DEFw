@@ -294,7 +294,9 @@ Python v2 callers reach it as they reach any QPM. A v1 client's API classes
 send the fifteen typed QPM methods over the same APIs, and the dictionary
 the service returned comes back key for key, its exceptions as the same v1
 classes, and a statevector through the bulk path, put back into the v1
-payload. `_mapping.py` says exactly what moves into a typed field and what
+payload. Every other method goes as a document, with the arguments the
+caller passed, and `QPMAdapter` calls it only when the v1 API class
+declares it. `_mapping.py` says exactly what moves into a typed field and what
 stays in `extra`, and the design document's Python section says why.
 
 Every compat process listens and serves one sink, as `_events.py`
