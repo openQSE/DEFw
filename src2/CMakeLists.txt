@@ -106,6 +106,13 @@ set_target_properties(defw2-bench
 		INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
 		INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+# The SPANK plugin's reserve and release, against the public headers
+# alone: the C caller experience the design asks for. An example, so it is
+# built and tested but not installed.
+add_executable(defw2-spank-flow examples/defw2_spank_flow.c)
+target_link_libraries(defw2-spank-flow PRIVATE defw2)
+target_compile_options(defw2-spank-flow PRIVATE -Wall -Wextra)
+
 install(TARGETS defw2 defw2-echo defw2-dirsvc defw2-bench
 	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
@@ -366,6 +373,19 @@ if(BUILD_TESTING)
 		# control queue under an execution backlog, and a Python QPM
 		# in the directory. It runs the C fake and the directory as
 		# processes of their own, so it needs both built.
+		# The SPANK flow in C against the Python fake QPM, found
+		# through a directory as a plugin would find a site's.
+		add_test(NAME defw2_spank_flow_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_spank_flow_check.py"
+				--flow $<TARGET_FILE:defw2-spank-flow>
+				--dirsvc $<TARGET_FILE:defw2-dirsvc>
+				--fake "${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_qpm_fake.py")
+		set_tests_properties(defw2_spank_flow_check
+			PROPERTIES
+				ENVIRONMENT
+					"DEFW2_ADDRESS=na+sm://;PYTHONPATH=${DEFW2_PYTHON_DIR}")
+
 		add_test(NAME defw2_python_qpm_smoke
 			COMMAND "${Python3_EXECUTABLE}"
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_python_qpm_smoke.py"

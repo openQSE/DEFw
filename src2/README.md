@@ -111,7 +111,8 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
-| `bench/` | The benchmarks, and the v1 side of the comparison |
+| `bench/` | The benchmarks, the v1 side of the comparison, and the line counter |
+| `examples/` | `defw2-spank-flow`, the Slurm plugin's reserve and release in C |
 
 ## Calling and serving
 
@@ -199,6 +200,23 @@ structure, and responds with no reply bytes, so nothing is encoded between
 C and Python in either direction. `defw2_qpm_smoke --serve` and
 `tests/defw2_qpm_fake.py` are the same fake QPM in the two languages, and
 the C checks and the Python checks pass against both.
+
+`examples/defw2_spank_flow.c` is what the Slurm plugin would do with these
+calls. QFw's plugin has a gateway reserve and release for it today, over
+QSGP and in Python. The example finds the QPM in the directory, checks it
+is ready, reserves, and later releases, each step a process of its own as
+each is a callback of its own in the plugin:
+
+```bash
+export DEFW2_DIRSVC=<the directory's address>
+rid=$(defw2-spank-flow reserve <service_id> <job_id> <user> 4 1024)
+defw2-spank-flow release <service_id> "$rid"
+```
+
+It is 93 lines of code against the public headers alone, which is the C
+caller experience the design asks for, under one hundred.
+`defw2_spank_flow_check` runs it against the Python fake QPM and counts its
+lines as `bench/defw_loc.py` counts DEFw's.
 
 ## Documents
 
