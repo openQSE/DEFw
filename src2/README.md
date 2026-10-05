@@ -467,6 +467,7 @@ section. The names v2 adds:
 | `DEFW2_MARGO_CONFIG` | built in | Path to a Margo JSON configuration |
 | `DEFW2_PROFILE` | off | Turns on Margo profiling and diagnostics |
 | `DEFW2_RPC_THREADS` | 2 for a server, 0 for a client | Handler execution streams |
+| `DEFW2_PROGRESS_SPINDOWN_MS` | 0 for a server, Margo's own 10 for a client | How long Margo's progress loop spins after it has handled something before it waits again. See below |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
 | `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
@@ -492,3 +493,14 @@ handlers in the primary pool when it is asked for none, which would mean a
 service only serves while its main thread is donated to Margo. v2 cannot
 promise that thread, because a Python service holds it. A server asking for
 no handler threads is raised to the default instead.
+
+**A server does not spin.** After it has handled something, Margo's progress
+loop spins for 10 ms before it waits again, which answers a call that comes
+right after another sooner. A process that listens, a service or a client
+that takes events, has handlers often enough to spin all the time, and that
+holds a whole CPU. A W5 client taking events spent about 2 ms of CPU a job
+spinning, and a quarter of a millisecond without. So a server spins for
+0 ms, and a client keeps Margo's 10 ms. `DEFW2_PROGRESS_SPINDOWN_MS` sets both, and so does
+`progress_spindown_ms` for a `defw2.Runtime`. A site's own Margo
+configuration, `DEFW2_MARGO_CONFIG`, is used as written, so it sets
+`progress_spindown_msec` itself.

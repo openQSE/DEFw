@@ -1381,6 +1381,7 @@ and adds a small `DEFW2_` set.
 | `DEFW2_PROFILE` | | `1` turns on spans and metrics. |
 | `DEFW2_MARGO_MONITOR` | | `1` also installs Margo's monitor while profiling is on. Off by default, see Profiling and the v1 Comparison. |
 | `DEFW2_RPC_THREADS` | | Handler execution streams. A server gets two when it is unset. |
+| `DEFW2_PROGRESS_SPINDOWN_MS` | | How long Margo's progress loop spins after it has handled something. A server spins for 0 ms when it is unset, and a client keeps Margo's default. |
 | `DEFW2_HEARTBEAT_MS`, `DEFW2_HEARTBEAT_TIMEOUT_MS` | | Liveness intervals. |
 
 The launcher gains the `DEFW2_` names in its allow list and a per-role switch
@@ -1412,6 +1413,14 @@ The runtime's built-in configuration is shorter: a progress thread and
 `DEFW2_RPC_THREADS` handler streams, plus Margo's monitor when
 `DEFW2_MARGO_MONITOR` asks for it. A site that wants explicit pools like
 these supplies the file through `DEFW2_MARGO_CONFIG`, without rebuilding.
+
+A server's progress loop does not spin, unless
+`DEFW2_PROGRESS_SPINDOWN_MS` says to. Margo spins for 10 ms after any
+handler by default, which shortens a call that comes right after another.
+A process that listens has handlers often enough to spin all the time, and
+in Phase 3 that held a CPU in every QPM and in every client taking events. A
+client, which handles only the answers to its own calls, keeps Margo's
+default.
 
 ### Container
 

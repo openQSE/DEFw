@@ -155,5 +155,19 @@ defw2_rc_t defw2_config_from_env(defw2_config_t *cfg)
 			  getenv("DEFW2_RPC_THREADS"));
 		return rc;
 	}
+
+	/* Unset leaves it to the role, which defw2_init decides. */
+	rc = env_int("DEFW2_PROGRESS_SPINDOWN_MS", -1,
+		     &cfg->progress_spindown_ms);
+	if (rc != DEFW2_OK) {
+		defw2_log(NULL, DEFW2_LOG_ERROR,
+			  "DEFW2_PROGRESS_SPINDOWN_MS is not a count of "
+			  "milliseconds: %s",
+			  getenv("DEFW2_PROGRESS_SPINDOWN_MS"));
+		return rc;
+	}
+	cfg->has_progress_spindown = cfg->progress_spindown_ms >= 0;
+	if (!cfg->has_progress_spindown)
+		cfg->progress_spindown_ms = 0;
 	return DEFW2_OK;
 }

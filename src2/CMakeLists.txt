@@ -187,6 +187,9 @@ endif()
 
 if(BUILD_TESTING)
 	add_executable(defw2_runtime_smoke tests/defw2_runtime_smoke.c)
+	# It reads the configuration Margo runs with, through the runtime.
+	target_include_directories(defw2_runtime_smoke
+		PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core)
 	target_link_libraries(defw2_runtime_smoke PRIVATE defw2)
 	add_test(NAME defw2_runtime_smoke COMMAND defw2_runtime_smoke)
 

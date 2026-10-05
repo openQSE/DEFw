@@ -97,9 +97,27 @@ static int handler_threads(const struct defw2_rt *rt,
  * The built-in configuration. A deployment that needs more than this, such
  * as pinned execution streams, supplies its own through DEFW2_MARGO_CONFIG.
  */
+/*
+ * How long Margo's progress loop spins after it has handled something, or
+ * -1 to leave Margo's own default. Margo spins after any handler, and a
+ * process that listens, a service or a client taking events, has handlers
+ * often enough to spin all the time, which costs a whole CPU. So a server
+ * does not spin unless told to. A client's progress loop handles only the
+ * answers to its own calls, and spinning there shortens a call made right
+ * after another.
+ */
+static int progress_spindown(const defw2_config_t *cfg)
+{
+	if (cfg->has_progress_spindown)
+		return cfg->progress_spindown_ms;
+	return cfg->role == DEFW2_ROLE_SERVER ? 0 : -1;
+}
+
 static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg,
 			const char *dir)
 {
+	int spindown = progress_spindown(cfg);
+	char spin[64] = "";
 	char *json;
 
 	if (cfg->margo_config != NULL)
@@ -108,6 +126,9 @@ static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg,
 	json = malloc(DEFW2_JSON_MAX);
 	if (json == NULL)
 		return NULL;
+	if (spindown >= 0)
+		snprintf(spin, sizeof(spin), ",\"progress_spindown_msec\":%d",
+			 spindown);
 	/*
 	 * Margo's own view of every RPC comes from its monitor, which writes
 	 * its statistics beside our spans. Margo 0.24 replaced the
@@ -117,17 +138,17 @@ static char *margo_json(const struct defw2_rt *rt, const defw2_config_t *cfg,
 	if (want_margo_monitor(cfg) && dir != NULL)
 		snprintf(json, DEFW2_JSON_MAX,
 			 "{\"use_progress_thread\":true,"
-			 "\"rpc_thread_count\":%d,"
+			 "\"rpc_thread_count\":%d%s,"
 			 "\"monitoring\":{\"config\":"
 			 "{\"filename_prefix\":\"%.300s/margo-%.150s\","
 			 "\"enable_statistics\":true,"
 			 "\"pretty_json\":true}}}",
-			 handler_threads(rt, cfg), dir, rt->node_name);
+			 handler_threads(rt, cfg), spin, dir, rt->node_name);
 	else
 		snprintf(json, DEFW2_JSON_MAX,
 			 "{\"use_progress_thread\":true,"
-			 "\"rpc_thread_count\":%d}",
-			 handler_threads(rt, cfg));
+			 "\"rpc_thread_count\":%d%s}",
+			 handler_threads(rt, cfg), spin);
 	return json;
 }
 
