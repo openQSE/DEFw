@@ -123,6 +123,7 @@ class BenchRun:
 		self.services = []
 		self.clients = []
 		self.pids = {}
+		self.seen = None
 
 	def record_pid(self, role, pid):
 		# The launcher reads this to clean up if the run is abandoned.
@@ -158,9 +159,11 @@ class BenchRun:
 		stdout = open(os.path.join(log_dir, 'stdout.log'), 'w')
 		stderr = open(os.path.join(log_dir, 'stderr.log'), 'w')
 		try:
+			pin = common.pinned_to(set(config['client_cpus']))
 			process = subprocess.Popen(
 				[config['defwp'], '-c', bootstrap], env=env, cwd=log_dir,
-				stdout=stdout, stderr=stderr, start_new_session=True)
+				stdout=stdout, stderr=stderr,
+				start_new_session=True, preexec_fn=pin)
 		finally:
 			# The child has its own descriptors for both files.
 			stdout.close()
@@ -275,6 +278,9 @@ class BenchRun:
 		# Checked here to stop a mislabelled run early, and again at the
 		# end, once every process has flushed its log.
 		self.check_transport()
+		self.seen = common.seen(
+			[os.getpid(), self.services[0].pid],
+			[process.pid for _, process in self.clients])
 
 		service_cpu_before = proc_cpu_ns(service_pid)
 		go_unix_ns = time.time_ns()
@@ -297,7 +303,8 @@ class BenchRun:
 					f'client {result["index"]} loaded DEFw from '
 					f'{result["defw_module"]}, not {defw_module}')
 		report = build_report(config, results, service,
-				      go_unix_ns, end_unix_ns, defw_module)
+				      go_unix_ns, end_unix_ns, defw_module,
+				      self.seen)
 		common.write_json(os.path.join(self.run_dir, 'summary.json'),
 				  report, indent=2)
 		write_spans(config, results, report, go_unix_ns, end_unix_ns)
@@ -305,7 +312,7 @@ class BenchRun:
 		return 0 if report['failed_calls'] == 0 else 1
 
 
-def environment(config, defw_module):
+def environment(config, defw_module, seen=None):
 	return {
 		'hostname': socket.gethostname(),
 		'cpu_count': os.cpu_count(),
@@ -322,11 +329,12 @@ def environment(config, defw_module):
 		'defw_py_log_level': config['py_log_level'],
 		'rma_attachments': os.environ.get('DEFW_RMA_ATTACHMENTS'),
 		'rma_threshold': os.environ.get('DEFW_RMA_THRESHOLD'),
+		'placement': dict(config.get('placement') or {}, seen=seen),
 	}
 
 
 def build_report(config, results, service, go_unix_ns, end_unix_ns,
-		 defw_module):
+		 defw_module, seen=None):
 	ok_durations = []
 	clients = []
 	failed = 0
@@ -378,7 +386,7 @@ def build_report(config, results, service, go_unix_ns, end_unix_ns,
 			'fallback_check': ('not needed' if config['transport'] == 'tcp'
 					   else 'passed'),
 		},
-		'environment': environment(config, defw_module),
+		'environment': environment(config, defw_module, seen),
 		'latency': common.latency_summary(ok_durations),
 		'throughput': {
 			'calls_per_s': total_calls / window_s,

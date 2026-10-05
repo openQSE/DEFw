@@ -43,6 +43,8 @@ python3 /workspace/qfw-container-base/QFw/DEFw/src2/bench/v1/defw1_bench.py W1 -
 | `--defw-path` | `$DEFW_PATH` | The DEFw v1 installation to measure |
 | `--defw-revision` | none | Its git revision, recorded in the report |
 | `--out` | `/tmp/defw-bench` | Parent of the run directories. Keep it on node-local storage |
+| `--service-cpus`, `--client-cpus` | none | CPUs for the service side and for the clients, see Placement below |
+| `--keep-thp` | off | Leave transparent huge pages to the kernel, see Placement below |
 
 `defw1_bench.py --help` lists the rest.
 
@@ -82,6 +84,8 @@ python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
 | `--service-workers` | `2` | Queue workers in the Python service |
 | `--bin-dir` | `$DEFW2_BIN_DIR` | Where `defw2-echo` and `defw2-bench` are |
 | `--no-spans` | off | Leave profiling off and write only the summary |
+| `--service-cpus`, `--client-cpus` | none | CPUs for the service side and for the clients, see Placement below |
+| `--keep-thp` | off | Leave transparent huge pages to the kernel, see Placement below |
 | `--out` | `/tmp/defw-bench` | Parent of the run directories |
 
 W3, and any payload too large to ride inside a message, goes through the
@@ -239,6 +243,29 @@ beneath.
   what is compared is the two encodings. A bulk transfer moves outside the
   messages and is not counted. v2's requests carry the trace context that
   profiling adds, 55 bytes, and v1's carry none.
+
+## Placement
+
+`--service-cpus` and `--client-cpus` put the two sides of a run on CPUs of
+their own, written the way Linux lists them, such as `4-7` and `0-3`. Then
+neither takes CPU time from the other, as when the service has a node of
+its own. The service side is everything started beside the clients: the
+echo service, W4's directory and the echo registered there, and for v1 the
+directory and driver the echo service runs beside. A CPU must be one the
+launcher may use. Without them the kernel places every process, and the
+service and the clients compete.
+
+A launcher turns transparent huge pages off for itself and every process it
+starts, unless `--keep-thp` says to leave them to the kernel. A kernel whose
+policy is `always` backs every 2 MiB range a process touches with a huge
+page when one is free. A thread's stack, which uses a few KiB, then holds
+2 MiB, and whether it does depends on how fragmented memory is at the time.
+That made peak memory vary by a factor of six between runs of the same
+service, from 14 MiB to 94 MiB for the C echo service on `na+sm`. With them
+off, peak memory measures what the framework uses. The report's
+`environment.placement` records the CPUs, the kernel's policy and whether
+the run turned huge pages off, and under `seen` what each process had while
+it ran, read from `/proc`.
 
 ## Output
 

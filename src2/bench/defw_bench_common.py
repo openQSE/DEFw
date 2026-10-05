@@ -13,6 +13,7 @@ span is qfw.bench.run, and each measured call is a qfw.transport.rpc span
 beneath it, carrying the client-side round-trip time.
 """
 
+import ctypes
 import json
 import math
 import os
@@ -324,6 +325,127 @@ def add_counts(total, counts):
 	for key, value in counts.items():
 		total[key] = total.get(key, 0) + value
 	return total
+
+
+# Where a run's processes run, and with what memory.
+#
+# A launcher can put the service and the clients on CPUs of their own, so
+# that neither takes time from the other, as on separate nodes. And it turns
+# transparent huge pages off for every process it starts, unless asked not
+# to. A kernel whose policy is "always" backs each 2 MiB range a process
+# touches with a huge page, so a thread's stack, which uses a few KiB, holds
+# 2 MiB, and whether it does depends on how fragmented memory is at the
+# time. The C echo service peaks at 14 MiB on na+sm without them and at 94
+# MiB with them, which says nothing about DEFw.
+
+PR_SET_THP_DISABLE = 41
+THP_POLICY = '/sys/kernel/mm/transparent_hugepage/enabled'
+
+
+def cpu_set(text):
+	"""CPUs written the way Linux lists them, such as 0-3 or 4,6-7."""
+	cpus = set()
+	for part in text.split(','):
+		low, _, high = part.strip().partition('-')
+		if not low.isdigit() or (high and not high.isdigit()):
+			raise ValueError('not a list of CPUs: ' + repr(text))
+		cpus.update(range(int(low), int(high or low) + 1))
+	return cpus
+
+
+def cpu_text(cpus):
+	"""A set of CPUs as Linux lists them."""
+	ranges = []
+	for cpu in sorted(cpus):
+		if ranges and ranges[-1][1] == cpu - 1:
+			ranges[-1][1] = cpu
+		else:
+			ranges.append([cpu, cpu])
+	return ','.join(str(low) if low == high else '{}-{}'.format(low, high)
+			for low, high in ranges)
+
+
+def check_cpus(cpus, what):
+	"""cpus, if this process may run there. ValueError otherwise."""
+	allowed = os.sched_getaffinity(0)
+	if not cpus <= allowed:
+		raise ValueError('{} {} are not in {}, the CPUs this may '
+				 'use'.format(what, cpu_text(cpus - allowed),
+					      cpu_text(allowed)))
+	return cpus
+
+
+def pinned_to(cpus):
+	"""A preexec_fn that puts a process on cpus before it runs anything,
+	so every thread it starts runs there too, or None to leave it."""
+	if not cpus:
+		return None
+
+	def pin():
+		os.sched_setaffinity(0, cpus)
+	return pin
+
+
+def disable_thp():
+	"""Transparent huge pages off for this process and every process it
+	starts, which inherit the setting across fork and exec."""
+	libc = ctypes.CDLL(None, use_errno=True)
+	if libc.prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0) != 0:
+		errno = ctypes.get_errno()
+		raise OSError(errno, 'cannot turn transparent huge pages '
+			      'off: ' + os.strerror(errno))
+
+
+def thp_policy():
+	"""The kernel's policy for transparent huge pages, or None."""
+	try:
+		with open(THP_POLICY, encoding='ascii') as stream:
+			match = re.search(r'\[(\w+)\]', stream.read())
+	except OSError:
+		return None
+	return match.group(1) if match else None
+
+
+def process_status(pid, field):
+	"""One field of /proc/<pid>/status, or None."""
+	try:
+		with open('/proc/{}/status'.format(pid), encoding='ascii') as f:
+			for line in f:
+				name, _, value = line.partition(':')
+				if name == field:
+					return value.strip()
+	except OSError:
+		return None
+	return None
+
+
+def seen(service_pids, client_pids):
+	"""Where the run's processes may run, read from the processes while
+	they run, and whether transparent huge pages are off for all of
+	them."""
+	pids = list(service_pids) + list(client_pids)
+	thp = [process_status(pid, 'THP_enabled') for pid in pids]
+	return {
+		'service_cpus': (process_status(service_pids[0],
+						'Cpus_allowed_list')
+				 if service_pids else None),
+		'client_cpus': sorted({process_status(pid, 'Cpus_allowed_list')
+				       for pid in client_pids} - {None}),
+		'thp_disabled': all(value == '0' for value in thp)
+				if thp and None not in thp else None,
+	}
+
+
+def placement(service_cpus, client_cpus, keep_thp, seen=None):
+	"""What a report says about where the run's processes ran: what
+	they were given, and what each had while it ran."""
+	return {
+		'service_cpus': cpu_text(service_cpus or ()) or None,
+		'client_cpus': cpu_text(client_cpus or ()) or None,
+		'thp_policy': thp_policy(),
+		'thp_disabled': not keep_thp,
+		'seen': seen,
+	}
 
 
 def libfabric_version():

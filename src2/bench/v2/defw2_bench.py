@@ -135,6 +135,18 @@ def parse_args(argv):
 		'--no-spans', action='store_true',
 		help='leave profiling off, so only the summary is produced')
 	parser.add_argument(
+		'--service-cpus', type=common.cpu_set,
+		help='CPUs for the service and anything started beside it, '
+		'such as 4-7 (default: wherever the kernel puts them)')
+	parser.add_argument(
+		'--client-cpus', type=common.cpu_set,
+		help='CPUs for the clients, such as 0-3 '
+		'(default: wherever the kernel puts them)')
+	parser.add_argument(
+		'--keep-thp', action='store_true',
+		help='leave transparent huge pages to the kernel\'s policy '
+		'rather than turn them off for every process of the run')
+	parser.add_argument(
 		'--force', action='store_true',
 		help='skip the check for available memory before the run')
 	args = parser.parse_args(argv)
@@ -173,6 +185,13 @@ def parse_args(argv):
 		args.warmup = workload['warmup']
 	if args.clients < 1:
 		parser.error('--clients must be at least 1')
+	try:
+		for cpus, what in ((args.service_cpus, 'service CPUs'),
+				   (args.client_cpus, 'client CPUs')):
+			if cpus:
+				common.check_cpus(cpus, what)
+	except ValueError as exc:
+		parser.error(str(exc))
 	# W3 is the bulk workload. Anything too large to ride inside a
 	# message has to go through registered memory in any case. A W6
 	# statevector does too, but the QPM's API decides that, not this.
@@ -398,8 +417,9 @@ def start_process(args, config, command, agent, name, extra_env=None):
 	env.update(extra_env or {})
 	log = open(os.path.join(run_dir, 'logs', name + '.log'), 'w',
 		   encoding='utf-8')
-	service = subprocess.Popen(command, stdout=subprocess.PIPE,
-				   stderr=log, env=env, text=True)
+	service = subprocess.Popen(
+		command, stdout=subprocess.PIPE, stderr=log, env=env, text=True,
+		preexec_fn=common.pinned_to(args.service_cpus))
 	service.name = name
 	address = service.stdout.readline().strip()
 	if not address:
@@ -466,9 +486,10 @@ def start_clients(args, config, binaries, address):
 					'client-{}.log'.format(index)),
 			   'w', encoding='utf-8')
 		env = process_env(args, run_dir, 'bench-client-{}'.format(index))
-		client = subprocess.Popen(command, stdout=log, stderr=log,
-					  env=env, text=True,
-					  start_new_session=True)
+		client = subprocess.Popen(
+			command, stdout=log, stderr=log, env=env, text=True,
+			start_new_session=True,
+			preexec_fn=common.pinned_to(args.client_cpus))
 		client.group = True
 		clients.append(client)
 	return clients
@@ -602,6 +623,9 @@ def environment(args, config):
 				    if args.service == 'python' and
 				    not args.qpm else None),
 		'qfw_run_dir': args.qfw_run_dir,
+		'placement': common.placement(args.service_cpus,
+					      args.client_cpus, args.keep_thp,
+					      config.get('seen')),
 	}
 
 
@@ -859,6 +883,9 @@ def main(argv):
 	args = parse_args(argv)
 	if not args.force:
 		check_memory(args)
+	# Inherited by every process the run starts.
+	if not args.keep_thp:
+		common.disable_thp()
 
 	args.defw_major = 2
 	directory = args.directory
@@ -902,6 +929,11 @@ def main(argv):
 			print('echo service at {}'.format(address))
 		clients = start_clients(args, config, binaries, address)
 		wait_for_ready(args, config, clients, service)
+		# Read while every process runs. QFw's client runs under
+		# qfw-srun, whose own CPUs are the ones it was given.
+		config['seen'] = common.seen(
+			[p.pid for p in (service, registered) if p is not None],
+			[c.pid for c in clients])
 
 		service_cpu_before = (proc_cpu_ns(service.pid)
 				      if service is not None else None)
