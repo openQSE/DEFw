@@ -17,13 +17,23 @@ calls, such as the QPM's, carry structures: a method takes a Request of
 plain Python values and returns a dict, and both are read and written
 straight from and into the C structures, with no encoding in between.
 
+Every API but echo also answers documents, and an API with no typed
+methods answers nothing else. A document goes to the handler's
+document(api, method, request, traceparent), with the request as a dict
+and the caller's trace context or None, and whatever JSON-able value it
+returns is the answer. A handler without one answers no
+documents, so a caller can never reach a handler's other methods by naming
+them.
+
 The cost is one hand-off per call, which the benchmark measures and the
 server span reports as its queue event.
 """
 
+import json
 import threading
 import warnings
 
+from . import _doc
 from ._defw2 import ffi, lib
 from ._dir import build_record
 from ._echo import API_ECHO, PROVIDER_ECHO
@@ -33,6 +43,7 @@ from ._qpm import (
 	API_QPM_EXECUTION,
 	DEFAULT_PROVIDERS,
 	QPM_APIS,
+	QPM_BINDING_NAMES,
 	QPM_VERSION,
 	read_request,
 	typed_api,
@@ -51,12 +62,7 @@ _BIND = {
 	API_QPM_EXECUTION: lib.defw2_qpm_execution_bind,
 }
 _DEFAULT_PROVIDER = dict(DEFAULT_PROVIDERS, **{API_ECHO: PROVIDER_ECHO})
-_BINDING_NAME = {
-	API_ECHO: 'echo',
-	API_QPM_CONTROL: 'control',
-	API_QPM_ADMISSION: 'admission',
-	API_QPM_EXECUTION: 'execution',
-}
+_BINDING_NAME = dict(QPM_BINDING_NAMES, **{API_ECHO: 'echo'})
 # The major version a binding declares in the directory.
 _VERSION_MAJOR = dict({api: QPM_VERSION >> 16 for api in QPM_APIS},
 		      **{API_ECHO: 0})
@@ -121,10 +127,11 @@ class ServiceHost:
 		api = spec[0]
 		provider = spec[1] if len(spec) > 1 else None
 		depth = spec[2] if len(spec) > 2 else default_depth
-		if api not in _BIND:
-			raise ValueError('no binding for API ' + api)
 		if provider is None:
-			provider = _DEFAULT_PROVIDER[api]
+			provider = _DEFAULT_PROVIDER.get(api)
+		if provider is None:
+			raise ValueError('API {} has no default provider, so '
+					 'it needs one named'.format(api))
 
 		out = ffi.new('defw2_service_t **')
 		_check(lib.defw2_service_create(self._runtime.handle,
@@ -136,7 +143,13 @@ class ServiceHost:
 		self._endpoints.append(endpoint)
 		_check(lib.defw2_service_queue_open(endpoint.svc, depth),
 		       'opening the call queue for ' + api)
-		_check(_BIND[api](endpoint.svc, ffi.NULL), 'binding ' + api)
+		if api in _BIND:
+			_check(_BIND[api](endpoint.svc, ffi.NULL),
+			       'binding ' + api)
+		if api != API_ECHO:
+			_check(lib.defw2_doc_bind(endpoint.svc, api.encode(),
+						  ffi.NULL),
+			       'binding documents for ' + api)
 
 	@classmethod
 	def from_environment(cls, service_id, service_type, apis=None,
@@ -198,7 +211,11 @@ class ServiceHost:
 			raise DefwError(lib.DEFW2_ERR_CONFIG, 'not-found',
 					'no directory to register with')
 		names = dict(_BINDING_NAME, **(binding_names or {}))
-		bindings = [(names[e.api], e.api, _VERSION_MAJOR[e.api],
+		# An API of documents alone is named by its last part and
+		# speaks the document tier's version.
+		bindings = [(names.get(e.api, e.api.rsplit('.', 1)[-1]), e.api,
+			     _VERSION_MAJOR.get(e.api,
+						lib.DEFW2_DOC_VERSION >> 16),
 			     e.provider_id) for e in self._endpoints]
 		kept = _Kept()
 		record = build_record(
@@ -277,7 +294,10 @@ class ServiceHost:
 			call = holder[0]
 			method = ffi.string(
 				lib.defw2_call_method(call)).decode()
-			if typed:
+			if lib.defw2_call_document(call) != ffi.NULL:
+				self._answer_document(endpoint.api, method,
+						      call, handler)
+			elif typed:
 				self._answer_typed(endpoint.api, method, call,
 						   handler)
 			else:
@@ -317,6 +337,44 @@ class ServiceHost:
 			_fail(call, exc)
 			return
 		lib.defw2_service_respond(call, ffi.NULL, 0)
+
+	@staticmethod
+	def _answer_document(api, method, call, handler):
+		document = getattr(handler, 'document', None)
+		if document is None:
+			lib.defw2_service_fail(call, lib.DEFW2_ERR_NOT_FOUND,
+					       lib.DEFW2_CAT_NOT_FOUND,
+					       b'this service answers no '
+					       b'documents')
+			return
+		try:
+			request = json.loads(ffi.string(
+				lib.defw2_call_document(call)).decode('utf-8'))
+		except ValueError as error:
+			_refuse(call, lib.DEFW2_CAT_INVALID_ARGUMENT,
+				'the request is not JSON: {}'.format(error))
+			return
+		if not isinstance(request, dict):
+			_refuse(call, lib.DEFW2_CAT_INVALID_ARGUMENT,
+				"a document's request is an object of named "
+				'arguments')
+			return
+		traceparent = lib.defw2_call_traceparent(call)
+		traceparent = (ffi.string(traceparent).decode()
+			       if traceparent != ffi.NULL else None)
+		try:
+			answer = document(api, method, request, traceparent)
+		except Exception as exc:  # noqa: BLE001
+			_fail(call, exc)
+			return
+		try:
+			text = _doc.dumps(answer)
+		except (TypeError, ValueError) as error:
+			_refuse(call, lib.DEFW2_CAT_PROVIDER_FAILURE,
+				'the answer has a value JSON cannot carry: '
+				'{}'.format(error))
+			return
+		lib.defw2_service_respond_document(call, text.encode('utf-8'))
 
 	@staticmethod
 	def _invoke(handler, method, request):
@@ -388,6 +446,11 @@ class _Unserved(Exception):
 
 	def __str__(self):
 		return 'the service has no method {}'.format(self.args[0])
+
+
+def _refuse(call, category, message):
+	lib.defw2_service_fail(call, lib.DEFW2_ERR_INVALID, category,
+			       message.encode('utf-8'))
 
 
 def _fail(call, exc):

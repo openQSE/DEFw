@@ -99,7 +99,7 @@ out:
 	if (trace.recording) {
 		trace.span.api = method->api;
 		trace.span.method = method->name;
-		trace.span.tier = DEFW2_TIER_TYPED;
+		trace.span.tier = method->tier;
 		trace.span.request_bytes = request_bytes;
 		trace.span.response_bytes = response_bytes;
 		trace.span.bulk_bytes = call->bulk_bytes;
@@ -310,8 +310,9 @@ void defw2_typed_serve(hg_handle_t handle, const struct defw2_method *method,
 		trace.span.response_bytes = HG_Get_output_payload_size(handle);
 		trace.span.bulk_bytes = served.bulk_bytes;
 		trace.span.api = method->api;
-		trace.span.method = method->name;
-		trace.span.tier = DEFW2_TIER_TYPED;
+		/* A document names its own method once it is decoded. */
+		trace.span.method = served.call.method;
+		trace.span.tier = method->tier;
 		trace.span.category = served.status->category;
 		trace.span.code = served.status->code;
 		defw2_trace_end(served.rt, &trace);

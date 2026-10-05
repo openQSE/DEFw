@@ -1,5 +1,8 @@
 /*
- * The QPM APIs: qfw.qpm.control, qfw.qpm.admission and qfw.qpm.execution.
+ * The QPM APIs: qfw.qpm.control, qfw.qpm.admission and qfw.qpm.execution,
+ * whose hot path is typed here, and qfw.qpm.admission-policy,
+ * qfw.qpm.scheduler and qfw.qpm.telemetry, which are documents alone, as
+ * are the typed APIs' other methods. defw2_doc.h calls those.
  *
  * This is the QPM hot path, typed so that a C caller such as the Slurm plugin
  * can reserve, run and collect without an interpreter anywhere in its
@@ -64,6 +67,18 @@ extern "C" {
 #define DEFW2_PROVIDER_QPM_CONTROL	2
 #define DEFW2_PROVIDER_QPM_ADMISSION	3
 #define DEFW2_PROVIDER_QPM_EXECUTION	4
+
+/*
+ * The QPM's other APIs have no typed methods, so every method on them is a
+ * document. Each still has a provider of its own, so a slow telemetry
+ * query never holds up control.
+ */
+#define DEFW2_API_QPM_ADMISSION_POLICY		"qfw.qpm.admission-policy"
+#define DEFW2_API_QPM_SCHEDULER			"qfw.qpm.scheduler"
+#define DEFW2_API_QPM_TELEMETRY			"qfw.qpm.telemetry"
+#define DEFW2_PROVIDER_QPM_ADMISSION_POLICY	6
+#define DEFW2_PROVIDER_QPM_SCHEDULER		7
+#define DEFW2_PROVIDER_QPM_TELEMETRY		8
 
 /*
  * The version the three QPM APIs speak, major in the high sixteen bits. A

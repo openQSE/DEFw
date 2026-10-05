@@ -4,7 +4,8 @@ A v1 API class, such as QFw's QPMExecution, derives from BaseRemote and
 declares its methods with v1's signatures and empty bodies. v1 sent a call
 to any of them to the remote object by name. Here a call goes through
 defw2.compat._remote, which sends a typed QPM method over the typed APIs
-and fails anything else, naming it.
+and any other as a document, to the API of the binding the object was
+connected through.
 
 A service calls a client back the same way, through an
 api_events.BaseEventAPI made with the endpoint the client registered. When
@@ -24,6 +25,9 @@ class BaseRemote(object):
 		self.__target = target
 		self.__remote_module = remote_module
 		self.__remote_class = remote_class
+		# Which of the service's bindings this is, which says which API
+		# a document goes to. connect_to_binding passes it.
+		self.__binding_name = kwargs.get('binding_name')
 
 	def __copy__(self):
 		return self
@@ -50,8 +54,13 @@ class BaseRemote(object):
 						self, '_BaseRemote__class_id'),
 					attr.__name__, args, kwargs)
 			if not isinstance(target, _remote.Target):
-				raise _remote.unsupported(owner, attr.__name__)
-			return _remote.invoke(target, owner, attr, args, kwargs)
+				raise _remote.unsupported(
+					owner, attr.__name__,
+					'is on an object v2 cannot reach')
+			return _remote.invoke(
+				target, owner, attr, args, kwargs,
+				object.__getattribute__(
+					self, '_BaseRemote__binding_name'))
 		call.__name__ = attr.__name__
 		return call
 

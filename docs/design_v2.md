@@ -250,8 +250,8 @@ every Mochi data service use the same stack.
 - **Typed Python conversion is not free.** Whatever binding is used, matching
   the encoded structures on both sides is DEFw's work. It is the same work the
   C-centric requirements assign to a generated Python adapter.
-- **Dependencies.** Mercury, Argobots, json-c and libfabric, plus a CBOR
-  library for the document tier. All are packaged in Spack. The container
+- **Dependencies.** Mercury, Argobots, json-c and libfabric. The document
+  tier is JSON, so it adds none. All are packaged in Spack. The container
   builds them from source the way it already builds libfabric.
 - **One network plugin per Margo instance.** A process talks to every peer
   through the plugin its address string names. A deployment therefore picks
@@ -391,7 +391,7 @@ DEFw/
       defw2_types.h         shared wire types, status categories, header
       defw2_dir.h           directory client: resolve, register, heartbeat
       defw2_rpc.h           typed RPC declarations per API
-      defw2_doc.h           document tier: CBOR call
+      defw2_doc.h           document tier: JSON call and serve
       defw2_bulk.h          bulk and tensor descriptors
       defw2_event.h         event sinks and delivery
       defw2_service.h       service host: providers, handler queue
@@ -629,7 +629,7 @@ structures. This tier is for stable, high-rate or latency-sensitive methods,
 and it is the tier C callers use.
 
 **Document tier.** A method is carried by one generic RPC whose payload is a
-CBOR document. This tier is for methods that are still changing, that return
+JSON document. This tier is for methods that are still changing, that return
 provider-shaped nested data, or that belong to a Python service that has not
 been typed yet. It is what keeps the long tail of QFw's API off the schema
 treadmill, and it is the v2 form of the dynamic path that requirement CAPI-007
@@ -645,7 +645,7 @@ flowchart TB
     Call["Caller invokes a method"]
     Tier{"Is the method<br/>typed?"}
     Typed["Typed stub encodes the<br/>declared request structure"]
-    Doc["Document tier encodes<br/>a CBOR payload"]
+    Doc["Document tier sends<br/>a JSON document"]
     Fwd["Fill the DEFw header,<br/>forward with a timeout"]
     Size{"Payload<br/>large?"}
     Eager["Eager: the payload rides<br/>inside the message"]
@@ -785,24 +785,35 @@ a payload.
 ### Document tier
 
 ```c
-MERCURY_GEN_PROC(defw2_doc_call_in_t,
+MERCURY_GEN_PROC(defw2_doc_in_t,         /* defw2.<api>.document */
     ((defw2_hdr_t)(hdr))
-    ((hg_const_string_t)(api_id))
-    ((hg_const_string_t)(method))
-    ((defw2_bytes_t)(request)))      /* CBOR, inline or bulk above a threshold */
+    ((defw2_str_t)(method))
+    ((defw2_text_t)(document)))          /* a JSON object of named arguments */
 
-MERCURY_GEN_PROC(defw2_doc_call_out_t,
-    ((defw2_status_t)(status))
-    ((defw2_bytes_t)(response)))     /* CBOR */
+MERCURY_GEN_PROC(defw2_doc_out_t,
+    ((defw2_wire_status_t)(status))
+    ((defw2_text_t)(document)))          /* the JSON answer */
 ```
 
-CBOR is chosen over JSON because it is binary-safe, compact, has a small
-strict C decoder with no code execution on decode, and maps onto Python
-dictionaries with one library call. The C side uses tinycbor and the Python
-side uses cbor2. The document tier is how QFw's telemetry, policy
-configuration and scheduler control APIs run on day one, and how a Python
-service exposes any method that has no typed structure yet. A typed method
-can be added later without touching the document path.
+One RPC per API, `defw2.<api>.document`, is registered on the provider that
+serves the API's typed methods. So a document shares that provider's queue,
+header, version check, status and spans, and its span names the document's
+own method. A request is a JSON object of named arguments, and an answer is
+any JSON value. Both travel inside the message, so each is at most 4 MiB.
+
+JSON replaced the CBOR first proposed here, in Phase 3. Phase 2 chose JSON
+for `extra`, json-c and Python's `json` are already present, and C never
+parses a document, so to C it is only text. A method name must be an
+identifier that does not start with an underscore, because a Python service
+looks it up by name. The client refuses any other name before it sends, and
+the provider refuses it before the service sees it.
+
+The QPM has six APIs. Control, admission and execution have typed methods,
+and their other methods are documents. Admission policy, scheduler and
+telemetry are documents alone, each on a provider of its own, 6, 7 and 8, so
+a slow telemetry query never holds up control. That is how the 31 QPM
+methods v2 has not typed run. A method can be typed later without touching
+the document path.
 
 ### Object model
 
@@ -1104,9 +1115,11 @@ result = qpm.read_cq(cid=job.cid, reservation_id=rid)
 ```
 
 Typed methods are bound one to one, through the same C stubs a C caller
-uses. Anything else on a binding goes through the document tier as a
-dictionary in and a dictionary out, which is how the telemetry surface works
-from day one. Any Python thread may call: the runtime keeps Margo's progress
+uses. Anything else goes as a document, with `qpm.document(api, method,
+request)`: a dict of named arguments in, and the service's JSON out. A
+service answers documents through its handler's `document()`, and only
+there, so a caller cannot reach the handler's other methods by naming
+them. Any Python thread may call: the runtime keeps Margo's progress
 loop on its own execution stream, so a thread Argobots has never seen can
 wait on a reply, which the tests do with eight threads sharing one client.
 
@@ -1165,8 +1178,10 @@ registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
 side, `defw.connect_to_binding` returns QFw's own API classes, such as
 `QPMExecution`, built on compat's `BaseRemote`. A call to one of the
 fifteen typed QPM methods goes over the typed APIs, with its arguments
-taken by the names the API class declares. Any other method fails, naming
-itself, until v2 types it. There is no document tier yet.
+taken by the names the API class declares. Any other method goes as a
+document to the API of the binding the object was connected through, with
+the arguments the caller passed. `QPMAdapter` calls it on the v1 QPM only
+when the v1 API class for that API declares it.
 
 A v1 dictionary crosses the typed APIs unchanged. A value moves into a typed
 field only when the trip back gives the same value: a string that is not
@@ -1455,11 +1470,13 @@ first after the decision for that reason.
 ## Security
 
 v2 removes the code-execution surface. Typed decoding constructs only the
-declared structures, and the document tier's CBOR decoder builds maps, lists,
-strings and numbers and nothing else. Every handler validates counts,
-lengths, bulk sizes and reservation context before it uses a payload. That is
-what requirement CWIRE-008 of Amir's C-centric requirements asks of a server
-before it invokes an implementation.
+declared structures. C never parses a document, and Python's `json` builds
+dicts, lists, strings and numbers and nothing else. A document's method is
+an identifier, and reaches a Python service only through its handler's
+`document()`. Every handler validates counts, lengths, bulk sizes and
+reservation context before it uses a payload. That is what requirement
+CWIRE-008 of Amir's C-centric requirements asks of a server before it
+invokes an implementation.
 
 Mercury's own decoders are not enough for that, which building the QPM tier
 showed. At 2.4.1 the string decoder allocates whatever length a message
@@ -1524,11 +1541,11 @@ table records what each family asks for and where it lands in v2.
 | One plugin per instance | A cxi-only service cannot reach a tcp-only directory. | One plugin per deployment. A second Margo instance for the directory path if a site ever needs mixing. |
 | Byte order | Mercury encodes natively by default. x86_64 and aarch64 agree. | Enable XDR at build time if a mixed-endian deployment ever exists. Checksums are a Mercury option if wanted. |
 | Directory durability | In-memory state loses records on a directory restart. | Open. The QFw design's generation model tolerates it. SQLite can be added behind the same interface. |
-| Dependency footprint | Four libraries plus CBOR in the container and on sites. | Source build in the Dockerfile, Spack elsewhere. Versions pinned. |
+| Dependency footprint | Four libraries in the container and on sites. | Source build in the Dockerfile, Spack elsewhere. Versions pinned. |
 | Mercury and Margo API drift | Both release often. | Pin exact versions, upgrade deliberately, keep the Mochi usage behind `src2/core` and `src2/rpc`. |
 | Flock has no license file | Group membership would have been convenient. | Not used. Heartbeats are DEFw's own. |
 | Binding technology | cffi is proposed. v1 uses SWIG and the QFw design invests in SWIG typemaps. | Open for review. The C API is designed so either works. |
-| Document tier encoding | CBOR is proposed. | Open for review. JSON is the fallback and costs nothing to swap. |
+| Document tier encoding | CBOR was proposed. | JSON, chosen in Phase 3, because Phase 2 chose it for `extra` and C never parses a document. |
 | Slingshot access | Phase 2 of the v1 plan never had a system to test on. | The go decision should name the system and the window. |
 | Bitmask property matching in the directory | v1 hard-codes it for `qpm_type` and `qpm_capabilities`, and matches every other property on equality. Those two names are the only QPM vocabulary left in the directory after `openQSE/DEFw` #20. | Replace the special case with a generic filter whose bitmask property names come from the caller. Offered to Amir as a follow-up, no answer yet. |
 | Where v2 lives long term | `src2/` in DEFw is proposed for the prototype. | A separate repository is a possible outcome of the go decision, not a starting condition. |
@@ -1544,7 +1561,7 @@ met.
 | 0. Foundation | Mochi stack in the container. `src2/` skeleton, CMake option, `libdefw2` init and finalize, echo service in C, C and Python echo clients, profiling spans and OTLP export, `defw2-bench`. | W1 to W3 produce reports for v2 and v1 on `ofi+tcp` and `na+sm`. A Python echo service holds under eight concurrent clients with no stall. |
 | 1. Directory | `defw2-dirsvc`, registration, heartbeats, generations, resolve, binding cache, address bootstrap. | W4 reports. A killed service is `TIMED_OUT` within the timeout and its restart gets a new generation. |
 | 2. QPM hot path | Typed control, admission and execution RPCs. Bulk descriptors and result buffers. `ServiceHost` and the QPM adapter. `defw2.compat`. | W5 and W6 from C and Python. W7 unchanged at the application level. |
-| 3. Events and comparison | Event sinks and reverse RPC. Full comparison campaign, both versions, all workloads, all providers. Comparison report. | The report exists and the success criteria are evaluated. |
+| 3. Events and comparison | Event sinks and reverse RPC. The document tier, for the QPM methods v2 has not typed. Full comparison campaign, both versions, all workloads, all providers. Comparison report. | The report exists and the success criteria are evaluated. |
 | 4. Decision | Review with Amir and interested parties. | Go, no-go, or go with changes. |
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
 
@@ -1850,8 +1867,6 @@ import DEFw infrastructure.
 | Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. The 1.2 release reports its version as 1.2rc1. |
 | json-c | 0.18, from the distribution | MIT | Margo dependency. Margo accepts any version, and Slurm in the container already links the distribution package. |
 | libfabric | 2.3.1 in the container, 2.6.0 upstream | BSD-2 or GPLv2 at the user's choice | Already a DEFw dependency. BSD is chosen. |
-| tinycbor | current | MIT | Document tier, C side. |
-| cbor2 | current | MIT | Document tier, Python side. |
 | cffi | current | MIT | Python binding. |
 | DEFw, QFw | | BSD-3-Clause | UT-Battelle and openQSE. |
 

@@ -129,6 +129,18 @@ class FakeQPM:
 		self.publisher = publisher
 		self.registrations = []
 
+	# --- documents, the control API's, answered as the C fake answers
+
+	def document(self, api, method, request, traceparent):
+		if api == defw2.API_QPM_CONTROL and method == 'describe':
+			return {'api': api, 'method': method,
+				'request': request}
+		if api == defw2.API_QPM_CONTROL and method == 'refuse':
+			raise defw2.ServiceError('invalid-argument',
+						 'the fake refused')
+		raise defw2.ServiceError('not-found',
+					 'the fake has no such document')
+
 	# --- control
 
 	def is_ready(self, r):

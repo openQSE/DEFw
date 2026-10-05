@@ -251,6 +251,25 @@ directory is, the `source` of every event it sends, which is new each time
 it starts. Its `timeout_ms` limits that one call, for a caller asking
 whether the directory is still there.
 
+## Documents
+
+A method with no typed form goes as a document, a dict of named arguments
+in and JSON out:
+
+```python
+answer = qpm.document(defw2.API_QPM_CONTROL, 'test')
+```
+
+A service answers documents through its handler's `document(api, method,
+request, traceparent)`, where `traceparent` is the caller's trace context
+or None. Every API a `ServiceHost` serves takes documents, except echo,
+and an API with no typed methods takes nothing else. A handler with no
+`document` answers none, so a caller can never reach a handler's other
+methods by naming them. A document travels inside the message, so it is at
+most 4 MiB. The differences are JSON's: a tuple arrives as a list, a key
+that is not a string arrives as a string, a numpy value arrives as the
+Python value it holds, and a value JSON cannot carry fails the call.
+
 ## v1 code on v2
 
 QFw's QPM services and its Qiskit backend are written against v1. They run
@@ -275,7 +294,9 @@ Python v2 callers reach it as they reach any QPM. A v1 client's API classes
 send the fifteen typed QPM methods over the same APIs, and the dictionary
 the service returned comes back key for key, its exceptions as the same v1
 classes, and a statevector through the bulk path, put back into the v1
-payload. `_mapping.py` says exactly what moves into a typed field and what
+payload. Every other method goes as a document, with the arguments the
+caller passed, and `QPMAdapter` calls it only when the v1 API class
+declares it. `_mapping.py` says exactly what moves into a typed field and what
 stays in `extra`, and the design document's Python section says why.
 
 Every compat process listens and serves one sink, as `_events.py`
@@ -296,6 +317,7 @@ then, to give v1 code the peer events it follows a restart by.
 | `defw2/_echo.py` | The `qfw.echo` client |
 | `defw2/_qpm.py` | The QPM client, its answers, the codecs that read a typed call's request and write its answer, and the completion event |
 | `defw2/_event.py` | `EventSink`, `EventPublisher`, `EventTarget` and `TargetGone` |
+| `defw2/_doc.py` | Documents: any method of any API as JSON |
 | `defw2/_dir.py` | The directory client, records as dictionaries, and the record a host registers |
 | `defw2/_service.py` | `ServiceHost`: one provider, queue and set of workers per API, and directory registration |
 | `defw2/compat/__init__.py` | `install`, which makes the v1 names importable, and the finder that refuses the rest |

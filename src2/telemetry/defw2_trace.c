@@ -26,6 +26,13 @@
 #define DEFW2_SCOPE		"defw2"
 #define DEFW2_SPAN_BUFFER	DEFW2_SPANS_PER_BATCH
 
+/*
+ * How many names the recorder keeps for document spans. A run names few
+ * methods, and one that names more records the rest under the tier's name,
+ * so a caller cannot grow the table without bound.
+ */
+#define DEFW2_SPAN_NAMES_MAX	256
+
 /* One microsecond to ten seconds, which spans shared memory to a stall. */
 static const double duration_bounds[] = {
 	1e-6, 2e-6, 5e-6, 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4,
@@ -55,6 +62,8 @@ struct defw2_telemetry {
 
 	struct defw2_rpc_span	*buffer;
 	size_t			count;
+	char			*names[DEFW2_SPAN_NAMES_MAX];
+	size_t			name_count;
 
 	struct defw2_histogram	duration;
 	struct defw2_histogram	bytes;
@@ -243,6 +252,32 @@ void defw2_trace_backdate(struct defw2_trace *trace, uint64_t wall_ns,
 	trace->mono_ns = mono_ns;
 }
 
+/*
+ * A typed span names its API and method with literals. A document span's
+ * method is whatever the call named, and on the caller's side so is its
+ * API, and neither outlives the call, while the span waits in the buffer
+ * until a flush. So the recorder keeps one copy of each such name for its
+ * own life. Called with the lock held.
+ */
+static const char *kept_name(struct defw2_telemetry *telemetry,
+			     const char *name, const char *fallback)
+{
+	size_t i;
+
+	if (name == NULL)
+		return fallback;
+	for (i = 0; i < telemetry->name_count; i++) {
+		if (strcmp(telemetry->names[i], name) == 0)
+			return telemetry->names[i];
+	}
+	if (telemetry->name_count == DEFW2_SPAN_NAMES_MAX)
+		return fallback;
+	telemetry->names[telemetry->name_count] = strdup(name);
+	if (telemetry->names[telemetry->name_count] == NULL)
+		return fallback;
+	return telemetry->names[telemetry->name_count++];
+}
+
 void defw2_trace_end(struct defw2_rt *rt, struct defw2_trace *trace)
 {
 	struct defw2_telemetry *telemetry;
@@ -262,6 +297,11 @@ void defw2_trace_end(struct defw2_rt *rt, struct defw2_trace *trace)
 	trace->span.end_ns = trace->span.start_ns + elapsed;
 
 	pthread_mutex_lock(&telemetry->lock);
+	if (trace->span.tier == DEFW2_TIER_DOCUMENT) {
+		trace->span.api = kept_name(telemetry, trace->span.api, "?");
+		trace->span.method = kept_name(telemetry, trace->span.method,
+					       "document");
+	}
 	if (telemetry->buffer != NULL) {
 		telemetry->buffer[telemetry->count++] = trace->span;
 		if (telemetry->count == DEFW2_SPAN_BUFFER)
@@ -585,6 +625,8 @@ void defw2_telemetry_free(struct defw2_rt *rt)
 	defw2_telemetry_close(rt);
 	defw2_attrs_free(&telemetry->resource);
 	defw2_attrs_free(&telemetry->run_attrs);
+	while (telemetry->name_count > 0)
+		free(telemetry->names[--telemetry->name_count]);
 	pthread_mutex_destroy(&telemetry->lock);
 	free(telemetry);
 	rt->telemetry = NULL;

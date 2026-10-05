@@ -4,7 +4,8 @@ v1 loaded a service module, a package with svc_info, service_classes,
 initialize() and uninitialize(), called initialize(), made the service
 class's one instance on the first call that reached it, and called
 uninitialize() at shutdown. This does the same over a defw2.ServiceHost
-that serves the three QPM APIs through QPMAdapter.
+that serves the QPM's six APIs through QPMAdapter, three typed and three of
+documents alone.
 
 The module registers itself, as QFw's QPMs do from initialize(), through
 defw.dirsvc.register_service. The host serves from the start under a

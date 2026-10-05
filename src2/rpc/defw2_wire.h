@@ -334,6 +334,20 @@ MERCURY_GEN_PROC(defw2_echo_bulk_out_t,
 #define DEFW2_RPC_ECHO		"defw2.qfw.echo.echo"
 #define DEFW2_RPC_ECHO_BULK	"defw2.qfw.echo.echo_bulk"
 
+/*
+ * The document tier's one RPC per API, defw2.<api>.document. The API is in
+ * the RPC's name, so the request names only the method. A request with no
+ * document asks with no arguments.
+ */
+MERCURY_GEN_PROC(defw2_doc_in_t,
+	((defw2_hdr_t)(hdr))
+	((defw2_str_t)(method))
+	((defw2_text_t)(document)))
+
+MERCURY_GEN_PROC(defw2_doc_out_t,
+	((defw2_wire_status_t)(status))
+	((defw2_text_t)(document)))
+
 /* A caller's handle on one provider. */
 struct defw2_binding {
 	struct defw2_rt	*rt;

@@ -20,12 +20,19 @@ consumed it.
 register_event_notification hands the v1 QPM the caller's sink as the
 endpoint to put its events to, and the sink's tag as the class_id. A put
 to it publishes the event, so the QPM sends it without waiting.
+
+Every other method arrives as a document, and is called with the named
+arguments the caller passed. Only a method that the v1 API class bound to
+that API declares can be called, as QFw's query() names the classes. So
+a caller can reach the QPM's API and nothing else of the object.
 """
 
+import importlib
 import inspect
 import sys
 import threading
 
+from .._qpm import QPM_BINDING_NAMES
 from .._runtime import ServiceError
 from . import _events
 from . import _mapping as m
@@ -76,6 +83,20 @@ def service_error(exc):
 			    else name)
 
 
+def _api_classes(advertisement):
+	"""The v1 API class for each v2 API, from the bindings a QPM's query()
+	names, as v1's directory record named them."""
+	by_name = {name: api for api, name in QPM_BINDING_NAMES.items()}
+	classes = {}
+	for binding in advertisement.get('api_bindings', []):
+		api = by_name.get(binding.get('binding_name'))
+		if api is None:
+			continue
+		module = importlib.import_module(binding['client_module'])
+		classes[api] = getattr(module, binding['client_class'])
+	return classes
+
+
 class QPMAdapter:
 	"""A defw2.ServiceHost handler over one v1 QPM object.
 
@@ -92,6 +113,7 @@ class QPMAdapter:
 		self._factory = factory
 		self._lock = threading.Lock()
 		self._signatures = {}
+		self._classes = None
 
 	@property
 	def qpm(self):
@@ -122,6 +144,10 @@ class QPMAdapter:
 		return signature
 
 	def _invoke(self, method, *args, **kwargs):
+		traceparent = kwargs.pop('_traceparent', None)
+		return self._call(method, args, kwargs, traceparent)
+
+	def _call(self, method, args, kwargs, traceparent):
 		"""Call a v1 method with the keywords it takes.
 
 		A reservation or token it has no parameter for is left out,
@@ -133,7 +159,6 @@ class QPMAdapter:
 		them in the caller's trace.
 		"""
 		tracing = sys.modules.get('defw_trace')
-		traceparent = kwargs.pop('_traceparent', None)
 		token = (tracing.attach({'traceparent': traceparent})
 			 if tracing is not None and traceparent else None)
 		try:
@@ -165,6 +190,36 @@ class QPMAdapter:
 		finally:
 			if token is not None:
 				tracing.detach(token)
+
+	# --- documents
+
+	def _api_classes(self):
+		if self._classes is None:
+			try:
+				advertisement = self._object().query()
+				self._classes = _api_classes(advertisement)
+			except Exception as exc:  # noqa: BLE001
+				raise service_error(exc)
+		return self._classes
+
+	def _declares(self, api, method):
+		cls = self._api_classes().get(api)
+		if cls is None:
+			return False
+		for klass in inspect.getmro(cls):
+			# Their common bases declare no API methods.
+			if klass is object or klass.__module__ == 'defw_remote':
+				break
+			if method in vars(klass):
+				return callable(vars(klass)[method])
+		return False
+
+	def document(self, api, method, request, traceparent):
+		if not self._declares(api, method):
+			raise ServiceError('not-found',
+					   "this QPM's {} API has no method "
+					   '{}'.format(api, method))
+		return self._call(method, (), dict(request), traceparent)
 
 	@staticmethod
 	def _context(request):

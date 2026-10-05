@@ -42,6 +42,12 @@ struct defw2_call {
 	uint64_t		bulk_len;
 	uint64_t		result_capacity; /* lent by the caller, 0 for none */
 	const char		*traceparent;	/* borrowed, or NULL */
+	/*
+	 * A document call's request, which is borrowed and never NULL, and
+	 * NULL for every other call. Its answer is the const char * that
+	 * response points at.
+	 */
+	const char		*document;
 };
 
 /*

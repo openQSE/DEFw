@@ -18,6 +18,11 @@ C answer structure the same way:
 		def is_ready(self, request):
 			return {'state': 'running', 'ready': True}
 
+A method with no typed form goes as a document, a dict of named arguments
+in and the service's JSON out:
+
+	answer = qpm.document(API_QPM_CONTROL, 'test')
+
 Every answer has the typed fields and extra, a JSON object carrying the rest
 of what the service said. Outcomes such as INVALID_RESERVATION are data and
 come back in the answer; a call that fails raises DefwError with the status
@@ -36,6 +41,7 @@ would answer read_cq with:
 
 import json
 
+from . import _doc
 from ._defw2 import ffi, lib
 from ._event import EventKind, EventSink, EventTarget
 from ._runtime import DefwError, _status_out, _take_status, _text
@@ -43,23 +49,49 @@ from ._runtime import DefwError, _status_out, _take_status, _text
 __all__ = [
 	'QPM', 'Request', 'Tensor', 'ServiceStatus', 'Decision',
 	'Reservation', 'Task', 'API_QPM_CONTROL', 'API_QPM_ADMISSION',
-	'API_QPM_EXECUTION', 'QPM_APIS', 'PROVIDER_QPM_CONTROL',
-	'PROVIDER_QPM_ADMISSION', 'PROVIDER_QPM_EXECUTION', 'QPM_VERSION',
+	'API_QPM_EXECUTION', 'API_QPM_ADMISSION_POLICY', 'API_QPM_SCHEDULER',
+	'API_QPM_TELEMETRY', 'QPM_APIS', 'QPM_DOCUMENT_APIS',
+	'QPM_BINDING_NAMES', 'PROVIDER_QPM_CONTROL', 'PROVIDER_QPM_ADMISSION',
+	'PROVIDER_QPM_EXECUTION', 'PROVIDER_QPM_ADMISSION_POLICY',
+	'PROVIDER_QPM_SCHEDULER', 'PROVIDER_QPM_TELEMETRY', 'QPM_VERSION',
 	'DTYPE', 'QPM_COMPLETION',
 ]
 
 API_QPM_CONTROL = 'qfw.qpm.control'
 API_QPM_ADMISSION = 'qfw.qpm.admission'
 API_QPM_EXECUTION = 'qfw.qpm.execution'
-QPM_APIS = (API_QPM_CONTROL, API_QPM_ADMISSION, API_QPM_EXECUTION)
+# Every method of these three is a document.
+API_QPM_ADMISSION_POLICY = 'qfw.qpm.admission-policy'
+API_QPM_SCHEDULER = 'qfw.qpm.scheduler'
+API_QPM_TELEMETRY = 'qfw.qpm.telemetry'
+QPM_DOCUMENT_APIS = (API_QPM_ADMISSION_POLICY, API_QPM_SCHEDULER,
+		     API_QPM_TELEMETRY)
+QPM_APIS = (API_QPM_CONTROL, API_QPM_ADMISSION,
+	    API_QPM_EXECUTION) + QPM_DOCUMENT_APIS
 
 PROVIDER_QPM_CONTROL = lib.DEFW2_PROVIDER_QPM_CONTROL
 PROVIDER_QPM_ADMISSION = lib.DEFW2_PROVIDER_QPM_ADMISSION
 PROVIDER_QPM_EXECUTION = lib.DEFW2_PROVIDER_QPM_EXECUTION
+PROVIDER_QPM_ADMISSION_POLICY = lib.DEFW2_PROVIDER_QPM_ADMISSION_POLICY
+PROVIDER_QPM_SCHEDULER = lib.DEFW2_PROVIDER_QPM_SCHEDULER
+PROVIDER_QPM_TELEMETRY = lib.DEFW2_PROVIDER_QPM_TELEMETRY
 DEFAULT_PROVIDERS = {
 	API_QPM_CONTROL: PROVIDER_QPM_CONTROL,
 	API_QPM_ADMISSION: PROVIDER_QPM_ADMISSION,
 	API_QPM_EXECUTION: PROVIDER_QPM_EXECUTION,
+	API_QPM_ADMISSION_POLICY: PROVIDER_QPM_ADMISSION_POLICY,
+	API_QPM_SCHEDULER: PROVIDER_QPM_SCHEDULER,
+	API_QPM_TELEMETRY: PROVIDER_QPM_TELEMETRY,
+}
+# What each API's binding is called in a directory record, which is what
+# QFw calls it.
+QPM_BINDING_NAMES = {
+	API_QPM_CONTROL: 'control',
+	API_QPM_ADMISSION: 'admission',
+	API_QPM_EXECUTION: 'execution',
+	API_QPM_ADMISSION_POLICY: 'admission-policy',
+	API_QPM_SCHEDULER: 'scheduler',
+	API_QPM_TELEMETRY: 'telemetry',
 }
 QPM_VERSION = lib.DEFW2_QPM_VERSION
 
@@ -260,7 +292,8 @@ def _task_of(out, buffer=None):
 
 
 class QPM:
-	"""A client of one QPM's three APIs.
+	"""A client of one QPM's APIs: the three with typed methods, and the
+	three that are documents alone.
 
 	Bound by address, with the default providers or the ones given, or
 	from a directory record with from_record, which is what a resolved
@@ -625,6 +658,19 @@ class QPM:
 				      lib.defw2_qpm_register_event_notification,
 				      call, req, timeout_ms, traceparent,
 				      api=API_QPM_EXECUTION)
+
+	# --- documents
+
+	def document(self, api, method, request=None, timeout_ms=None,
+		     traceparent=None):
+		"""Any method of one of the QPM's APIs as a document: request
+		is a dict of named arguments, and the answer is the JSON the
+		service answered with. This is how a method with no typed
+		form is called."""
+		call = _Call()
+		opts = call.options(self._timeout_ms if timeout_ms is None
+				    else timeout_ms, traceparent)
+		return _doc.call(self._binding(api), api, method, request, opts)
 
 	def close(self):
 		for binding in self._bindings.values():

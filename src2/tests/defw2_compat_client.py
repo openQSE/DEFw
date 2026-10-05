@@ -159,7 +159,9 @@ def directory_checks(dirsvc, record):
 	      '["openqasm2","qpy"]' and
 	      {(b['binding_name'], b['provider_id'])
 	       for b in typed['bindings']} == {
-		      ('control', 2), ('admission', 3), ('execution', 4)},
+		      ('control', 2), ('admission', 3), ('execution', 4),
+		      ('admission-policy', 6), ('scheduler', 7),
+		      ('telemetry', 8)},
 	      typed)
 
 	oracle = v1_directory().Directory(runtime_id_provider=lambda: 'dir')
@@ -336,10 +338,57 @@ def execution_checks(execution, reference):
 	     execution, reference, 'delete_circuit', cid,
 	     reservation_id=RID)
 
-	got = outcome(execution.get_device_profile)
-	check('a method v2 does not type fails, naming itself',
+	same('a method v2 has no typed form for goes as a document',
+	     execution, reference, 'get_device_profile')
+
+
+def document_checks(apis, reference):
+	"""The methods v2 has no typed form for, on every API."""
+	policy = apis['admission-policy']
+	same('control answers a document as the v1 QPM does',
+	     apis['control'], reference, 'test', token='tok-9')
+	same('admission policy too, with its arguments by keyword', policy,
+	     reference, 'get_device_profile', device_id='fake-v1-4q')
+	same('and by position, named as the API class names them', policy,
+	     reference, 'set_admission_policy', None, 'fake-v1-4q',
+	     {'max_qubits': 2})
+	same("a built-in exception arrives as the service's own",
+	     policy, reference, 'set_admission_policy',
+	     device_id='fake-v1-4q', policy={})
+	same('and so does a DEFw one', policy, reference,
+	     'set_admission_policy', device_id='fake-v1-4q',
+	     policy={'max_qubits': 20})
+	same('scheduler answers one', apis['scheduler'], reference,
+	     'get_scheduler_status', device_id='other-4q')
+	same("and an argument left out takes the service's default",
+	     apis['scheduler'], reference, 'get_scheduler_status')
+	same('telemetry answers nested data as it was',
+	     apis['telemetry'], reference, 'get_backend_info', lib='qdmi')
+
+	got = outcome(apis['telemetry'].capability_map)
+	check('a tuple in an answer arrives as a list, as JSON carries it',
+	      got == ('answer', {'gates': ['cx', 'h', 'rz']}), got)
+	got = outcome(apis['telemetry'].get_device_info)
+	check('an answer JSON cannot carry fails, rather than losing it',
+	      got[0] == 'raised' and got[1] == 'DEFwRemoteError' and
+	      'JSON cannot carry' in got[2], got)
+	got = outcome(policy.set_admission_policy, device_id='x',
+		      policy={'blob': b'\x00'})
+	check('and so does a request JSON cannot carry',
 	      got[0] == 'raised' and got[1] == 'DEFwError' and
-	      'get_device_profile is not a typed v2 method' in got[2], got)
+	      'document carries JSON' in got[2], got)
+
+	rt = _state.runtime()
+	with defw2.Directory(rt, rt.dirsvc) as v2:
+		found = v2.resolve(service_type='qfw.qpm')
+	with defw2.QPM.from_record(rt, found[0]) as qpm:
+		try:
+			qpm.document(defw2.API_QPM_CONTROL, 'query')
+			reached = True
+		except defw2.DefwError as error:
+			reached = error.category != 'not-found'
+		check('a method no API class declares cannot be reached',
+		      not reached)
 
 
 def take(events, count, timeout=30):
@@ -565,19 +614,23 @@ def main():
 	directory_checks(dirsvc, record)
 
 	apis = {}
-	for name in ('control', 'admission', 'execution'):
+	for name in ('control', 'admission', 'execution', 'admission-policy',
+		     'scheduler', 'telemetry'):
 		apis[name] = defw.connect_to_binding(
 			resolve(dirsvc, service_type='qfw.qpm',
 				binding_name=name)[0])
 	check('connect_to_binding gives the v1 API classes',
 	      [type(api).__name__ for api in apis.values()] ==
-	      ['QPMControl', 'QPMAdmissionControl', 'QPMExecution'])
+	      ['QPMControl', 'QPMAdmissionControl', 'QPMExecution',
+	       'QPMAdmissionPolicyConfig', 'QPMSchedulerControl',
+	       'QPMTelemetry'])
 
 	svc_qpm.initialized = True
 	reference = svc_qpm.QPM()
 	control_checks(apis['control'], reference)
 	admission_checks(apis['admission'], reference)
 	execution_checks(apis['execution'], reference)
+	document_checks(apis, reference)
 	typed_checks(record, reference)
 	events = event_checks(apis['execution'], reference)
 	rt = _state.runtime()

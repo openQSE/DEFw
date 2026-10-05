@@ -95,6 +95,37 @@ def control_checks(qpm):
 	status = qpm.get_service_status(reservation_id=17, token='tok-17')
 	check('a 200 KiB extra, longer than any string, arrives intact',
 	      status.extra_json == 'e' * (BIG_EXTRA - 1))
+	document_checks(qpm)
+
+
+def document_checks(qpm):
+	request = {'x': 1, 'y': [True, None]}
+	check('a document on the control API says what it was asked',
+	      qpm.document(defw2.API_QPM_CONTROL, 'describe', request) ==
+	      {'api': defw2.API_QPM_CONTROL, 'method': 'describe',
+	       'request': request})
+	check('one the service refuses raises its status',
+	      raises('invalid-argument', qpm.document, defw2.API_QPM_CONTROL,
+		     'refuse') is not None)
+	check('and one it does not have is not found',
+	      raises('not-found', qpm.document, defw2.API_QPM_CONTROL,
+		     'nosuch') is not None)
+	check('a method the tier cannot carry is refused before it is sent',
+	      raises('invalid-argument', qpm.document, defw2.API_QPM_CONTROL,
+		     '_private') is not None)
+	try:
+		qpm.document(defw2.API_QPM_CONTROL, 'describe', ['unnamed'])
+		named = False
+	except TypeError:
+		named = True
+	check('a request is a dict of named arguments', named)
+	try:
+		qpm.document(defw2.API_QPM_CONTROL, 'describe', {'b': b'\x00'})
+		carried = True
+	except TypeError:
+		carried = False
+	check('and a value JSON cannot carry fails rather than vanishing',
+	      not carried)
 
 
 def admission_checks(qpm):

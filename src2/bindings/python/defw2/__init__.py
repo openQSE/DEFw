@@ -17,8 +17,9 @@ and on the other side:
 		host = defw2.ServiceHost(rt, 'echo')
 		host.serve(lambda method, request: request)
 
-The QPM's typed APIs work the same way, through defw2.QPM on the calling
-side and a ServiceHost serving defw2.QPM_APIS on the other, and
+The QPM's APIs work the same way, through defw2.QPM on the calling side
+and a ServiceHost serving defw2.QPM_APIS on the other. A method with no
+typed form goes as a document, a dict of named arguments in and JSON out.
 defw2.Directory resolves what a host registers. A caller takes events, such
 as a QPM's completions or the directory's word of a service coming and going,
 from a defw2.EventSink, and a service sends them with a defw2.EventPublisher.
@@ -44,15 +45,23 @@ from ._event import (
 )
 from ._qpm import (
 	API_QPM_ADMISSION,
+	API_QPM_ADMISSION_POLICY,
 	API_QPM_CONTROL,
 	API_QPM_EXECUTION,
+	API_QPM_SCHEDULER,
+	API_QPM_TELEMETRY,
 	DTYPE,
 	PROVIDER_QPM_ADMISSION,
+	PROVIDER_QPM_ADMISSION_POLICY,
 	PROVIDER_QPM_CONTROL,
 	PROVIDER_QPM_EXECUTION,
+	PROVIDER_QPM_SCHEDULER,
+	PROVIDER_QPM_TELEMETRY,
 	QPM,
 	QPM_APIS,
+	QPM_BINDING_NAMES,
 	QPM_COMPLETION,
+	QPM_DOCUMENT_APIS,
 	QPM_VERSION,
 	Decision,
 	Request,
@@ -77,8 +86,11 @@ __all__ = [
 	'API_DIR',
 	'API_ECHO',
 	'API_QPM_ADMISSION',
+	'API_QPM_ADMISSION_POLICY',
 	'API_QPM_CONTROL',
 	'API_QPM_EXECUTION',
+	'API_QPM_SCHEDULER',
+	'API_QPM_TELEMETRY',
 	'CATEGORY',
 	'CATEGORY_CODE',
 	'DIR_SERVICE',
@@ -95,11 +107,16 @@ __all__ = [
 	'PROVIDER_ECHO',
 	'PROVIDER_EVENT',
 	'PROVIDER_QPM_ADMISSION',
+	'PROVIDER_QPM_ADMISSION_POLICY',
 	'PROVIDER_QPM_CONTROL',
 	'PROVIDER_QPM_EXECUTION',
+	'PROVIDER_QPM_SCHEDULER',
+	'PROVIDER_QPM_TELEMETRY',
 	'QPM',
 	'QPM_APIS',
+	'QPM_BINDING_NAMES',
 	'QPM_COMPLETION',
+	'QPM_DOCUMENT_APIS',
 	'QPM_VERSION',
 	'Request',
 	'Reservation',

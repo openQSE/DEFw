@@ -8,7 +8,10 @@ times are decimal strings in order, histogram buckets add up, and the
 server's spans really are children of the client's, which is the thing
 that proves trace context crossed the wire.
 
-	defw2_otlp_check.py <directory>
+	defw2_otlp_check.py <directory> [--tier TIER]
+
+With --tier, the run must also have recorded that tier's spans on both
+sides of a call. A document span must name the document's own method.
 """
 
 import glob
@@ -39,11 +42,21 @@ class Problems:
 		return len(self.messages)
 
 
+def _text(path, number, raw):
+	"""One line as text. Text that is not UTF-8 is a name read from
+	memory after it was freed, which is why it is worth naming."""
+	try:
+		return raw.decode('utf-8').strip()
+	except UnicodeDecodeError as error:
+		raise SystemExit('{}:{}: not UTF-8, so a span named something '
+				 'freed: {}'.format(path, number, error))
+
+
 def requests(path):
 	"""Each line is one OTLP export request."""
-	with open(path, encoding='utf-8') as stream:
-		for number, line in enumerate(stream, 1):
-			line = line.strip()
+	with open(path, 'rb') as stream:
+		for number, raw in enumerate(stream, 1):
+			line = _text(path, number, raw)
 			if not line:
 				continue
 			try:
@@ -55,6 +68,13 @@ def requests(path):
 
 def attribute_keys(attributes):
 	return {item['key'] for item in attributes}
+
+
+def attribute(attributes, key):
+	for item in attributes:
+		if item['key'] == key:
+			return item['value'].get('stringValue')
+	return None
 
 
 def check_spans(path, problems, seen):
@@ -105,6 +125,14 @@ def check_span(where, span, problems, seen):
 		problems.check(required in keys,
 			       '{} is missing {}'.format(where, required))
 
+	tier = attribute(span['attributes'], 'qfw.rpc.tier')
+	seen['tiers'].add((tier, span['kind']))
+	if tier == 'document':
+		problems.check(attribute(span['attributes'], 'qfw.rpc.method')
+			       not in (None, '', 'document'),
+			       where + ' is a document span that does not name '
+			       'its method')
+
 	if span['kind'] == SPAN_CLIENT:
 		seen['client'].add(span['spanId'])
 	elif span['kind'] == SPAN_SERVER:
@@ -149,11 +177,16 @@ def check_metric(where, metric, problems):
 
 
 def main():
-	if len(sys.argv) != 2:
-		raise SystemExit('usage: defw2_otlp_check.py <directory>')
-	directory = sys.argv[1]
+	args = sys.argv[1:]
+	tier = None
+	if len(args) == 3 and args[1] == '--tier':
+		tier = args[2]
+	elif len(args) != 1:
+		raise SystemExit('usage: defw2_otlp_check.py <directory> '
+				 '[--tier TIER]')
+	directory = args[0]
 	problems = Problems()
-	seen = {'client': set(), 'server_parents': set()}
+	seen = {'client': set(), 'server_parents': set(), 'tiers': set()}
 
 	span_files = sorted(glob.glob(os.path.join(directory, 'spans-*.jsonl')))
 	metric_files = sorted(glob.glob(os.path.join(directory,
@@ -177,6 +210,13 @@ def main():
 	problems.check(joined,
 		       'no server span is a child of a client span, so trace '
 		       'context did not cross the wire')
+
+	if tier is not None:
+		for kind, side in ((SPAN_CLIENT, 'client'),
+				   (SPAN_SERVER, 'server')):
+			problems.check((tier, kind) in seen['tiers'],
+				       'no {} span of the {} tier'.format(
+					       side, tier))
 
 	failed = problems.report()
 	print('{} transport spans, {} joined to their caller, {} metrics'.format(

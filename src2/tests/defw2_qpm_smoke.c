@@ -22,6 +22,10 @@
  * record read_cq answers with, its statevector described and then fetched
  * by read_cq into a buffer of the size the event gave.
  *
+ * The control API answers documents too, the way a QPM answers the methods
+ * that have no typed form: describe says what it was asked, and refuse
+ * fails with a status of its own.
+ *
  * Given a directory, both runtimes profile into it, which is how the spans
  * the shared typed code records get checked: defw2_otlp_check.py reads them
  * back as a second test.
@@ -42,6 +46,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <defw2/defw2_doc.h>
 #include <defw2/defw2_qpm.h>
 
 #define SV_QUBITS	20
@@ -589,9 +594,70 @@ static defw2_rc_t fake_task_answer(void *ctx, defw2_call_t *call,
 	return DEFW2_OK;
 }
 
+/*
+ * Documents on the control API. The answer is the text Python's json.dumps
+ * would give the same dict, so the fakes answer byte for byte alike.
+ */
+static defw2_rc_t fake_document(void *arg, defw2_call_t *call,
+				const char *method, const char *request,
+				const char **answer)
+{
+	size_t len;
+	char *text;
+
+	(void)arg;
+	if (strcmp(method, "describe") == 0) {
+		len = strlen(request) + 128;
+		text = defw2_call_alloc(call, len);
+		if (text == NULL)
+			return DEFW2_ERR_NOMEM;
+		snprintf(text, len, "{\"api\": \"" DEFW2_API_QPM_CONTROL "\", "
+			 "\"method\": \"describe\", \"request\": %s}", request);
+		*answer = text;
+		return DEFW2_OK;
+	}
+	if (strcmp(method, "refuse") == 0) {
+		defw2_call_set_status(call, DEFW2_ERR_INVALID,
+				      DEFW2_CAT_INVALID_ARGUMENT,
+				      "the fake refused");
+		return DEFW2_ERR_INVALID;
+	}
+	defw2_call_set_status(call, DEFW2_ERR_NOT_FOUND, DEFW2_CAT_NOT_FOUND,
+			      "the fake has no such document");
+	return DEFW2_ERR_NOT_FOUND;
+}
+
 /* --- the client side ------------------------------------------------- */
 
 static defw2_call_opts_t opts = { .timeout_ms = 20000 };
+
+static void document_calls(defw2_binding_t *control)
+{
+	defw2_status_t status = { 0 };
+	char *answer = NULL;
+
+	check("a document on the control API answers",
+	      defw2_doc_call(control, DEFW2_API_QPM_CONTROL, "describe",
+			     "{\"x\": 1, \"y\": [true, null]}", &opts, &answer,
+			     &status) == DEFW2_OK && status.code == DEFW2_OK);
+	check("and says what it was asked",
+	      answer != NULL &&
+	      eq(answer, "{\"api\": \"" DEFW2_API_QPM_CONTROL "\", "
+			 "\"method\": \"describe\", \"request\": "
+			 "{\"x\": 1, \"y\": [true, null]}}"));
+	free(answer);
+	answer = NULL;
+	check("a document the service refuses carries its status",
+	      defw2_doc_call(control, DEFW2_API_QPM_CONTROL, "refuse", NULL,
+			     &opts, &answer, &status) == DEFW2_OK &&
+	      status.category == DEFW2_CAT_INVALID_ARGUMENT &&
+	      answer == NULL);
+	check("and one it does not have is not found",
+	      defw2_doc_call(control, DEFW2_API_QPM_CONTROL, "nosuch", NULL,
+			     &opts, &answer, &status) == DEFW2_OK &&
+	      status.category == DEFW2_CAT_NOT_FOUND && answer == NULL);
+	defw2_status_free(&status);
+}
 
 static void control_calls(defw2_binding_t *control)
 {
@@ -624,6 +690,7 @@ static void control_calls(defw2_binding_t *control)
 	      memcmp(out.extra, fake.big_extra, BIG_EXTRA) == 0);
 	defw2_qpm_service_status_free(&out);
 	defw2_status_free(&status);
+	document_calls(control);
 }
 
 static void admission_calls(defw2_binding_t *admission)
@@ -1071,6 +1138,7 @@ int main(int argc, char **argv)
 		.cancel = fake_cancel,
 		.get_reservation = fake_get_reservation,
 	};
+	static const defw2_doc_ops_t document_ops = { .call = fake_document };
 	static const defw2_qpm_execution_ops_t execution_ops = {
 		.async_run = fake_async_run,
 		.sync_run = fake_sync_run,
@@ -1135,6 +1203,8 @@ int main(int argc, char **argv)
 				   &execution_svc) == DEFW2_OK);
 	check("and each binds its API",
 	      defw2_qpm_control_bind(control_svc, &control_ops) == DEFW2_OK &&
+	      defw2_doc_bind(control_svc, DEFW2_API_QPM_CONTROL,
+			     &document_ops) == DEFW2_OK &&
 	      defw2_qpm_admission_bind(admission_svc, &admission_ops) ==
 	      DEFW2_OK &&
 	      defw2_qpm_execution_bind(execution_svc, &execution_ops) ==

@@ -73,8 +73,9 @@ struct defw2_rpc_span {
 	uint64_t	queue_ns;	/* a Python service's hand-off */
 	uint64_t	handler_ns;
 	uint64_t	encode_ns;
-	const char	*api;		/* a literal, not copied */
-	const char	*method;	/* a literal, not copied */
+	/* Literals, or for a document span names the recorder keeps. */
+	const char	*api;
+	const char	*method;
 	uint32_t	kind;
 	uint32_t	category;
 	int32_t		code;

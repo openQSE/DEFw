@@ -20,6 +20,7 @@ add_library(defw2 SHARED
 	rpc/defw2_binding.c
 	rpc/defw2_bulk.c
 	rpc/defw2_typed.c
+	rpc/defw2_doc.c
 	rpc/defw2_echo_client.c
 	telemetry/defw2_otlp.c
 	telemetry/defw2_trace.c
@@ -247,6 +248,19 @@ if(BUILD_TESTING)
 		PROPERTIES
 			FIXTURES_SETUP defw2_event_otlp_files)
 
+	# The document tier against a C service, a queued one and one with
+	# neither, profiled into a directory of its own for the OTLP checker.
+	set(DEFW2_DOC_TELEMETRY_DIR "${CMAKE_CURRENT_BINARY_DIR}/telemetry-doc")
+	file(MAKE_DIRECTORY "${DEFW2_DOC_TELEMETRY_DIR}")
+	add_executable(defw2_doc_smoke tests/defw2_doc_smoke.c)
+	target_link_libraries(defw2_doc_smoke PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_doc_smoke
+		COMMAND defw2_doc_smoke "${DEFW2_DOC_TELEMETRY_DIR}")
+	set_tests_properties(defw2_doc_smoke
+		PROPERTIES
+			ENVIRONMENT "DEFW2_ADDRESS=na+sm://"
+			FIXTURES_SETUP defw2_doc_otlp_files)
+
 	# The wire test reaches the procs directly, so it sees the internal
 	# headers the library is built from.
 	add_executable(defw2_wire_smoke tests/defw2_wire_smoke.c)
@@ -302,6 +316,13 @@ if(BUILD_TESTING)
 		set_tests_properties(defw2_qpm_otlp_check
 			PROPERTIES
 				FIXTURES_REQUIRED defw2_qpm_otlp_files)
+		add_test(NAME defw2_doc_otlp_check
+			COMMAND "${Python3_EXECUTABLE}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_otlp_check.py"
+				"${DEFW2_DOC_TELEMETRY_DIR}" --tier document)
+		set_tests_properties(defw2_doc_otlp_check
+			PROPERTIES
+				FIXTURES_REQUIRED defw2_doc_otlp_files)
 		add_test(NAME defw2_event_otlp_check
 			COMMAND "${Python3_EXECUTABLE}"
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_otlp_check.py"

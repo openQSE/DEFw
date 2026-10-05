@@ -70,14 +70,30 @@ class QPMControl(QPMRemoteBase):
 	def get_service_status(self, token=None):
 		pass
 
+	def test(self, token=None):
+		pass
+
 
 class QPMAdmissionPolicyConfig(QPMRemoteBase):
-	pass
+	def get_device_profile(self, token=None, device_id=None):
+		pass
+
+	def set_admission_policy(self, token=None, device_id=None,
+				 policy=None):
+		pass
 
 
 class QPMSchedulerControl(QPMRemoteBase):
-	pass
+	def get_scheduler_status(self, token=None, device_id=None):
+		pass
 
 
 class QPMTelemetry(QPMRemoteBase):
-	pass
+	def get_backend_info(self, lib=None, token=None):
+		pass
+
+	def get_device_info(self, lib=None, token=None):
+		pass
+
+	def capability_map(self, token=None):
+		pass

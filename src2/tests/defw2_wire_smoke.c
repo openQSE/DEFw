@@ -56,6 +56,7 @@ static size_t heap_with_maps(void)
 }
 #endif
 
+#include <defw2/defw2_doc.h>
 #include <defw2/defw2_echo.h>
 #include <defw2/defw2_qpm.h>
 
@@ -435,6 +436,19 @@ static defw2_rc_t counting_echo(void *ctx, const void *request, size_t len,
 	return DEFW2_OK;
 }
 
+static defw2_rc_t counting_document(void *arg, defw2_call_t *call,
+				    const char *method, const char *request,
+				    const char **answer)
+{
+	(void)arg;
+	(void)call;
+	(void)method;
+	(void)request;
+	__atomic_add_fetch(&served_calls, 1, __ATOMIC_RELAXED);
+	*answer = "{}";
+	return DEFW2_OK;
+}
+
 static defw2_rc_t counting_is_ready(void *ctx, defw2_call_t *call,
 				    const defw2_qpm_ctx_t *req,
 				    defw2_qpm_service_status_t *out)
@@ -468,6 +482,7 @@ enum evil {
 	EVIL_LONG_LENGTH,
 	EVIL_SECOND_STRING,
 	EVIL_VERSION,
+	EVIL_METHOD,	/* a well-formed document naming evil_method */
 };
 
 /*
@@ -480,6 +495,7 @@ static char stranded[STRANDED];
 
 static const struct target *evil_target;
 static enum evil evil_mode;
+static const char *evil_method;
 
 /*
  * A request as a hostile peer would encode it. Each mode breaks it in one
@@ -525,6 +541,22 @@ static hg_return_t evil_in_proc(hg_proc_t proc, void *arg)
 		hg_proc_hg_uint64_t(proc, &len);
 		hg_proc_bytes(proc, (void *)"evil", 5);
 		break;
+	case EVIL_METHOD:
+		/*
+		 * A request only a hostile peer sends, since the client
+		 * refuses these names before it sends anything.
+		 */
+		len = 5;
+		hg_proc_hg_uint64_t(proc, &len);
+		hg_proc_bytes(proc, (void *)"evil", 5);
+		hg_proc_hg_uint64_t(proc, &zero);	/* traceparent */
+		hg_proc_hg_uint64_t(proc, &zero);	/* client_send_ns */
+		len = evil_method != NULL ? strlen(evil_method) + 1 : 0;
+		hg_proc_hg_uint64_t(proc, &len);
+		if (len > 0)
+			hg_proc_bytes(proc, (void *)evil_method, len);
+		hg_proc_hg_uint64_t(proc, &zero);	/* no document */
+		return HG_SUCCESS;
 	}
 	hg_proc_hg_uint64_t(proc, &zero);	/* traceparent, absent */
 	hg_proc_hg_uint64_t(proc, &zero);	/* client_send_ns */
@@ -647,6 +679,12 @@ static void hostile(void)
 		"a QPM", defw2_qpm_m_is_ready.rpc, DEFW2_PROVIDER_QPM_CONTROL,
 		DEFW2_QPM_VERSION, 2, hg_proc_defw2_qpm_status_out_t,
 	};
+	/* A method and a document after the header, both absent. */
+	const struct target doc_target = {
+		"a document provider", "defw2.qfw.test.doc.document", 11,
+		DEFW2_DOC_VERSION, 2, hg_proc_defw2_doc_out_t,
+	};
+	static const defw2_doc_ops_t doc_ops = { .call = counting_document };
 	/* Enough zeros after the envelope for a payload of absent fields. */
 	const struct target sink_target = {
 		"an event sink", DEFW2_RPC_EVENT_DELIVER, DEFW2_PROVIDER_EVENT,
@@ -661,8 +699,12 @@ static void hostile(void)
 	const defw2_qpm_task_t *got;
 	defw2_config_t server_cfg, client_cfg;
 	defw2_rt_t *server_rt = NULL, *client_rt = NULL;
-	defw2_service_t *echo_svc = NULL, *qpm_svc = NULL;
-	defw2_binding_t *echo = NULL, *control = NULL;
+	defw2_service_t *echo_svc = NULL, *qpm_svc = NULL, *doc_svc = NULL;
+	defw2_binding_t *echo = NULL, *control = NULL, *doc = NULL;
+	char message[256], *answer = NULL;
+	hg_addr_t addr = HG_ADDR_NULL;
+	hg_bool_t found = HG_FALSE;
+	hg_id_t id;
 	defw2_call_opts_t opts = { .timeout_ms = 10000 };
 	defw2_qpm_service_status_t status_out = { 0 };
 	defw2_buffer_t reply = { 0 };
@@ -692,6 +734,10 @@ static void hostile(void)
 				   DEFW2_PROVIDER_QPM_CONTROL, &qpm_svc) ==
 	      DEFW2_OK && defw2_qpm_control_bind(qpm_svc, &qpm_ops) ==
 	      DEFW2_OK);
+	check("and a document provider",
+	      defw2_service_create(server_rt, "victim-doc", "qfw.test", 11,
+				   &doc_svc) == DEFW2_OK &&
+	      defw2_doc_bind(doc_svc, "qfw.test.doc", &doc_ops) == DEFW2_OK);
 	check("and an event sink takes completions",
 	      defw2_event_sink_create(server_rt, DEFW2_PROVIDER_EVENT, NULL,
 				      &sink) == DEFW2_OK &&
@@ -707,6 +753,27 @@ static void hostile(void)
 		attack(evil, defw2_address(server_rt), &echo_target);
 		attack(evil, defw2_address(server_rt), &qpm_target);
 		attack(evil, defw2_address(server_rt), &sink_target);
+		attack(evil, defw2_address(server_rt), &doc_target);
+
+		/* The registration attack() made, rather than a second. */
+		evil_target = &doc_target;
+		id = 0;
+		margo_provider_registered_name(evil, doc_target.rpc, 0, &id,
+					       &found);
+		margo_addr_lookup(evil, defw2_address(server_rt), &addr);
+		evil_method = "_private";
+		check("a document's method with an underscore first is refused",
+		      evil_call(evil, addr, id, EVIL_METHOD, message,
+				sizeof(message)) ==
+		      DEFW2_CAT_INVALID_ARGUMENT &&
+		      strstr(message, "identifier") != NULL);
+		evil_method = NULL;
+		check("so is a document with no method",
+		      evil_call(evil, addr, id, EVIL_METHOD, message,
+				sizeof(message)) ==
+		      DEFW2_CAT_INVALID_ARGUMENT);
+		if (addr != HG_ADDR_NULL)
+			margo_addr_free(evil, addr);
 	}
 	check("no service ran for any of them",
 	      __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 0);
@@ -724,7 +791,9 @@ static void hostile(void)
 				      DEFW2_PROVIDER_ECHO, &echo) == DEFW2_OK &&
 		 defw2_binding_create(client_rt, defw2_address(server_rt),
 				      DEFW2_PROVIDER_QPM_CONTROL, &control) ==
-		 DEFW2_OK;
+		 DEFW2_OK &&
+		 defw2_binding_create(client_rt, defw2_address(server_rt),
+				      11, &doc) == DEFW2_OK;
 	honest = honest &&
 		 defw2_echo(echo, "hi", 2, &opts, &reply, &status) ==
 		 DEFW2_OK && status.code == DEFW2_OK;
@@ -732,8 +801,15 @@ static void hostile(void)
 		 defw2_qpm_is_ready(control, &req, &opts, &status_out,
 				    &status) == DEFW2_OK &&
 		 status.code == DEFW2_OK && status_out.ready;
-	check("after all that an honest caller is served by both",
-	      honest && __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 2);
+	defw2_status_free(&status);
+	honest = honest &&
+		 defw2_doc_call(doc, "qfw.test.doc", "fine", "{}", &opts,
+				&answer, &status) == DEFW2_OK &&
+		 status.code == DEFW2_OK && answer != NULL &&
+		 strcmp(answer, "{}") == 0;
+	check("after all that an honest caller is served by all three",
+	      honest && __atomic_load_n(&served_calls, __ATOMIC_RELAXED) == 3);
+	free(answer);
 	defw2_buffer_free(&reply);
 	defw2_qpm_service_status_free(&status_out);
 	defw2_status_free(&status);
@@ -755,6 +831,7 @@ static void hostile(void)
 
 	defw2_binding_free(echo);
 	defw2_binding_free(control);
+	defw2_binding_free(doc);
 	if (client_rt != NULL)
 		defw2_finalize(client_rt);
 	if (evil != MARGO_INSTANCE_NULL)
@@ -762,6 +839,7 @@ static void hostile(void)
 	defw2_service_shutdown(echo_svc);
 	defw2_service_destroy(echo_svc);
 	defw2_service_destroy(qpm_svc);
+	defw2_service_destroy(doc_svc);
 	defw2_finalize(server_rt);
 }
 
