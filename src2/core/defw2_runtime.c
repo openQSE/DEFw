@@ -315,26 +315,31 @@ void defw2_finalize(defw2_rt_t *rt)
 
 	defw2_log(rt, DEFW2_LOG_MESSAGE, "defw2 down, runtime %s",
 		  rt->runtime_id);
-	/* Written before the network goes away, so a run that then hangs in
-	 * margo_finalize still leaves its measurements behind. The recorder
-	 * itself stays until Margo has stopped, because a ULT can still be
-	 * ending a span until then. */
-	defw2_telemetry_close(rt);
+	/*
+	 * The spans so far are written before the network goes away, so a run
+	 * that then hangs in margo_finalize still leaves them behind. A
+	 * handler can still end a span until Margo has stopped, such as an
+	 * event sink's, which its caller may already have, so the recorder
+	 * closes only then and writes those too.
+	 */
+	defw2_telemetry_flush(rt);
 	defw2_runtime_stop(rt);
 	/*
 	 * Nothing is freed until Margo is done, which is when its last handler
 	 * has finished, because a handler still running can reach this
 	 * runtime. An event sink's handler read it after the free before this
 	 * waited. A handler that never finishes leaves the runtime allocated
-	 * rather than freed under it.
+	 * rather than freed under it, and ends its span unrecorded.
 	 */
 	if (!margo_done(rt)) {
+		defw2_telemetry_close(rt);
 		defw2_log(rt, DEFW2_LOG_ERROR,
 			  "Margo still had a handler running after %d ms, so "
 			  "the runtime is left allocated",
 			  DEFW2_FINALIZE_WAIT_MS);
 		return;
 	}
+	defw2_telemetry_close(rt);
 	margo_instance_release(rt->mid);
 	rt->mid = MARGO_INSTANCE_NULL;
 	defw2_telemetry_free(rt);
