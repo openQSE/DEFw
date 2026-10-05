@@ -210,7 +210,7 @@ def directory(runtime, dirsvc_binary):
 	      record.get('service_id') == 'qpm:fake:fake-20q-py' and
 	      record.get('state') == 'UP' and
 	      record.get('address') == fake.address and
-	      len(record.get('bindings', [])) == 3 and
+	      len(record.get('bindings', [])) == 6 and
 	      record.get('properties') == {'provider': 'fake-py',
 					   'num_qubits': '20'})
 
@@ -230,7 +230,11 @@ def directory(runtime, dirsvc_binary):
 		       for name, b in bindings.items()} == {
 			      'control': ('qfw.qpm.control', 2, 1),
 			      'admission': ('qfw.qpm.admission', 3, 1),
-			      'execution': ('qfw.qpm.execution', 4, 1)})
+			      'execution': ('qfw.qpm.execution', 4, 1),
+			      'admission-policy':
+				      ('qfw.qpm.admission-policy', 6, 1),
+			      'scheduler': ('qfw.qpm.scheduler', 7, 1),
+			      'telemetry': ('qfw.qpm.telemetry', 8, 1)})
 		check('and its selector and properties',
 		      record.get('selector', {}).get('name') == 'fake-20q-py'
 		      and record.get('properties') == {

@@ -3,8 +3,10 @@
 v1's BaseRemote sent any method call to the remote object by name. On v2 a
 remote QPM has typed methods, so compat's BaseRemote sends those over the
 typed QPM APIs, taking the arguments by the names the API class declares,
-and builds the v1 answer back from the typed one. Everything else fails,
-naming the method, until v2 types it.
+and builds the v1 answer back from the typed one. Every other method goes
+as a document to the API of the binding the object was connected through,
+with the arguments the caller passed, by name, and its answer is the v1
+answer, as JSON carried it.
 
 Fifteen QPM methods go over the typed APIs. The fifteenth,
 register_event_notification, registers this process's sink with the QPM,
@@ -33,7 +35,7 @@ import sys
 import threading
 
 from .._event import EventTarget
-from .._qpm import QPM, QPM_COMPLETION
+from .._qpm import QPM, QPM_BINDING_NAMES, QPM_COMPLETION
 from .._runtime import DefwError
 from . import _mapping as m
 from . import _state
@@ -62,6 +64,9 @@ TYPED = {
 	'cancel_task': 'task',
 	'delete_circuit': 'task',
 }
+
+# The v2 API each of QFw's QPM bindings is, for a record that does not say.
+_API_OF_BINDING = {name: api for api, name in QPM_BINDING_NAMES.items()}
 
 # Outcomes QFw's QPM answers a peek with when a completion will never be
 # there, so the sweep stops waiting for it.
@@ -99,10 +104,10 @@ def v1_exception(error):
 	return getattr(defw_exception, name)(message)
 
 
-def unsupported(owner, name):
+def unsupported(owner, name, why='belongs to no API this QPM serves'):
 	import defw_exception
-	text = ('defw2.compat: {}.{} is not a typed v2 method, so it cannot be '
-		'called on v2 yet'.format(owner, name))
+	text = 'defw2.compat: {}.{} {}, so it cannot be called on v2'.format(
+		owner, name, why)
 	log.warning(text)
 	return defw_exception.DEFwError(text)
 
@@ -116,14 +121,26 @@ def _mapping_error(error):
 
 
 class Target:
-	"""One remote QPM, shared by every API object bound to it."""
+	"""One remote QPM, shared by every API object bound to it.
 
-	def __init__(self, qpm, service_id, runtime_id):
+	apis maps each binding name to the v2 API it is, and classes maps a
+	v1 API class's name to its binding, for an object that was made
+	without saying which binding it is for.
+	"""
+
+	def __init__(self, qpm, service_id, runtime_id, apis=None,
+		     classes=None):
 		self.qpm = qpm
 		self.service_id = service_id
 		self.runtime_id = runtime_id
+		self.apis = dict(apis or _API_OF_BINDING)
+		self.classes = dict(classes or {})
 		self._lock = threading.Lock()
 		self._statevectors = {}
+
+	def api(self, binding_name, owner):
+		"""The v2 API a call on an object of class owner goes to."""
+		return self.apis.get(binding_name or self.classes.get(owner))
 
 	def submitted(self, cid, info, reservation_id, token):
 		"""Note a task this process submitted: the room its statevector
@@ -175,12 +192,17 @@ def _target(record):
 		# seconds unless set, and a QPM's sync_run can take that long.
 		import defw_common_def
 		timeout_ms = int(defw_common_def.get_rpc_timeout() * 1000)
+		apis = None
 		if v2 is not None and v2.get('address') == address:
 			qpm = QPM.from_record(rt, v2, timeout_ms=timeout_ms)
+			apis = {b['binding_name']: b['api_id']
+				for b in v2.get('bindings', [])}
 		else:
 			qpm = QPM(rt, address, timeout_ms=timeout_ms)
+		classes = {b.get('client_class'): b.get('binding_name')
+			   for b in record.get('api_bindings', [])}
 		target = Target(qpm, record.get('service_id'),
-				record.get('runtime_id'))
+				record.get('runtime_id'), apis, classes)
 		_targets[key] = target
 		_state.on_close(target.close)
 		return target
@@ -195,7 +217,8 @@ def connect_to_binding(resolved_binding):
 	cls = getattr(module, binding['client_class'])
 	return cls(target=_target(record),
 		   remote_module=binding.get('service_module'),
-		   remote_class=binding.get('service_class'))
+		   remote_class=binding.get('service_class'),
+		   binding_name=binding.get('binding_name'))
 
 
 # --- calling -------------------------------------------------------------
@@ -204,20 +227,44 @@ def connect_to_binding(resolved_binding):
 _signatures = {}
 
 
-def _arguments(fn, args, kwargs):
-	"""The call's arguments by name, defaults filled in, as the API
-	class's method declares them."""
+def _signature(fn):
 	func = getattr(fn, '__func__', fn)
 	signature = _signatures.get(func)
 	if signature is None:
 		signature = inspect.signature(fn)
 		_signatures[func] = signature
-	bound = signature.bind(*args, **kwargs)
+	return signature
+
+
+def _arguments(fn, args, kwargs):
+	"""The call's arguments by name, defaults filled in, as the API
+	class's method declares them."""
+	bound = _signature(fn).bind(*args, **kwargs)
 	bound.apply_defaults()
 	return dict(bound.arguments)
 
 
-def invoke(target, owner, fn, args, kwargs):
+def _named(fn, args, kwargs):
+	"""The arguments a caller passed, by the names the API class's method
+	gives them, and no defaults, so the service applies its own, as it
+	did on v1."""
+	signature = _signature(fn)
+	named = {}
+	for name, value in signature.bind(*args, **kwargs).arguments.items():
+		kind = signature.parameters[name].kind
+		if kind is inspect.Parameter.VAR_KEYWORD:
+			named.update(value)
+		elif kind is inspect.Parameter.VAR_POSITIONAL:
+			if value:
+				raise m.MappingError(
+					'a document names its arguments, so it '
+					'cannot carry *{}'.format(name))
+		else:
+			named[name] = value
+	return named
+
+
+def invoke(target, owner, fn, args, kwargs, binding_name=None):
 	"""A method call on a remote object, on v2."""
 	name = fn.__name__
 	if name in TYPED:
@@ -235,7 +282,21 @@ def invoke(target, owner, fn, args, kwargs):
 			raise _mapping_error(error) from None
 		except DefwError as error:
 			raise v1_exception(error) from error
-	raise unsupported(owner, name)
+	api = target.api(binding_name, owner)
+	if api is None:
+		raise unsupported(owner, name)
+	try:
+		request = _named(fn, args, kwargs)
+	except m.MappingError as error:
+		raise _mapping_error(error) from None
+	try:
+		return target.qpm.document(api, name, request,
+					   traceparent=traceparent())
+	except (TypeError, ValueError) as error:
+		text = 'a document carries JSON, and {}'.format(error)
+		raise _mapping_error(m.MappingError(text)) from None
+	except DefwError as error:
+		raise v1_exception(error) from error
 
 
 def _ctx(a):
@@ -396,7 +457,8 @@ def event_call(endpoint, class_id, name, args, kwargs):
 	"""A call on a v1 event API object whose target is a client's sink.
 	put is the only method v1 called on one."""
 	if name != 'put':
-		raise unsupported('BaseEventAPI', name)
+		raise unsupported('BaseEventAPI', name,
+				  'is not put, the one method a sink takes')
 	event = args[0] if args else kwargs.get('event')
 	return publish_event(endpoint, class_id, event)
 

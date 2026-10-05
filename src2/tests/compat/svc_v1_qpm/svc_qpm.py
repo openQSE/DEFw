@@ -412,5 +412,42 @@ class QPM:
 				self.events = [r for r in self.events
 					       if r not in stale]
 
+	# --- methods v2 has no typed form for, which go as documents
+
 	def get_device_profile(self, token=None, device_id=None):
 		return {'device_id': 'fake-v1-4q', 'max_qubits': 4}
+
+	def test(self, token=None):
+		return {'test': 'passed', 'token_seen': token}
+
+	def set_admission_policy(self, token=None, device_id=None,
+				 policy=None):
+		if not isinstance(policy, dict) or 'max_qubits' not in policy:
+			raise ValueError('a policy names max_qubits')
+		qubits = policy['max_qubits']
+		if qubits > 4:
+			raise DEFwReserveError(
+				'no device here has {} qubits'.format(qubits))
+		return {'device_id': device_id, 'policy': policy,
+			'applied': True}
+
+	# Its default is not the API class's, which only the service's own
+	# default being used, as on v1, gives back.
+	def get_scheduler_status(self, token=None, device_id='fake-v1-4q'):
+		return {'device_id': device_id, 'paused': False,
+			'queued': len(self.tasks),
+			'dispatch': {'limit': None, 'ratio': 0.5}}
+
+	def get_backend_info(self, lib=None, token=None):
+		return {'lib': lib, 'calibrated': None,
+			'qubits': [{'id': i, 't1': 1e-4 * (i + 1), 'ok': i != 2}
+				   for i in range(4)],
+			'coupling': [[0, 1], [1, 2], [2, 3]]}
+
+	def get_device_info(self, lib=None, token=None):
+		# Bytes, which v1 carried and JSON cannot.
+		return {'raw': b'\x00\x01'}
+
+	def capability_map(self, token=None):
+		# A tuple, which JSON carries as a list.
+		return {'gates': ('cx', 'h', 'rz')}

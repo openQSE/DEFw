@@ -43,6 +43,7 @@ from ._qpm import (
 	API_QPM_EXECUTION,
 	DEFAULT_PROVIDERS,
 	QPM_APIS,
+	QPM_BINDING_NAMES,
 	QPM_VERSION,
 	read_request,
 	typed_api,
@@ -61,12 +62,7 @@ _BIND = {
 	API_QPM_EXECUTION: lib.defw2_qpm_execution_bind,
 }
 _DEFAULT_PROVIDER = dict(DEFAULT_PROVIDERS, **{API_ECHO: PROVIDER_ECHO})
-_BINDING_NAME = {
-	API_ECHO: 'echo',
-	API_QPM_CONTROL: 'control',
-	API_QPM_ADMISSION: 'admission',
-	API_QPM_EXECUTION: 'execution',
-}
+_BINDING_NAME = dict(QPM_BINDING_NAMES, **{API_ECHO: 'echo'})
 # The major version a binding declares in the directory.
 _VERSION_MAJOR = dict({api: QPM_VERSION >> 16 for api in QPM_APIS},
 		      **{API_ECHO: 0})
