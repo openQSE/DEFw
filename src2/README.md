@@ -425,15 +425,17 @@ table names, so `enable_profiling` on its own produces nothing. What
 produces Margo's own statistics is its monitor, which `defw2_init` installs
 and points at the same directory.
 
-**The monitor is opt-in, and it is not safe to leave on.** The default
-monitor in Margo 0.24.2 reads freed memory in
-`__margo_default_monitor_on_respond_cb` and takes a service down under
-concurrent load. Eight clients against one service reproduce it in seconds,
-and the address sanitizer names it. Filed upstream as
-[mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322), with a reproducer that needs nothing but
-Margo. `DEFW2_MARGO_MONITOR=1` turns it on for a single-client run where its
-call paths are worth having. Our own spans cover the same ground and are on
-by default, so nothing else is lost.
+**The monitor is opt-in, and it needs Margo 0.24.3 or later.** Before
+0.24.3 the default monitor read freed memory in
+`__margo_default_monitor_on_respond_cb` and took a service down under
+concurrent load. Eight clients against one service reproduced it in
+seconds, and the address sanitizer named it. We filed it as
+[mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322)
+and 0.24.3 fixes it. With 0.24.3 the same eight clients made 10,000 calls
+each to a monitored service, in six runs of six, and the service stayed up.
+`DEFW2_MARGO_MONITOR=1` turns it on where its call paths are worth having.
+Our own spans cover the same ground and are on by default, so nothing else
+is lost.
 
 ## Serving from another language
 
@@ -470,7 +472,7 @@ section. The names v2 adds:
 | `DEFW2_PROGRESS_SPINDOWN_MS` | 0 for a server, Margo's own 10 for a client | How long Margo's progress loop spins after it has handled something before it waits again. See below |
 | `DEFW2_BULK_POOL_MIB` | 1024 | The most memory, in MiB, a runtime keeps in registered bulk buffers to lend again. 0 keeps none. See below |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
-| `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
+| `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. Needs Margo 0.24.3 or later, see above |
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
 | `DEFW2_COMPAT_SWEEP_MS` | 5000 | How often `defw2.compat` looks for a completion whose event was lost |
 | `DEFW2_COMPAT_DIRSVC_CHECK_MS` | 2000 | How often `defw2.compat` asks the directory which runtime it is, while v1 code listens for its peer events |
