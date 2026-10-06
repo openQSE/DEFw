@@ -75,6 +75,14 @@ typedef struct {
 	 */
 	bool			has_progress_spindown;
 	int			progress_spindown_ms;
+	/*
+	 * DEFW2_BULK_POOL_MIB: the most memory, in MiB, the runtime keeps in
+	 * registered bulk buffers to lend again, when has_bulk_pool_mib says
+	 * so. Otherwise 1024. With 0 it keeps none, and every bulk buffer is
+	 * made for its one call.
+	 */
+	bool			has_bulk_pool_mib;
+	int			bulk_pool_mib;
 	bool			profile;	/* DEFW2_PROFILE */
 } defw2_config_t;
 

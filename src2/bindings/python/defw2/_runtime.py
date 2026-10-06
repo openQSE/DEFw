@@ -163,11 +163,16 @@ class Runtime:
 	"""
 
 	def __init__(self, role='client', address=None, node_name=None,
-		     profile=None, rpc_threads=None, progress_spindown_ms=None):
+		     profile=None, rpc_threads=None, progress_spindown_ms=None,
+		     bulk_pool_mib=None):
 		"""progress_spindown_ms is how long Margo's progress loop spins
 		after it has handled something. By default a server does not
 		spin and a client keeps Margo's own default, and
-		DEFW2_PROGRESS_SPINDOWN_MS changes that for both."""
+		DEFW2_PROGRESS_SPINDOWN_MS changes that for both.
+
+		bulk_pool_mib is the most memory, in MiB, the runtime keeps in
+		registered bulk buffers to lend again, 1024 by default and
+		DEFW2_BULK_POOL_MIB otherwise. 0 keeps none."""
 		config = ffi.new('defw2_config_t *')
 		_check(lib.defw2_config_from_env(config), 'reading the environment')
 
@@ -191,6 +196,13 @@ class Runtime:
 						 'not {}'.format(spindown))
 			config.has_progress_spindown = True
 			config.progress_spindown_ms = spindown
+		if bulk_pool_mib is not None:
+			pool = int(bulk_pool_mib)
+			if pool < 0:
+				raise ValueError('a pool is 0 MiB or more, '
+						 'not {}'.format(pool))
+			config.has_bulk_pool_mib = True
+			config.bulk_pool_mib = pool
 
 		out = ffi.new('defw2_rt_t **')
 		_check(lib.defw2_init(config, out), 'starting the runtime')

@@ -33,6 +33,7 @@ struct defw2_rpc_entry {
 };
 
 struct defw2_telemetry;
+struct defw2_bulk_pool;
 
 struct defw2_rt {
 	margo_instance_id	mid;
@@ -63,6 +64,7 @@ struct defw2_rt {
 	int			rpc_cached;
 	pthread_mutex_t		rpc_lock;
 	struct defw2_telemetry	*telemetry;	/* NULL when nothing records */
+	struct defw2_bulk_pool	*bulk_pool;	/* see defw2_bulk_pool.h */
 };
 
 /*

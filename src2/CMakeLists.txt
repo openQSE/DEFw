@@ -19,6 +19,7 @@ add_library(defw2 SHARED
 	rpc/defw2_wire.c
 	rpc/defw2_binding.c
 	rpc/defw2_bulk.c
+	rpc/defw2_bulk_pool.c
 	rpc/defw2_typed.c
 	rpc/defw2_doc.c
 	rpc/defw2_echo_client.c
@@ -193,6 +194,16 @@ if(BUILD_TESTING)
 	target_link_libraries(defw2_runtime_smoke PRIVATE defw2)
 	add_test(NAME defw2_runtime_smoke COMMAND defw2_runtime_smoke)
 
+	# It reaches the pool through the runtime's internals.
+	add_executable(defw2_bulk_pool_smoke tests/defw2_bulk_pool_smoke.c)
+	target_include_directories(defw2_bulk_pool_smoke
+		PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/core
+			${CMAKE_CURRENT_SOURCE_DIR}/rpc)
+	target_link_libraries(defw2_bulk_pool_smoke
+		PRIVATE defw2 Threads::Threads)
+	add_test(NAME defw2_bulk_pool_smoke COMMAND defw2_bulk_pool_smoke)
+
 	add_executable(defw2_echo_smoke tests/defw2_echo_smoke.c)
 	target_link_libraries(defw2_echo_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_echo_smoke COMMAND defw2_echo_smoke)
@@ -305,6 +316,7 @@ if(BUILD_TESTING)
 	# Shared memory needs no network and no port, so the tests say
 	# nothing about the machine they run on.
 	set_tests_properties(defw2_runtime_smoke defw2_echo_smoke
+			     defw2_bulk_pool_smoke
 			     defw2_queue_smoke defw2_telemetry_smoke
 		PROPERTIES
 			ENVIRONMENT "DEFW2_ADDRESS=na+sm://")

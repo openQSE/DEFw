@@ -922,6 +922,21 @@ can hand back a NumPy array without copying, and so a C caller can validate
 `nbytes` against `shape` before trusting either. The registration cache and
 the provider-specific registration rules are Mercury's.
 
+**Server buffers.** A handler that pulls a payload needs a buffer of its own
+for it, and allocating one for each call costs more than the transfer at
+large sizes. glibc maps a block over 32 MiB afresh every time, so each call
+faults in and zeroes new pages and unmaps them after, and on Slingshot
+registering memory pins it. So each runtime keeps a pool of registered
+buffers and lends them to its handlers, through `defw2_bulk_get` and
+`defw2_bulk_put` in `src2/rpc/defw2_bulk_pool.h`. A buffer is the size asked
+for rounded up to a power of two, from 64 KiB. The pool holds at most
+`DEFW2_BULK_POOL_MIB`, lent or idle, 1024 MiB by default. It frees idle
+buffers to fit a new one, and makes a buffer it cannot fit for its one call
+alone. The echo service draws on it, and W3 moves 256 MiB 27% faster on
+`ofi+tcp` and 30% faster on shared memory than with a buffer allocated per
+call, about Mercury's own rate. The pool is internal for now, since only C
+handlers inside libdefw2 pull payloads into buffers of their own.
+
 ## Events and Completion Notification
 
 QFw's execution API prefers notification and keeps completion-queue reads as
@@ -1382,6 +1397,7 @@ and adds a small `DEFW2_` set.
 | `DEFW2_MARGO_MONITOR` | | `1` also installs Margo's monitor while profiling is on. Off by default, see Profiling and the v1 Comparison. |
 | `DEFW2_RPC_THREADS` | | Handler execution streams. A server gets two when it is unset. |
 | `DEFW2_PROGRESS_SPINDOWN_MS` | | How long Margo's progress loop spins after it has handled something. A server spins for 0 ms when it is unset, and a client keeps Margo's default. |
+| `DEFW2_BULK_POOL_MIB` | | The most memory, in MiB, a runtime keeps in registered bulk buffers to lend again, lent or idle. 1024 when unset, and 0 keeps none. |
 | `DEFW2_HEARTBEAT_MS`, `DEFW2_HEARTBEAT_TIMEOUT_MS` | | Liveness intervals. |
 
 The launcher gains the `DEFW2_` names in its allow list and a per-role switch
