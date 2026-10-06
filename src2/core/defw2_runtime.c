@@ -18,6 +18,7 @@
 #include <uuid/uuid.h>
 
 #include "defw2_internal.h"
+#include "defw2_bulk_pool.h"
 #include "defw2_trace.h"
 
 #define DEFW2_JSON_MAX	4096
@@ -106,6 +107,15 @@ static int handler_threads(const struct defw2_rt *rt,
  * answers to its own calls, and spinning there shortens a call made right
  * after another.
  */
+/* The bytes the bulk pool may hold. See defw2_bulk_pool.h. */
+static uint64_t bulk_pool_budget(const defw2_config_t *cfg)
+{
+	int mib = cfg->has_bulk_pool_mib ? cfg->bulk_pool_mib
+					 : DEFW2_BULK_POOL_DEFAULT_MIB;
+
+	return (uint64_t)(mib > 0 ? mib : 0) << 20;
+}
+
 static int progress_spindown(const defw2_config_t *cfg)
 {
 	if (cfg->has_progress_spindown)
@@ -215,6 +225,11 @@ defw2_rc_t defw2_init(const defw2_config_t *cfg, defw2_rt_t **out)
 	rt = calloc(1, sizeof(*rt));
 	if (rt == NULL)
 		return DEFW2_ERR_NOMEM;
+	rt->bulk_pool = defw2_bulk_pool_create(bulk_pool_budget(cfg));
+	if (rt->bulk_pool == NULL) {
+		free(rt);
+		return DEFW2_ERR_NOMEM;
+	}
 	pthread_mutex_init(&rt->log_lock, NULL);
 	pthread_mutex_init(&rt->rpc_lock, NULL);
 	rt->role = cfg->role;
@@ -286,6 +301,7 @@ fail:
 	defw2_log_close(rt);
 	pthread_mutex_destroy(&rt->rpc_lock);
 	pthread_mutex_destroy(&rt->log_lock);
+	defw2_bulk_pool_destroy(rt->bulk_pool);
 	free(rt);
 	return rc;
 }
@@ -361,6 +377,9 @@ void defw2_finalize(defw2_rt_t *rt)
 		return;
 	}
 	defw2_telemetry_close(rt);
+	/* No handler is left to return a buffer, and Margo can still free
+	 * the handles until the instance is released. */
+	defw2_bulk_pool_drain(rt);
 	margo_instance_release(rt->mid);
 	rt->mid = MARGO_INSTANCE_NULL;
 	defw2_telemetry_free(rt);
@@ -371,6 +390,7 @@ void defw2_finalize(defw2_rt_t *rt)
 	defw2_log_close(rt);
 	pthread_mutex_destroy(&rt->rpc_lock);
 	pthread_mutex_destroy(&rt->log_lock);
+	defw2_bulk_pool_destroy(rt->bulk_pool);
 	free(rt);
 }
 

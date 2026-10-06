@@ -169,5 +169,17 @@ defw2_rc_t defw2_config_from_env(defw2_config_t *cfg)
 	cfg->has_progress_spindown = cfg->progress_spindown_ms >= 0;
 	if (!cfg->has_progress_spindown)
 		cfg->progress_spindown_ms = 0;
+
+	/* Unset leaves the runtime's default, DEFW2_BULK_POOL_DEFAULT_MIB. */
+	rc = env_int("DEFW2_BULK_POOL_MIB", -1, &cfg->bulk_pool_mib);
+	if (rc != DEFW2_OK) {
+		defw2_log(NULL, DEFW2_LOG_ERROR,
+			  "DEFW2_BULK_POOL_MIB is not a count of MiB: %s",
+			  getenv("DEFW2_BULK_POOL_MIB"));
+		return rc;
+	}
+	cfg->has_bulk_pool_mib = cfg->bulk_pool_mib >= 0;
+	if (!cfg->has_bulk_pool_mib)
+		cfg->bulk_pool_mib = 0;
 	return DEFW2_OK;
 }

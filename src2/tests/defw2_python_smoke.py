@@ -264,6 +264,24 @@ def check_spindown():
 	check('and refuses one that is not a spindown', refused)
 
 
+def check_bulk_pool():
+	"""A runtime takes the bulk pool budget it is given, and only one
+	there is. The C pool test checks what the pool then does."""
+	try:
+		with defw2.Runtime(role='server', node_name='py-pool',
+				   bulk_pool_mib=64) as pooled:
+			started = pooled.handle is not None
+	except defw2.DefwError:
+		started = False
+	check('a runtime starts with the bulk pool it is given', started)
+	try:
+		defw2.Runtime(role='server', bulk_pool_mib=-1)
+		refused = False
+	except ValueError:
+		refused = True
+	check('and refuses one that is not a budget', refused)
+
+
 def main():
 	print('defw2', defw2.version())
 
@@ -320,6 +338,7 @@ def main():
 	check_close_does_not_free_under_a_worker()
 	check_host_names_resolve()
 	check_spindown()
+	check_bulk_pool()
 
 	print('PYTHON SMOKE ' + ('FAILED' if failures else 'PASSED'))
 	return 1 if failures else 0

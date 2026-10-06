@@ -64,6 +64,8 @@ typedef struct {
 	int rpc_thread_count;
 	bool has_progress_spindown;
 	int progress_spindown_ms;
+	bool has_bulk_pool_mib;
+	int bulk_pool_mib;
 	bool profile;
 	...;
 } defw2_config_t;
