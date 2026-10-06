@@ -91,7 +91,10 @@ python3 src2/bench/v2/defw2_bench.py W1 --transport ofi+tcp --clients 8
 | `--out` | `/tmp/defw-bench` | Parent of the run directories |
 
 W3, and any payload too large to ride inside a message, goes through the
-bulk path with `defw2_echo_bulk`. Everything else uses `defw2_echo`.
+bulk path with `defw2_echo_bulk`. Everything else uses `defw2_echo`. The
+echo service pulls a W3 payload into a buffer from its runtime's bulk pool
+and pushes it back from there. `DEFW2_BULK_POOL_MIB=0` makes it allocate a
+buffer for each call instead, as it did in the Phase 3 campaign.
 
 `--client` and `--service` pick which halves are Python, and the run's name
 says which pair it was: no suffix for C to C, then `pycli`, `pysvc` or

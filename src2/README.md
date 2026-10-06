@@ -101,7 +101,7 @@ comparison reads is `defw2-bench`, under `bench/`.
 | --- | --- |
 | `include/defw2/` | The public headers, written for bindings: opaque handles, fixed-width fields, explicit ownership, no Mercury |
 | `core/` | Runtime, configuration, identity and logging |
-| `rpc/` | The wire structures, the checked string and bulk procs, the header and status helpers, bindings, the typed client stubs, and the one client path and one provider path every typed method takes |
+| `rpc/` | The wire structures, the checked string and bulk procs, the header and status helpers, bindings, the bulk buffer pool, the typed client stubs, and the one client path and one provider path every typed method takes |
 | `telemetry/` | Spans, histograms and the OTLP JSON writer |
 | `host/` | The service host: identity, provider registration and the run loop |
 | `services/echo/` | `qfw.echo`, the reference service, and the `defw2-echo` tool |
@@ -468,6 +468,7 @@ section. The names v2 adds:
 | `DEFW2_PROFILE` | off | Turns on Margo profiling and diagnostics |
 | `DEFW2_RPC_THREADS` | 2 for a server, 0 for a client | Handler execution streams |
 | `DEFW2_PROGRESS_SPINDOWN_MS` | 0 for a server, Margo's own 10 for a client | How long Margo's progress loop spins after it has handled something before it waits again. See below |
+| `DEFW2_BULK_POOL_MIB` | 1024 | The most memory, in MiB, a runtime keeps in registered bulk buffers to lend again. 0 keeps none. See below |
 | `DEFW2_TELEMETRY_DIR` | `DEFW_LOG_DIR` | Where the OTLP files go |
 | `DEFW2_MARGO_MONITOR` | off | Margo's own statistics. See the warning above |
 | `DEFW2_PYTHON` | the active virtual environment's, else `python3` | The interpreter `defw2-python` runs |
@@ -504,3 +505,14 @@ spinning, and a quarter of a millisecond without. So a server spins for
 `progress_spindown_ms` for a `defw2.Runtime`. A site's own Margo
 configuration, `DEFW2_MARGO_CONFIG`, is used as written, so it sets
 `progress_spindown_msec` itself.
+
+**A runtime keeps its bulk buffers.** A handler that pulls a payload, as the
+echo service does for W3, borrows a registered buffer from its runtime's
+pool and returns it before it answers, rather than allocating one for the
+call. A buffer is the size asked for rounded up to a power of two, from
+64 KiB, and the pool holds at most `DEFW2_BULK_POOL_MIB`, 1024 MiB unless
+set, lent or idle. It frees idle buffers to fit a new one, and a buffer it
+still cannot fit is made for its one call. Kept buffers stay allocated
+until the runtime finalizes, so a service that once moved 256 MiB keeps
+256 MiB. `bulk_pool_mib` sets the same for a `defw2.Runtime`, and 0 keeps
+no buffers at all.
