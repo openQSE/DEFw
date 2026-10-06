@@ -787,7 +787,6 @@ handle still uses it, and the reply is decoded through freed memory. A
 process that already serves the API on that provider keeps the registration
 it has, with the service's handler.
 
-
 Requests and responses follow the constraints in the C-centric requirements:
 fixed-width scalars, counted arrays, strings with explicit lengths on the
 wire, no raw pointers, optional values with explicit presence, and bulk
@@ -1204,7 +1203,10 @@ handler that turns each typed call back into the v1 call, and the
 dictionary the v1 method returns into the typed answer. The module
 registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
 side, `defw.connect_to_binding` returns QFw's own API classes, such as
-`QPMExecution`, built on compat's `BaseRemote`. A call to one of the
+`QPMExecution`, built on compat's `BaseRemote`. The module and the class
+come from a directory record, so it imports the module only from the
+directories `DEFW_EXTERNAL_SERVICE_APIS_PATH` names, where QFw's API modules
+are, and makes only a `BaseRemote` from it. A call to one of the
 fifteen typed QPM methods goes over the typed APIs, with its arguments
 taken by the names the API class declares. Any other method goes as a
 document to the API of the binding the object was connected through, with
@@ -1541,11 +1543,15 @@ them rather than left to the leak sanitizer, which cannot see it: the decoded
 structure lives on a handler stack that Argobots keeps pooled, so a stale
 pointer to the stranded string survives and counts as a reference.
 
-One path loads code a peer chooses. `defw2.compat` keeps v1's
-`connect_to_binding`, which imports the module a directory record names and
-instantiates the class the record names. It is not deserialization, but
-whoever can register in the directory chooses what a client imports.
-Accepting only the API modules QFw ships would close it.
+One path loaded code a peer chose. v1's `connect_to_binding` imports the
+module a directory record names and instantiates the class the record names,
+so whoever can register in the directory chooses what a client imports.
+compat's version imports a module only from the directories
+`DEFW_EXTERNAL_SERVICE_APIS_PATH` names, where v1 API modules come from and
+QFw installs its own, and instantiates only a `BaseRemote` class in it. A
+record that names a module anywhere else fails the connect with a
+`DEFwError` before the module is imported. One that names any other class
+fails before the class is called.
 
 Authentication is not in the prototype. The RPC header has room for a token
 and the status model has a category for authorization failure, so the QFw

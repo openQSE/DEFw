@@ -481,6 +481,9 @@ did. It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,
 `DEFW_AGENT_TYPE` (`service` and `dirsvc` are servers), `DEFW_LOG_DIR`,
 `DEFW_LOG_LEVEL` (`error`, `warning`, `message`, `debug`, `all`),
 `DEFW_LISTEN_PORT` for `ofi+tcp`, and `DEFW_DISABLE_DIRSVC`.
+`DEFW_EXTERNAL_SERVICE_APIS_PATH` names where v1 API modules are, as it did
+for v1, and `defw.connect_to_binding` imports a client module from nowhere
+else.
 
 Two settings are rules rather than tuning, and `defw2_init` enforces both
 whatever the configuration says.

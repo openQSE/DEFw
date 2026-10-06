@@ -326,6 +326,9 @@ def environment(dirsvc):
 	env['PYTHONPATH'] = os.pathsep.join(
 		[COMPAT] + [p for p in env.get('PYTHONPATH', '').split(os.pathsep)
 			    if p])
+	# compat imports a client module only from where v1 API modules come
+	# from, so the fake QPM's API classes go there, as QFw's do.
+	env['DEFW_EXTERNAL_SERVICE_APIS_PATH'] = COMPAT
 	env.setdefault('DEFW2_PYTHON', sys.executable)
 	env.setdefault('DEFW_PATH', os.path.normpath(
 		os.path.join(HERE, '..', '..')))
