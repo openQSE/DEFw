@@ -224,8 +224,11 @@ client on v2 polling, which hit openQSE/QFw#91 as below.
   answering every poll but completed no more jobs. On v2 all eight clients
   stopped at the same moment, 19 s into the run, after about 890 jobs
   each. From then on every job waited out the 60 s call timeout, until the
-  run's 30-minute limit. It came only with QFw#91's errors, and the four
-  reruns did not reproduce it. It is not explained.
+  run's 30-minute limit. Each time it began with a failure in the QPM. On
+  v2 one `read_cq` failed with `provider-failure` at the moment the clients
+  stopped, its message lost with the run, and the v1 run hit QFw#91's
+  errors. The four reruns did not reproduce it. It is not explained, and
+  the details are on QFw#91.
 - **v1 at start.** Two v1 runs lost a client before it was ready, one to a
   directory it could not find.
 
