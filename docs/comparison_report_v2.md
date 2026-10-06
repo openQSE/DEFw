@@ -13,18 +13,19 @@ campaign that ran every workload on both versions, from one build, on
 | Small RPC round trip, Python client through the binding | At most one half of v1 | 0.118 ms, one 40th | Met |
 | Small RPC round trip, Python service, C client | At most one half of v1 | 0.147 ms, one 32nd | Met |
 | Throughput at eight concurrent clients | At least four times v1 | 58 times on `ofi+tcp`, 76 times on shared memory, 50 times with the Python service | Met |
-| Bulk bandwidth, 16 MiB and above | At least 80% of Mercury's own bulk benchmark | 94% on `ofi+tcp` and 88% on shared memory at 16 MiB. 79.5% and 69% at 256 MiB | Not met at 256 MiB |
+| Bulk bandwidth, 16 MiB and above | At least 80% of Mercury's own bulk benchmark | 94% on `ofi+tcp` and 88% on shared memory at 16 MiB. 79.5% and 69% at 256 MiB | Not met at 256 MiB. Met with the buffer pool, re-measured on 6 October |
 | Framework overhead per job in W5 | At most one half of v1 | 0.66 to 0.77 ms against 11.36 ms, one 15th to one 17th | Met |
 | Unsafe deserialization on any path | None | None found, and one related finding | Met |
 | Application-level regressions in W7 | None | None. Every run passed, in 4.4 to 5.1 s against v1's 21.6 to 22.9 s | Met |
 | DEFw-owned lines of code for equivalent function | Fewer than v1's | 9,349 against 9,337, 12 more | Not met |
 | C caller experience | The SPANK reserve and release flow in under 100 lines of C | 93 lines | Met |
 
-Eight of the ten are met. The design's no-go rule does not apply: it is
-for a Python service that fails its criterion, and a Python service
-answers a C client in a 32nd of v1's time.
+Eight of the ten are met by the code the campaign measured, and bulk is
+met with the buffer pool added since. The design's no-go rule does not
+apply: it is for a Python service that fails its criterion, and a Python
+service answers a C client in a 32nd of v1's time.
 
-Two are not met.
+Two were not met in the campaign.
 
 - **Bulk at 256 MiB.** At 16 MiB v2 moves 94% of what Mercury's own
   benchmark moves on `ofi+tcp`, and 88% on shared memory, against the
@@ -34,7 +35,11 @@ Two are not met.
   transport. It allocates and frees the whole buffer on every call. Kept
   between calls, the same buffer moves 256 MiB at 97% of Mercury on
   `ofi+tcp` and 87% on shared memory. A pool of registered buffers in
-  libdefw2 would do that for any service.
+  libdefw2 would do that for any service, and `openQSE/DEFw` #45 added
+  one. Re-measured with it on 6 October, in one session with Mercury's
+  benchmark, v2 reaches 97% on `ofi+tcp` and 86% on shared memory at
+  256 MiB, and 92% and 90% at 16 MiB. See
+  [With the Pool](#with-the-pool-6-october-2026).
 - **Lines of code, by 12.** That is 0.13% of either version, and the
   verdict turns on which areas the equivalent-function subset leaves out.
   They are named in [Lines of Code](#lines-of-code). In all, v2 owns 15,930
@@ -156,6 +161,32 @@ alternating, twice each. The means, one way:
 With the buffer kept, 256 MiB reaches 97% of Mercury on `ofi+tcp` and 87%
 on shared memory, as 16 MiB does. The verdict above stands for the code
 the campaign measured.
+
+#### With the Pool, 6 October 2026
+
+`openQSE/DEFw` #45 gave each runtime a pool of registered buffers, which
+the echo service borrows from. W3 and Mercury's benchmark then ran in one
+session, on W3's layout with huge pages off, in three rounds. Each round
+ran Mercury's pull and push, then W3 with the pool and with it switched off
+by `DEFW2_BULK_POOL_MIB=0`. The image had Margo 0.24.3 by then, and DEFw
+was `defw2-prototype` at `2123137`. Each figure is the median of three, set
+against Mercury as above.
+
+| Size | Provider | Mercury pull then push | v2 with the pool, both ways | Against Mercury | Pool off |
+| --- | --- | --- | --- | --- | --- |
+| 16 MiB | `ofi+tcp` | 3,470 | 3,191 | 92% | 90% |
+| 16 MiB | `na+sm` | 4,417 | 3,959 | 90% | 80% |
+| 256 MiB | `ofi+tcp` | 3,462 | 3,365 | 97% | 75% |
+| 256 MiB | `na+sm` | 4,410 | 3,801 | 86% | 64% |
+
+- With the pool, v2 meets the criterion at both sizes on both providers.
+- Switched off, the pool gives back the campaign's figures at 256 MiB, 75%
+  and 64% against 79.5% and 69%. At 256 MiB the pool takes a call from 196
+  to 152 ms on `ofi+tcp`, and from 181 to 135 ms on shared memory. Each W3
+  run made 6 calls at 256 MiB and 100 at 16 MiB, after its warm-up.
+- At 16 MiB what the pool changes is within the run-to-run spread.
+- Against Mercury with one buffer in flight, as W3 moves its payload, v2
+  reaches 98% and 99.7% at 256 MiB, and 74% and 80% at 16 MiB.
 
 ### Jobs
 

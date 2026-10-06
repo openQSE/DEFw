@@ -1616,6 +1616,7 @@ met.
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
 
 Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
+Phase 1's was met on 30 September 2026. See Phase 1 Results.
 Phase 2's was met on 3 October 2026. See Phase 2 Results.
 Phase 3's was met on 5 October 2026. See Phase 3 Results.
 
@@ -1734,6 +1735,48 @@ lines of code and the SPANK flow.
   service and its progress threads, and v2 manages 7,811 calls/s with eight
   clients against 12,047 with one, so that row understates v2. `na+sm`
   leaves out the network stack and scales from 13,912 to 42,994 calls/s.
+
+## Phase 1 Results
+
+Phase 1's exit criterion is met. The directory merged into `defw2-prototype`
+on 30 September 2026 as `openQSE/DEFw` #27, and `openQSE/DEFw` #28 then let
+one process serve the directory and call it too. Everything in the phase's
+scope is built: `defw2-dirsvc`, registration, heartbeats, generations,
+resolve, the binding cache and the address-file bootstrap.
+
+**The lifecycle.** A killed service has to be `TIMED_OUT` within the timeout,
+and its restart has to get a new generation. The directory's tests show both,
+in the store with a 50 ms timeout, and in the served directory, whose own
+timer times a quiet record out. Across real processes it ran on 6 October
+2026: `defw2-dirsvc` with its default 15 s timeout, and a `defw2-echo` that
+registered itself and was then killed with `SIGKILL`, so it never
+deregistered. `defw2-dirsvc dump` showed the record at each step:
+
+```
+echo-node-1   qfw.echo   UP             1  na+sm://678-0
+echo-node-1   qfw.echo   TIMED_OUT      1  na+sm://678-0
+echo-node-1   qfw.echo   UP             2  na+sm://925-0
+echo-node-1   qfw.echo   DEREGISTERED   2  -
+```
+
+In two runs the record was `TIMED_OUT` 15.0 and 14.6 s after the kill. The
+timeout counts from the last heartbeat, and the directory scans every 250 ms.
+The restarted service came back as generation 2, and stopped cleanly it
+deregistered.
+
+**W4.** 1,000 resolves against three registered services, all three runs in
+one session on 30 September 2026. No resolve failed.
+
+| Run | p50 | p99 | Resolves a second | CPU a call | Peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| `na+sm`, one node | 77.7 µs | 159.5 µs | 11,843 | 40.4 µs | 8.4 MiB |
+| `ofi+tcp`, one node | 92.4 µs | 157.1 µs | 10,492 | 53.2 µs | 27.6 MiB |
+| `ofi+tcp`, `c1` to `slurmctld` | 108.7 µs | 204.0 µs | 8,862 | 63.8 µs | 27.6 MiB |
+
+The comparison campaign measured W4 against v1 as well. One client resolves
+in 0.109 ms on `ofi+tcp` against v1's 6.369 ms, and eight make 20,889
+resolves a second against v1's 316. See the
+[comparison report](comparison_report_v2.md).
 
 ## Phase 2 Results
 
@@ -1905,7 +1948,7 @@ criterion.
 | Small RPC round trip, Python client through the binding | Met, one 40th |
 | Small RPC round trip, Python service, C client | Met, one 32nd |
 | Throughput at eight concurrent clients | Met, 58 times v1 on `ofi+tcp` |
-| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88%. The shortfall is the echo service allocating its buffer on every call, and with one buffer kept between calls 256 MiB reaches 97% and 87% |
+| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88%. The shortfall is the echo service allocating its buffer on every call, and with one buffer kept between calls 256 MiB reaches 97% and 87%. Met with the buffer pool, re-measured on 6 October with Mercury in the same session: 92% and 90% at 16 MiB, 97% and 86% at 256 MiB |
 | Framework overhead per job in W5 | Met, one 15th to one 17th |
 | Unsafe deserialization on any path | Met, none found |
 | Application-level regressions in W7 | Met, none |
