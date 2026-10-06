@@ -30,11 +30,11 @@ Two are not met.
   benchmark moves on `ofi+tcp`, and 88% on shared memory, against the
   benchmark's defaults. Against Mercury with one buffer in flight, as W3
   moves its payload, it is 76% and 68%. At 256 MiB v2 slows and Mercury
-  does not. The echo service behind W3 allocates, registers and frees the
-  whole buffer on every call, where Mercury's benchmark registers its
-  buffers once. With transparent huge pages on, shared memory reaches 82%,
-  and `ofi+tcp` does not move. The rest of the gap was not separated, so
-  the report does not say whether it is DEFw's.
+  does not, and the cause is the echo service behind W3, not DEFw's
+  transport. It allocates and frees the whole buffer on every call. Kept
+  between calls, the same buffer moves 256 MiB at 97% of Mercury on
+  `ofi+tcp` and 87% on shared memory. A pool of registered buffers in
+  libdefw2 would do that for any service.
 - **Lines of code, by 12.** That is 0.13% of either version, and the
   verdict turns on which areas the equivalent-function subset leaves out.
   They are named in [Lines of Code](#lines-of-code). In all, v2 owns 15,930
@@ -136,10 +136,26 @@ push, and v2's rate is counted both ways.
   buffer, as W3 moves its payload, Mercury moved more at 16 MiB, 4,289
   MiB/s on `ofi+tcp` and 5,406 MiB/s on `na+sm` for a pull then a push.
   Against those, v2 reaches 76% and 68%.
-- v2 slows from 16 to 256 MiB and Mercury does not. The echo service
-  allocates, registers and frees its buffer on every call. With huge pages
-  on, W3 at 256 MiB rose from 1,399 to 1,714 MiB/s on `na+sm`, 82% of
-  Mercury, and fell from 1,387 to 1,263 MiB/s on `ofi+tcp`.
+- v2 slows from 16 to 256 MiB and Mercury does not, because the echo
+  service allocates, registers and frees its buffer on every call. glibc
+  hands back a freed block of up to 32 MiB from its heap with its pages
+  still mapped, but maps anything larger afresh. So at 256 MiB every call
+  faults in and zeroes new pages, and unmaps them after.
+
+A build of the echo service that keeps one registered buffer between
+calls, switched on and off in the same binary, ran W3 on W3's layout,
+alternating, twice each. The means, one way:
+
+| Size | Provider | A buffer each call | One buffer kept | Change |
+| --- | --- | --- | --- | --- |
+| 16 MiB | `ofi+tcp` | 1,531 MiB/s | 1,593 MiB/s | within run-to-run spread |
+| 16 MiB | `na+sm` | 1,730 MiB/s | 1,762 MiB/s | within run-to-run spread |
+| 256 MiB | `ofi+tcp` | 1,433 MiB/s, 178 ms a call | 1,688 MiB/s, 151 ms | +18% |
+| 256 MiB | `na+sm` | 1,528 MiB/s, 168 ms a call | 1,830 MiB/s, 139 ms | +20% |
+
+With the buffer kept, 256 MiB reaches 97% of Mercury on `ofi+tcp` and 87%
+on shared memory, as 16 MiB does. The verdict above stands for the code
+the campaign measured.
 
 ### Jobs
 

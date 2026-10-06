@@ -1872,7 +1872,7 @@ criterion.
 | Small RPC round trip, Python client through the binding | Met, one 40th |
 | Small RPC round trip, Python service, C client | Met, one 32nd |
 | Throughput at eight concurrent clients | Met, 58 times v1 on `ofi+tcp` |
-| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88% |
+| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88%. The shortfall is the echo service allocating its buffer on every call, and with one buffer kept between calls 256 MiB reaches 97% and 87% |
 | Framework overhead per job in W5 | Met, one 15th to one 17th |
 | Unsafe deserialization on any path | Met, none found |
 | Application-level regressions in W7 | Met, none |
