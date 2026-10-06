@@ -15,6 +15,7 @@
 
 #include <defw2/defw2_echo.h>
 
+#include "defw2_bulk_pool.h"
 #include "defw2_host.h"
 #include "defw2_trace.h"
 #include "defw2_wire.h"
@@ -196,6 +197,8 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 	struct defw2_rt *rt = bound ? bound->svc->rt : NULL;
 	uint64_t arrived_wall = 0, arrived_mono = 0, mark = 0;
 	struct defw2_trace trace = { 0 };
+	defw2_bulk_buf_t lent = { 0 };
+	defw2_rc_t got;
 	hg_bulk_t local = HG_BULK_NULL;
 	void *buffer = NULL;
 	defw2_echo_bulk_in_t in;
@@ -259,22 +262,23 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 		goto respond;
 	}
 
+	/*
+	 * A buffer from the runtime's pool, registered already, rather than
+	 * one allocated for this call. The pull overwrites the bytes the push
+	 * sends, so what the buffer held before never leaves it.
+	 */
 	size = in.nbytes;
-	buffer = malloc(size);
-	if (buffer == NULL) {
-		defw2_wire_status_set(&out.status, DEFW2_ERR_NOMEM,
-				      DEFW2_CAT_PROVIDER_FAILURE,
-				      "no memory for the bulk buffer");
+	got = defw2_bulk_get(rt, size, &lent);
+	if (got != DEFW2_OK) {
+		defw2_wire_status_set(&out.status, got,
+				      got == DEFW2_ERR_NOMEM ?
+					      DEFW2_CAT_PROVIDER_FAILURE :
+					      DEFW2_CAT_TRANSPORT,
+				      "no bulk buffer");
 		goto respond;
 	}
-	hret = margo_bulk_create(mid, 1, &buffer, &size, HG_BULK_READWRITE,
-				 &local);
-	if (hret != HG_SUCCESS) {
-		defw2_wire_status_set(&out.status, DEFW2_ERR_TRANSPORT,
-				      DEFW2_CAT_TRANSPORT,
-				      "cannot register the bulk buffer");
-		goto respond;
-	}
+	buffer = lent.data;
+	local = lent.bulk;
 
 	hret = margo_bulk_transfer(mid, HG_BULK_PULL, info->addr, in.source, 0,
 				   local, 0, size);
@@ -309,6 +313,9 @@ static void defw2_echo_bulk_ult(hg_handle_t handle)
 	out.pushed = size;
 
 respond:
+	/* The buffer goes back before the answer does, so the caller's next
+	 * call finds it in the pool. */
+	defw2_bulk_put(rt, &lent);
 	if (trace.recording) {
 		/* Pull, transform and push are the handler's work here. */
 		trace.span.handler_ns = defw2_mono_ns() - mark;
@@ -332,9 +339,6 @@ respond:
 		defw2_trace_end(rt, &trace);
 	}
 
-	if (local != HG_BULK_NULL)
-		margo_bulk_free(local);
-	free(buffer);
 	margo_free_input(handle, &in);
 	margo_destroy(handle);
 }

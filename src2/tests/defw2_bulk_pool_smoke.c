@@ -1,13 +1,17 @@
 /*
- * Does the bulk pool lend its buffers again and keep to its budget?
+ * Does the bulk pool lend its buffers again, keep to its budget, and serve
+ * the echo service?
  *
- * One process. Runtimes with small budgets show how the pool decides. It
- * uses na+sm, so it needs no network and no port.
+ * One process. Runtimes with small budgets show how the pool decides, and
+ * an echo service with its client shows that repeated bulk calls take one
+ * buffer. It uses na+sm, so it needs no network and no port.
  */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <defw2/defw2_echo.h>
 
 #include "defw2_internal.h"
 #include "defw2_bulk_pool.h"
@@ -16,6 +20,7 @@
 #define MIB		(1024 * KIB)
 #define THREADS		8
 #define ROUNDS		300
+#define ECHO_CALLS	5
 
 static int failures;
 
@@ -197,12 +202,61 @@ static void config(void)
 		      !cfg.has_bulk_pool_mib);
 }
 
+static void echo(void)
+{
+	defw2_rt_t *server = runtime(-1, DEFW2_ROLE_SERVER);
+	defw2_rt_t *client = runtime(0, DEFW2_ROLE_CLIENT);
+	defw2_call_opts_t opts = { .timeout_ms = 10000 };
+	defw2_status_t status = { 0 };
+	defw2_service_t *svc = NULL;
+	defw2_binding_t *binding = NULL;
+	defw2_bulk_pool_stats_t stats;
+	unsigned char *source = malloc(MIB), *sink = malloc(MIB);
+	bool same = true;
+	size_t i;
+	int call;
+
+	check("echo service",
+	      defw2_service_create(server, "echo-pool", DEFW2_API_ECHO,
+				   DEFW2_PROVIDER_ECHO, &svc) == DEFW2_OK &&
+		      defw2_echo_bind(svc, NULL) == DEFW2_OK);
+	check("bound to it",
+	      defw2_binding_create(client, defw2_service_address(svc),
+				   DEFW2_PROVIDER_ECHO, &binding) ==
+		      DEFW2_OK);
+	for (call = 0; call < ECHO_CALLS; call++) {
+		/* A new pattern each call, so a reply that kept the last
+		 * call's bytes would show. */
+		for (i = 0; i < MIB; i++)
+			source[i] = (unsigned char)(call * 31 + i * 7);
+		memset(sink, 0, MIB);
+		if (defw2_echo_bulk(binding, source, sink, MIB, &opts, NULL,
+				    &status) != DEFW2_OK ||
+		    memcmp(source, sink, MIB) != 0)
+			same = false;
+		defw2_status_free(&status);
+	}
+	check("every bulk echo comes back as sent", same);
+	stats = stats_of(server);
+	check("the service took one buffer for all of them",
+	      stats.made == 1 && stats.reused == ECHO_CALLS - 1);
+	check("and has it back", stats.idle == stats.held && stats.held == MIB);
+
+	defw2_binding_free(binding);
+	defw2_finalize(client);
+	defw2_service_destroy(svc);
+	defw2_finalize(server);
+	free(source);
+	free(sink);
+}
+
 int main(void)
 {
 	lending();
 	budget();
 	threads();
 	config();
+	echo();
 	printf("%s\n", failures ? "BULK POOL SMOKE FAILED"
 				: "BULK POOL SMOKE PASSED");
 	return failures ? 1 : 0;
