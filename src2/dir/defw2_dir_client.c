@@ -227,6 +227,7 @@ defw2_rc_t defw2_dir_register(defw2_dir_t *dir,
 	}
 
 	id = defw2_rpc_lookup(dir->rt, DEFW2_RPC_DIR_REGISTER,
+			      dir->binding->provider_id,
 			      hg_proc_defw2_dir_register_in_t,
 			      hg_proc_defw2_dir_register_out_t);
 	hret = margo_create(dir->rt->mid, dir->binding->addr, id, &handle);
@@ -294,6 +295,7 @@ static defw2_rc_t lease_call(defw2_dir_t *dir, const char *rpc_name,
 	in.generation = generation;
 
 	id = defw2_rpc_lookup(dir->rt, rpc_name,
+			      dir->binding->provider_id,
 			      hg_proc_defw2_dir_lease_in_t,
 			      hg_proc_defw2_dir_lease_out_t);
 	hret = margo_create(dir->rt->mid, dir->binding->addr, id, &handle);
@@ -520,6 +522,7 @@ static defw2_rc_t resolve_call(defw2_dir_t *dir, const char *rpc_name,
 	query_to_wire(query, &in.query, filters);
 
 	id = defw2_rpc_lookup(dir->rt, rpc_name,
+			      dir->binding->provider_id,
 			      hg_proc_defw2_dir_resolve_in_t,
 			      hg_proc_defw2_dir_resolve_out_t);
 	hret = margo_create(dir->rt->mid, dir->binding->addr, id, &handle);
@@ -630,6 +633,7 @@ defw2_rc_t defw2_dir_generation(defw2_dir_t *dir, const char *service_id,
 	in.service_id = (defw2_str_t)dir_str_out(service_id);
 
 	id = defw2_rpc_lookup(dir->rt, DEFW2_RPC_DIR_GENERATION,
+			      dir->binding->provider_id,
 			      hg_proc_defw2_dir_generation_in_t,
 			      hg_proc_defw2_dir_generation_out_t);
 	hret = margo_create(dir->rt->mid, dir->binding->addr, id, &handle);

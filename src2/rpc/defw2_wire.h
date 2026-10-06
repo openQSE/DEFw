@@ -403,12 +403,14 @@ void defw2_free_partial(margo_instance_id mid, hg_proc_cb_t proc_cb,
 defw2_rc_t defw2_rc_from_hg(hg_return_t hret, uint32_t *category);
 
 /*
- * The identifier this runtime calls an RPC by, registering it the first time
- * it is asked for. Mercury cannot look a registration up by name once Margo
- * has put the provider into the identifier, so the runtime remembers what it
- * registered. name must outlive the runtime, which a literal does.
+ * The identifier this runtime calls an RPC on provider_id by, registering
+ * it the first time it is asked for, or 0 if it cannot. The provider is in
+ * the identifier, so a handle made with it needs nothing more registered
+ * when margo_provider_forward_timed sends it to provider_id. The runtime
+ * remembers what it registered, by name and provider.
  */
 hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
-			 hg_proc_cb_t in_cb, hg_proc_cb_t out_cb);
+			 uint16_t provider_id, hg_proc_cb_t in_cb,
+			 hg_proc_cb_t out_cb);
 
 #endif /* DEFW2_WIRE_H */

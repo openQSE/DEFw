@@ -13,15 +13,17 @@
 #include "defw2_trace.h"
 #include "defw2_wire.h"
 
-static hg_id_t echo_id(struct defw2_rt *rt)
+static hg_id_t echo_id(const defw2_binding_t *binding)
 {
-	return defw2_rpc_lookup(rt, DEFW2_RPC_ECHO, hg_proc_defw2_echo_in_t,
+	return defw2_rpc_lookup(binding->rt, DEFW2_RPC_ECHO,
+				binding->provider_id, hg_proc_defw2_echo_in_t,
 				hg_proc_defw2_echo_out_t);
 }
 
-static hg_id_t echo_bulk_id(struct defw2_rt *rt)
+static hg_id_t echo_bulk_id(const defw2_binding_t *binding)
 {
-	return defw2_rpc_lookup(rt, DEFW2_RPC_ECHO_BULK,
+	return defw2_rpc_lookup(binding->rt, DEFW2_RPC_ECHO_BULK,
+				binding->provider_id,
 				hg_proc_defw2_echo_bulk_in_t,
 				hg_proc_defw2_echo_bulk_out_t);
 }
@@ -61,7 +63,7 @@ defw2_rc_t defw2_echo(defw2_binding_t *binding, const void *payload,
 	reply->data = NULL;
 	reply->len = 0;
 
-	hret = margo_create(rt->mid, binding->addr, echo_id(rt), &handle);
+	hret = margo_create(rt->mid, binding->addr, echo_id(binding), &handle);
 	if (hret != HG_SUCCESS)
 		return defw2_rc_from_hg(hret, NULL);
 
@@ -184,7 +186,8 @@ defw2_rc_t defw2_echo_bulk(defw2_binding_t *binding, const void *source,
 		}
 	}
 
-	hret = margo_create(rt->mid, binding->addr, echo_bulk_id(rt), &handle);
+	hret = margo_create(rt->mid, binding->addr, echo_bulk_id(binding),
+			    &handle);
 	if (hret != HG_SUCCESS) {
 		rc = defw2_rc_from_hg(hret, &category);
 		code = rc;

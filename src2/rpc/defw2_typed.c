@@ -44,8 +44,8 @@ defw2_rc_t defw2_typed_call(struct defw2_typed_call *call,
 	wire = call->out;
 	rt = binding->rt;
 
-	id = defw2_rpc_lookup(rt, method->rpc, method->in_proc,
-			      method->out_proc);
+	id = defw2_rpc_lookup(rt, method->rpc, binding->provider_id,
+			      method->in_proc, method->out_proc);
 	if (id == 0)
 		return DEFW2_ERR_INTERNAL;
 	hret = margo_create(rt->mid, binding->addr, id, &handle);

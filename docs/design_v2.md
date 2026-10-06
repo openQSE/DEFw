@@ -777,6 +777,17 @@ conversions. A timeout cancels the request and returns the timeout category.
 Every answer has one free function, which is the whole ownership rule for
 callers.
 
+A stub makes its handle with the identifier the call goes out as, which has
+the provider in it. The runtime registers that identifier itself, under a
+lock of its own, before the first call to an RPC on a provider. Left to
+Margo, it would be registered on the first forward, with nothing between
+Margo's check and its registration. Threads making that first call at once
+could all register it. Mercury then frees the first registration while a
+handle still uses it, and the reply is decoded through freed memory. A
+process that already serves the API on that provider keeps the registration
+it has, with the service's handler.
+
+
 Requests and responses follow the constraints in the C-centric requirements:
 fixed-width scalars, counted arrays, strings with explicit lengths on the
 wire, no raw pointers, optional values with explicit presence, and bulk
