@@ -380,7 +380,7 @@ A v2 run's `otlp/` holds more, because the processes record themselves:
 | `otlp/spans-run.jsonl` | The `qfw.bench.run` span, written by the launcher |
 | `otlp/spans-<agent>.jsonl` | One `qfw.transport.rpc` span per call, from each client and from the service |
 | `otlp/metrics-<agent>.jsonl` | The duration and byte histograms, and each process's CPU and peak memory |
-| `otlp/margo-<agent>.*.json` | Margo's own per-RPC counts, times and call paths, only under `DEFW2_MARGO_MONITOR=1`, which is unsafe above one client, see [mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322) |
+| `otlp/margo-<agent>.*.json` | Margo's own per-RPC counts, times and call paths, only under `DEFW2_MARGO_MONITOR=1`, which needs Margo 0.24.3 or later, see [mochi-hpc/mochi-margo#322](https://github.com/mochi-hpc/mochi-margo/issues/322) |
 
 `src2/tests/defw2_otlp_check.py <run>/otlp` validates the lot, including
 that every service span is a child of the call that produced it.
