@@ -99,7 +99,8 @@ defw2_rc_t defw2_rc_from_hg(hg_return_t hret, uint32_t *category)
 }
 
 hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
-			 hg_proc_cb_t in_cb, hg_proc_cb_t out_cb)
+			 uint16_t provider_id, hg_proc_cb_t in_cb,
+			 hg_proc_cb_t out_cb)
 {
 	hg_bool_t flag;
 	hg_id_t id = 0;
@@ -107,55 +108,69 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 
 	pthread_mutex_lock(&rt->rpc_lock);
 	for (i = 0; i < rt->rpc_cached; i++) {
-		if (strcmp(rt->rpc_cache[i].name, name) == 0) {
+		if (rt->rpc_cache[i].provider_id == provider_id &&
+		    strcmp(rt->rpc_cache[i].name, name) == 0) {
 			id = rt->rpc_cache[i].id;
 			goto out;
 		}
 	}
 
 	/*
-	 * Ask Margo before registering anything.
+	 * The identifier is the one the call goes out as, with the provider
+	 * in it, and it is registered here, under rpc_lock.
 	 *
-	 * margo_register_name is margo_provider_register_name with provider 0
-	 * and a NULL handler. So on a process that already serves this very
-	 * API on provider 0, registering it again as a caller replaces the
-	 * handler with NULL and the provider silently stops answering its own
-	 * API. Mercury says "Overwriting RPC callback for a previously
+	 * A handle made with provider 0's identifier leaves the registration
+	 * to Margo, on the first forward to the provider. Margo checks and
+	 * then registers with no lock between the two, so threads making that
+	 * first call at once can all register it. Mercury then frees the
+	 * first registration while a handle reset to it still points there,
+	 * and the reply is decoded through freed memory. A handle made with
+	 * the provider's own identifier finds it registered, so Margo
+	 * registers nothing when the call is forwarded.
+	 *
+	 * Ask Margo before registering anything. A process that already
+	 * serves this very API on this provider has the identifier, with its
+	 * handler. Registering it again as a caller, with a NULL handler,
+	 * replaces that handler and the provider silently stops answering its
+	 * own API. Mercury says "Overwriting RPC callback for a previously
 	 * registered RPC ID" and nothing else notices.
 	 *
 	 * That is not hypothetical: the directory serves on provider 0, so a
 	 * directory process that also called the directory API elsewhere, or
-	 * a test that put both on one runtime, broke exactly this way. A
-	 * service on any other provider never collided, which is why it took
-	 * until the directory to find.
+	 * a test that put both on one runtime, broke exactly this way.
 	 *
-	 * Reusing the existing registration is safe because the target
-	 * provider goes into the identifier when the call is forwarded, so one
-	 * registration reaches every provider however it was made. The name
+	 * Reusing the existing registration is safe because the name
 	 * determines the payload types here -- it is defw2.<api>.<method> --
 	 * so an existing registration always carries the procs this caller
 	 * would have supplied.
 	 */
 	flag = HG_FALSE;
-	if (margo_provider_registered_name(rt->mid, name, 0, &id,
+	if (margo_provider_registered_name(rt->mid, name, provider_id, &id,
 					   &flag) != HG_SUCCESS)
 		flag = HG_FALSE;
 	if (!flag) {
-		id = margo_register_name(rt->mid, name, in_cb, out_cb, NULL);
+		id = margo_provider_register_name(rt->mid, name, in_cb, out_cb,
+						  NULL, provider_id,
+						  ABT_POOL_NULL);
 	} else {
 		defw2_log(rt, DEFW2_LOG_DEBUG,
-			  "%s is already registered here, reusing it", name);
+			  "%s on provider %u is already registered here, "
+			  "reusing it", name, provider_id);
 	}
 	if (id == 0) {
-		defw2_log(rt, DEFW2_LOG_ERROR, "cannot register %s", name);
+		defw2_log(rt, DEFW2_LOG_ERROR,
+			  "cannot register %s on provider %u", name,
+			  provider_id);
 		goto out;
 	}
 	if (rt->rpc_cached == DEFW2_RPC_CACHE_MAX) {
-		/* Registering again each call works, but Mercury says so every
-		 * time and the scan is no longer bounded. Raise the limit. */
+		/* Asking Margo every time still works, under the lock, but it
+		 * costs a search of Mercury's table and this line on every
+		 * call. Raise the limit. */
 		defw2_log(rt, DEFW2_LOG_WARNING,
-			  "the RPC cache is full at %d, %s will re-register",
-			  DEFW2_RPC_CACHE_MAX, name);
+			  "the RPC cache is full at %d, every call to %s on "
+			  "provider %u will ask Margo", DEFW2_RPC_CACHE_MAX,
+			  name, provider_id);
 		goto out;
 	}
 	/*
@@ -168,9 +183,10 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 	rt->rpc_cache[rt->rpc_cached].name = strdup(name);
 	if (rt->rpc_cache[rt->rpc_cached].name == NULL) {
 		defw2_log(rt, DEFW2_LOG_WARNING,
-			  "cannot cache %s, it will re-register", name);
+			  "cannot cache %s, it will ask Margo again", name);
 		goto out;
 	}
+	rt->rpc_cache[rt->rpc_cached].provider_id = provider_id;
 	rt->rpc_cache[rt->rpc_cached].id = id;
 	rt->rpc_cached++;
 out:

@@ -204,6 +204,22 @@ if(BUILD_TESTING)
 		PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_bulk_pool_smoke COMMAND defw2_bulk_pool_smoke)
 
+	# It looks RPCs up through the runtime's internals, and replaces two
+	# of Mercury's functions with its own, which Margo finds only when
+	# the executable exports them.
+	add_executable(defw2_rpc_register_smoke
+		tests/defw2_rpc_register_smoke.c)
+	target_include_directories(defw2_rpc_register_smoke
+		PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/core
+			${CMAKE_CURRENT_SOURCE_DIR}/rpc)
+	target_link_libraries(defw2_rpc_register_smoke
+		PRIVATE defw2 Threads::Threads ${CMAKE_DL_LIBS})
+	set_target_properties(defw2_rpc_register_smoke
+		PROPERTIES ENABLE_EXPORTS ON)
+	add_test(NAME defw2_rpc_register_smoke
+		COMMAND defw2_rpc_register_smoke)
+
 	add_executable(defw2_echo_smoke tests/defw2_echo_smoke.c)
 	target_link_libraries(defw2_echo_smoke PRIVATE defw2 Threads::Threads)
 	add_test(NAME defw2_echo_smoke COMMAND defw2_echo_smoke)
@@ -316,7 +332,7 @@ if(BUILD_TESTING)
 	# Shared memory needs no network and no port, so the tests say
 	# nothing about the machine they run on.
 	set_tests_properties(defw2_runtime_smoke defw2_echo_smoke
-			     defw2_bulk_pool_smoke
+			     defw2_bulk_pool_smoke defw2_rpc_register_smoke
 			     defw2_queue_smoke defw2_telemetry_smoke
 		PROPERTIES
 			ENVIRONMENT "DEFW2_ADDRESS=na+sm://")

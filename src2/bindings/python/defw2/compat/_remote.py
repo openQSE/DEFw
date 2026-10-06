@@ -30,6 +30,7 @@ carried it, so the v2 spans and the service's own join the caller's trace.
 import builtins
 import inspect
 import logging
+import os
 import re
 import sys
 import threading
@@ -208,13 +209,74 @@ def _target(record):
 		return target
 
 
-def connect_to_binding(resolved_binding):
-	"""v1's connect_to_binding: the API object for a resolved binding."""
+# A v1 API module's name. It is one identifier, because finding a dotted
+# name imports its package first, and that runs the package's code.
+_MODULE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+
+# The directories v1 API modules come from, as v1's launcher put them on
+# the path. QFw's are there.
+_API_PATH = 'DEFW_EXTERNAL_SERVICE_APIS_PATH'
+
+
+def _api_dirs():
+	return [os.path.realpath(p)
+		for p in os.environ.get(_API_PATH, '').split(':') if p]
+
+
+def _refused(what):
+	error = _mapping_error(ValueError(what))
+	log.warning('%s', error)
+	return error
+
+
+def _client_class(binding):
+	"""The v1 API class a binding names, from a v1 API module only.
+
+	The binding comes from a directory record, and whatever can register
+	in the directory writes those. v1 imported the module a record named
+	and called the class it named there, so a record chose code for the
+	client to run. Here the module has to be in one of the directories v1
+	API modules come from, and the class has to be a BaseRemote, or
+	nothing is imported and nothing is called.
+	"""
 	import importlib
+	import importlib.util
+	import defw_remote
+
+	name = binding.get('client_module')
+	if not isinstance(name, str) or not _MODULE_NAME.match(name):
+		raise _refused('client module {!r} is not a plain module '
+			       'name'.format(name))
+	try:
+		spec = importlib.util.find_spec(name)
+	except ValueError:
+		spec = None
+	where = None
+	if spec is not None and spec.has_location and spec.origin:
+		where = os.path.dirname(spec.origin)
+		if spec.submodule_search_locations is not None:
+			where = os.path.dirname(where)
+	if where is None or os.path.realpath(where) not in _api_dirs():
+		raise _refused('client module {} is not a v1 API module from '
+			       '{}'.format(name, _API_PATH))
+	module = importlib.import_module(name)
+	class_name = binding.get('client_class')
+	cls = None
+	if isinstance(class_name, str):
+		cls = getattr(module, class_name, None)
+	if not inspect.isclass(cls) or \
+	   not issubclass(cls, defw_remote.BaseRemote):
+		raise _refused('{} has no v1 API class {!r}'.format(
+			name, class_name))
+	return cls
+
+
+def connect_to_binding(resolved_binding):
+	"""v1's connect_to_binding: the API object for a resolved binding,
+	whose class must be a v1 API class, as _client_class says."""
 	record = resolved_binding['service_record']
 	binding = resolved_binding['selected_binding']
-	module = importlib.import_module(binding['client_module'])
-	cls = getattr(module, binding['client_class'])
+	cls = _client_class(binding)
 	return cls(target=_target(record),
 		   remote_module=binding.get('service_module'),
 		   remote_class=binding.get('service_class'),

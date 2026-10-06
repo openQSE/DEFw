@@ -289,6 +289,13 @@ are compat's own, because they were v1's runtime. `api_events`, `defw_cmd`,
 v1 tree that `DEFW_PATH` names. Any other v1 name fails to import with an
 error that says it has no v2 counterpart.
 
+A v1 client's API classes come from the directories
+`DEFW_EXTERNAL_SERVICE_APIS_PATH` names, as they did on v1, and
+`defw.connect_to_binding` takes them from nowhere else. A directory record
+that names a module anywhere else fails the connect with a `DEFwError`
+before the module is imported. One that names a class that is not a
+`BaseRemote` fails before the class is called.
+
 A served v1 QPM answers the typed QPM APIs through `QPMAdapter`, so C and
 Python v2 callers reach it as they reach any QPM. A v1 client's API classes
 send the fifteen typed QPM methods over the same APIs, and the dictionary

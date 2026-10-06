@@ -21,14 +21,16 @@
 #define DEFW2_NAME_MAX		256
 
 /*
- * Room for every RPC one process calls or serves. The design's typed
- * tier names two dozen methods, so a linear scan of this is cheaper than
- * anything with a hash in it.
+ * Room for every RPC one process calls, once for each provider it calls it
+ * on. The design's typed tier names two dozen methods, each on its API's
+ * own provider, so a linear scan of this is cheaper than anything with a
+ * hash in it.
  */
 #define DEFW2_RPC_CACHE_MAX	64
 
 struct defw2_rpc_entry {
 	char		*name;		/* owned, freed in defw2_finalize */
+	uint16_t	provider_id;
 	hg_id_t		id;
 };
 
@@ -52,11 +54,13 @@ struct defw2_rt {
 	bool			log_owned;
 	pthread_mutex_t		log_lock;
 	/*
-	 * A memo of what this runtime has registered, so a lookup on the hot
-	 * path is a scan of a short array rather than a call into Margo.
+	 * A memo of what this runtime has registered to call, by name and
+	 * provider, so a lookup on the hot path is a scan of a short array
+	 * rather than a call into Margo. rpc_lock guards it, and every
+	 * registration defw2_rpc_lookup makes.
 	 *
 	 * It is a cache, not the source of truth. defw2_rpc_lookup asks Margo
-	 * through margo_provider_registered_name when a name is not in here,
+	 * through margo_provider_registered_name when a pair is not in here,
 	 * because a provider registration made elsewhere in the process never
 	 * passes through this table and must not be overwritten.
 	 */

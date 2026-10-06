@@ -25,11 +25,14 @@ coming and going reaches the caller as v1's directory events.
 """
 
 import base64
+import builtins
 import importlib.util
 import os
 import select
+import shutil
 import struct
 import sys
+import tempfile
 import time
 
 import defw
@@ -193,6 +196,58 @@ def directory_checks(dirsvc, record):
 
 
 # --- the typed methods --------------------------------------------------
+
+
+def binding_checks(resolved):
+	"""A binding comes from a directory record, which anything that can
+	register in the directory writes. So compat imports a client module
+	only from where v1 API modules come from, and calls only a v1 API
+	class in it. Each module here would mark builtins when it runs."""
+	probe = tempfile.mkdtemp(prefix='defw2-probe-')
+	api = ('from defw_remote import BaseRemote\n\n\n'
+	       'class Probe(BaseRemote):\n'
+	       '\tpass\n')
+	with open(os.path.join(probe, 'defw2_probe.py'), 'w') as f:
+		f.write('import builtins\nbuiltins.defw2_probe_ran = True\n' +
+			api)
+	os.mkdir(os.path.join(probe, 'defw2_probe_pkg'))
+	with open(os.path.join(probe, 'defw2_probe_pkg', '__init__.py'),
+		  'w') as f:
+		f.write('import builtins\n'
+			'builtins.defw2_probe_pkg_ran = True\n')
+	with open(os.path.join(probe, 'defw2_probe_pkg', 'api.py'), 'w') as f:
+		f.write(api)
+	sys.path.insert(0, probe)
+
+	def refused(module, cls):
+		binding = dict(resolved['selected_binding'],
+			       client_module=module, client_class=cls)
+		try:
+			defw.connect_to_binding(
+				{'service_record': resolved['service_record'],
+				 'selected_binding': binding})
+		except defw_exception.DEFwError as error:
+			return 'defw2.compat' in str(error)
+		return False
+
+	try:
+		check('a client module from anywhere else is refused, unrun',
+		      refused('defw2_probe', 'Probe') and
+		      'defw2_probe' not in sys.modules and
+		      not hasattr(builtins, 'defw2_probe_ran'))
+		check('a dotted one is refused before its package runs',
+		      refused('defw2_probe_pkg.api', 'Probe') and
+		      'defw2_probe_pkg' not in sys.modules and
+		      not hasattr(builtins, 'defw2_probe_pkg_ran'))
+		check('so is one from the standard library',
+		      refused('subprocess', 'Popen'))
+		# The API module's own type is a class, but no BaseRemote.
+		check('and a name in an API module that is no v1 API class',
+		      refused('api_v1_qpm', '__class__') and
+		      refused('api_v1_qpm', 'NoSuchClass'))
+	finally:
+		sys.path.remove(probe)
+		shutil.rmtree(probe, ignore_errors=True)
 
 
 def control_checks(control, reference):
@@ -624,6 +679,7 @@ def main():
 	      ['QPMControl', 'QPMAdmissionControl', 'QPMExecution',
 	       'QPMAdmissionPolicyConfig', 'QPMSchedulerControl',
 	       'QPMTelemetry'])
+	binding_checks(found[0])
 
 	svc_qpm.initialized = True
 	reference = svc_qpm.QPM()
