@@ -779,13 +779,15 @@ callers.
 
 A stub makes its handle with the identifier the call goes out as, which has
 the provider in it. The runtime registers that identifier itself, under a
-lock of its own, before the first call to an RPC on a provider. Left to
-Margo, it would be registered on the first forward, with nothing between
-Margo's check and its registration. Threads making that first call at once
-could all register it. Mercury then frees the first registration while a
-handle still uses it, and the reply is decoded through freed memory. A
-process that already serves the API on that provider keeps the registration
-it has, with the service's handler.
+lock of its own, before the first call to an RPC on a provider. Left to a
+Margo older than 0.24.4, it would be registered on the first forward, with
+nothing between Margo's check and its registration. Threads making that
+first call at once could all register it. Mercury then frees the first
+registration while a handle still uses it, and the reply is decoded through
+freed memory (`mochi-hpc/mochi-margo` issue #325). Margo 0.24.4 serializes
+that registration itself, and registering first keeps an older Margo safe.
+A process that already serves the API on that provider keeps the
+registration it has, with the service's handler.
 
 Requests and responses follow the constraints in the C-centric requirements:
 fixed-width scalars, counted arrays, strings with explicit lengths on the
@@ -1298,7 +1300,7 @@ the summary reports that the v1 and v2 harnesses both write.
 This table first named Margo's breadcrumb profiler and its diagnostics,
 switched on by `enable_profiling` and `enable_diagnostics` in the Margo JSON
 or by `MARGO_ENABLE_PROFILING` and `MARGO_ENABLE_DIAGNOSTICS`. Margo 0.24
-removed both. None of those names appears in the Margo 0.24.3 library, and
+removed both. None of those names appears in the Margo 0.24.4 library, and
 neither does `margo_profile_dump`. Per-RPC statistics now come from Margo's
 monitor. The runtime installs it only on request. Before Margo 0.24.3 the
 default monitor read freed memory under concurrent load and took a service
@@ -1980,7 +1982,7 @@ import DEFw infrastructure.
 | Component | Pinned version | License | Notes |
 | --- | --- | --- | --- |
 | Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. The oldest release that Spack allows with libfabric 2.x. |
-| Margo | 0.24.3 | Argonne open source license | BSD-3-style with a DOE contract notice. Older releases crash with the default monitor under load, issue #322. |
+| Margo | 0.24.4 | Argonne open source license | BSD-3-style with a DOE contract notice. Releases before 0.24.3 crash with the default monitor under load, issue #322. Releases before 0.24.4 race to register an RPC on its first forward to a provider, issue #325, which `libdefw2` avoids by registering first. |
 | Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. The 1.2 release reports its version as 1.2rc1. |
 | json-c | 0.18, from the distribution | MIT | Margo dependency. Margo accepts any version, and Slurm in the container already links the distribution package. |
 | libfabric | 2.3.1 in the container, 2.6.0 upstream | BSD-2 or GPLv2 at the user's choice | Already a DEFw dependency. BSD is chosen. |
