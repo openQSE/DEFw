@@ -4,11 +4,12 @@
  *
  * Margo puts the provider into an RPC's identifier when it forwards a
  * call. If the process has not registered that identifier, Margo registers
- * it there, on the first forward, with no lock between its check and its
- * registration. Threads making that first call at once can all register
- * it, and Mercury then frees a registration that a handle still uses.
- * libdefw2 registers the identifier itself, under its own lock, when it
- * looks the RPC up.
+ * it there, on the first forward. Before Margo 0.24.4 nothing came between
+ * its check and its registration (mochi-hpc/mochi-margo#325). Threads
+ * making that first call at once could all register it, and Mercury then
+ * freed a registration that a handle still used. libdefw2 registers the
+ * identifier itself, under its own lock, when it looks the RPC up, so an
+ * older Margo is safe too.
  *
  * The window is a few instructions wide, so an idle machine almost never
  * hits it. This test holds it open. It replaces HG_Registered, and while

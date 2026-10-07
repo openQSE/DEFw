@@ -120,13 +120,14 @@ hg_id_t defw2_rpc_lookup(struct defw2_rt *rt, const char *name,
 	 * in it, and it is registered here, under rpc_lock.
 	 *
 	 * A handle made with provider 0's identifier leaves the registration
-	 * to Margo, on the first forward to the provider. Margo checks and
-	 * then registers with no lock between the two, so threads making that
-	 * first call at once can all register it. Mercury then frees the
-	 * first registration while a handle reset to it still points there,
-	 * and the reply is decoded through freed memory. A handle made with
-	 * the provider's own identifier finds it registered, so Margo
-	 * registers nothing when the call is forwarded.
+	 * to Margo, on the first forward to the provider. Before 0.24.4,
+	 * Margo checked and then registered with no lock between the two, so
+	 * threads making that first call at once could all register it
+	 * (mochi-hpc/mochi-margo#325). Mercury then freed the first
+	 * registration while a handle reset to it still pointed there, and
+	 * the reply was decoded through freed memory. A handle made with the
+	 * provider's own identifier finds it registered, so Margo registers
+	 * nothing when the call is forwarded, and an older Margo is safe too.
 	 *
 	 * Ask Margo before registering anything. A process that already
 	 * serves this very API on this provider has the identifier, with its
