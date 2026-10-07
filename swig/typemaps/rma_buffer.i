@@ -25,7 +25,7 @@
 		obj = Py_None;
 		Py_INCREF(obj);
 	}
-#if SWIG_VERSION >= 0x040100
+#if SWIG_VERSION >= 0x040300
 	$result = SWIG_Python_AppendOutput($result, obj, $isvoid);
 #else
 	$result = SWIG_Python_AppendOutput($result, obj);
