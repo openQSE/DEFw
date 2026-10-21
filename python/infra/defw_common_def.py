@@ -82,9 +82,10 @@ class RPCMetrics:
 	def dump(self):
 		import copy
 
-		reqdb = copy.deepcopy(self.rpc_req_timing_db)
-		rspdb = copy.deepcopy(self.rpc_rsp_timing_db)
-		methodb = copy.deepcopy(self.method_timing_db)
+		with self.lock:
+			reqdb = copy.deepcopy(self.rpc_req_timing_db)
+			rspdb = copy.deepcopy(self.rpc_rsp_timing_db)
+			methodb = copy.deepcopy(self.method_timing_db)
 		del(reqdb['window'])
 		del(rspdb['window'])
 		for k, v in methodb.items():
