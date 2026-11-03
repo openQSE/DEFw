@@ -6,7 +6,6 @@ import socket
 import subprocess
 import sys
 import threading
-from time import sleep
 from defw_exception import DEFwInProgress
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 from defw_cmd import defw_exec_remote_cmd
@@ -50,18 +49,12 @@ class Process:
 	def kill(self):
 		logging.defw_service(f"Kill process with pid: {self.__pid}")
 		self.__process.kill()
-		try:
-			os.waitpid(self.__pid, 0)
-		except:
-			pass
+		self.__process.wait()
 
 	def terminate(self):
 		logging.defw_service(f"Terminate process with pid: {self.__pid}")
 		self.__process.terminate()
-		try:
-			os.waitpid(self.__pid, 0)
-		except:
-			pass
+		self.__process.wait()
 
 	def poll(self):
 		return self.__process.poll()
@@ -74,30 +67,23 @@ class Process:
 
 class Launcher:
 	def __init__(self, start=True):
+		# No thread runs until launch() starts one for each process, so
+		# start has no effect. The service loader still passes it.
 		self.__proc_dict = {}
 		self.__dead_procs = {}
-		self.__shutdown = not start
 		self.__lock_db = threading.Lock()
-		self.__monitor_thr = None
-		if start:
-			self.__monitor_thr = threading.Thread(target=self.monitor_thr)
-			self.__monitor_thr.daemon = True
-			self.__monitor_thr.start()
 
-	def monitor_thr(self):
-		while not self.__shutdown:
-			with self.__lock_db:
-				for pid, proc in self.__proc_dict.items():
-					if proc.poll() is not None:
-						logging.defw_service(f"{pid} terminated with rc {proc.returncode()}")
-						stdout, stderr, rc = proc.get_result()
-						proc.kill()
-						self.__dead_procs[pid] = (stdout, stderr, rc)
-				for pid in self.__dead_procs.keys():
-					if pid in self.__proc_dict.keys():
-						del self.__proc_dict[pid]
-			sleep(0.0001)
-		logging.defw_service("Monitor thread shutdown")
+	def __wait_for_exit(self, pid, proc):
+		# communicate() reads both pipes while the process runs, so a
+		# process that writes more than a pipe buffer can still exit.
+		stdout, stderr, rc = proc.get_result()
+		logging.defw_service(f"{pid} terminated with rc {rc}")
+		with self.__lock_db:
+			# kill(), terminate() and shutdown() remove the process
+			# first, and nothing asks for its status afterwards.
+			if self.__proc_dict.get(pid) is proc:
+				del self.__proc_dict[pid]
+				self.__dead_procs[pid] = (stdout, stderr, rc)
 
 	def compose_remote_cmd(self, exe, env, use, modules, python_env):
 		cmd = ''
@@ -128,17 +114,24 @@ class Launcher:
 			self.run_cmd_on_target(cmd, env, muse, modules, python_env, target)
 			return 0
 		proc = Process(cmd, env, path)
-		# if we're going to wait for it keep it around until we get
-		# the result
 		proc.launch()
 		pid = proc.getpid()
 		with self.__lock_db:
 			self.__proc_dict[pid] = proc
-		if not wait:
-			return pid
-		output, error, rc = proc.get_result()
-		proc.kill()
-		return output, error, rc
+		if wait:
+			output, error, rc = proc.get_result()
+			with self.__lock_db:
+				if self.__proc_dict.get(pid) is proc:
+					del self.__proc_dict[pid]
+			return output, error, rc
+		waiter = threading.Thread(target=self.__wait_for_exit,
+					  args=(pid, proc), daemon=True)
+		try:
+			waiter.start()
+		except Exception:
+			self.kill(pid)
+			raise
+		return pid
 
 	def kill(self, pid):
 		with self.__lock_db:
@@ -170,7 +163,6 @@ class Launcher:
 				for pid in rm_pid:
 					del self.__proc_dict[pid]
 		logging.defw_service("Launcher Service shutdown requested")
-		self.__shutdown = True
 
 	def query(self):
 		from . import svc_info
