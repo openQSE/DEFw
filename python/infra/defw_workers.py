@@ -305,6 +305,10 @@ class WorkerThread:
 		with self.req_db_lock:
 			self.req_db[work_request.get_uuid()] = work_request
 
+	def remove_work_request(self, work_request):
+		with self.req_db_lock:
+			self.req_db.pop(work_request.get_uuid(), None)
+
 	def _work_request_targets_peer(self, work_request, event):
 		if work_request.wr_type != WorkerRequest.WR_SEND_MSG:
 			return False
@@ -723,9 +727,23 @@ def connect_to_agent(wr):
 			  wr.get_uuid_str(),
 			  None)
 	if rc and rc != EN_DEFW_RC_IN_PROGRESS:
-		raise DEFwError("Failed to connect:", defw_rc2str(rc))
+		if wr.blocking:
+			worker_thread.remove_work_request(wr)
+		raise DEFwError(_connect_failure_message(wr.ep, rc))
 
 	if wr.blocking:
 		return wr.wait()
 
 	return rc, None
+
+def _connect_failure_message(ep, rc):
+	message = (f"Failed to connect to {ep.name} at "
+			   f"{ep.hostname or ep.addr}:{ep.listen_port}: "
+			   f"{defw_rc2str(rc)}")
+	if rc == EN_DEFW_RC_NOT_STARTED:
+		message += (". DEFw is not started in this process: run it "
+					"under defwp or defw-python, not a plain python3")
+	elif rc == EN_DEFW_RC_NO_LISTENER:
+		message += (". This process has no DEFw listener: set "
+					"DEFW_LISTEN_PORT to a free port")
+	return message

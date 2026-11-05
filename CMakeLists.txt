@@ -473,6 +473,21 @@ set_tests_properties(defw_binding_connect_contract
 	PROPERTIES
 		DEPENDS "_cdefw_global;_cdefw_agent;defw_python_runtime")
 
+add_test(NAME defw_connect_requires_runtime
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"DEFW_PATH=${DEFW_BUILD_RUNTIME_DIR}"
+		"PYTHONPATH=${DEFW_BUILD_SRC_DIR}:${DEFW_BUILD_PYTHON_DIR}/infra"
+		"LD_LIBRARY_PATH=${DEFW_BUILD_SRC_DIR}"
+		"DEFW_TEST_DEFWP=${DEFW_BUILD_SRC_DIR}/defwp"
+		"DEFW_TEST_CONFIG_PATH=${DEFW_BUILD_PYTHON_DIR}/config/defw_generic.yaml"
+		"DEFW_TEST_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/defw-connect-log"
+		"${Python3_EXECUTABLE}"
+		"${CMAKE_CURRENT_SOURCE_DIR}/tests/connect/test_connect_requires_runtime.py")
+set_tests_properties(defw_connect_requires_runtime
+	PROPERTIES
+		DEPENDS "_cdefw_global;_cdefw_agent;defw_python_runtime;defwp")
+
 add_test(NAME defw_launcher_contract
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
