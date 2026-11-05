@@ -66,6 +66,8 @@ static inline const char *defw_rc2str(defw_rc_t rc)
 		[EN_DEFW_RC_NO_DATA_ON_SOCKET*-1] = "RC_NO_DATA_ON_SOCKET",
 		[EN_DEFW_RC_KEEP_DATA*-1] = "RC_KEEP_DATA",
 		[EN_DEFW_RC_UNKNOWN_MESSAGE*-1] = "RC_UNKNOWN_MESSAGE",
+		[EN_DEFW_RC_NOT_STARTED*-1] = "RC_NOT_STARTED",
+		[EN_DEFW_RC_NO_LISTENER*-1] = "RC_NO_LISTENER",
 	};
 
 	if (rc <= EN_DEFW_RC_MAX)

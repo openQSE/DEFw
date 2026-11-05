@@ -863,8 +863,6 @@ static void *defw_listener_main(void *usr_data)
 		return NULL;
 	}
 
-	defw_agent_init();
-
 	g_iMaxSelectFd = g_iListenFd;
 
 	gettimeofday(&time_2, NULL);

@@ -24,9 +24,13 @@
 extern fd_set g_tAllSet;
 extern int g_iMaxSelectFd;
 extern pthread_mutex_t global_var_mutex;
-static bool initialized;
-static pthread_mutex_t agent_array_mutex;
-static struct dlist_entry agent_connection_table;
+/* Initialized statically so the table is valid before defw_start() runs.
+ * A process that imports the DEFw Python modules from a plain interpreter
+ * never calls defw_start(), and every walk of an uninitialized list
+ * dereferences NULL.
+ */
+static pthread_mutex_t agent_array_mutex = PTHREAD_MUTEX_INITIALIZER;
+static DEFINE_LIST(agent_connection_table);
 
 static bool g_agent_enable_hb = true;
 typedef struct defw_connect_req_s {
@@ -88,16 +92,6 @@ static void count_lists(void)
 	}
 
 	PDEBUG("agent_connection_table len is: %d", count);
-}
-
-void defw_agent_init(void)
-{
-	if (initialized)
-		return;
-
-	dlist_init(&agent_connection_table);
-	pthread_mutex_init(&agent_array_mutex, NULL);
-	initialized = true;
 }
 
 unsigned int defw_agent_get_pid(defw_agent_blk_t *agent)
@@ -598,8 +592,6 @@ defw_get_next_agent_filtered(defw_agent_blk_t *previous,
 	struct dlist_entry *entry;
 	defw_agent_blk_t *agent = NULL;
 
-	defw_agent_init();
-
 	if (previous)
 		entry = previous->entry.next;
 	else
@@ -1033,6 +1025,33 @@ fail:
 	return NULL;
 }
 
+/* An outbound connection completes only when this process's listener reads
+ * the peer's first heartbeat, and the session information it sends names
+ * this process by the runtime id defw_start() generates. A process that
+ * imported the DEFw Python modules without starting DEFw (python3 rather
+ * than defwp or defw-python) has neither, and one started with listen port
+ * 0 has no listener. Refuse the connect in both cases rather than start a
+ * thread that can never complete it.
+ */
+static defw_rc_t defw_check_can_connect(char *ip_addr, int port)
+{
+	if (uuid_is_null(g_defw_cfg.uuid)) {
+		PERROR("Can not connect to %s:%d: DEFw is not started in this "
+		       "process. Run it under defwp or defw-python.",
+		       ip_addr, port);
+		return EN_DEFW_RC_NOT_STARTED;
+	}
+
+	if (g_defw_cfg.l_info.listen_address.sin_port == 0) {
+		PERROR("Can not connect to %s:%d: this process has no DEFw "
+		       "listener. Set DEFW_LISTEN_PORT to a free port.",
+		       ip_addr, port);
+		return EN_DEFW_RC_NO_LISTENER;
+	}
+
+	return EN_DEFW_RC_OK;
+}
+
 /* TODO: if ip address is not provided but hostname is, then resolve
  * hostname to an ip and try to connect that way
  */
@@ -1043,14 +1062,26 @@ defw_rc_t defw_connect_to_agent(char *ip_addr, int port, char *name,
 {
 	int trc;
 	pthread_t tid;
-	defw_connect_req_t *req = calloc(1, sizeof(*req));
+	defw_connect_req_t *req;
+	defw_rc_t rc;
 
+	if (!ip_addr || !name || !hostname)
+		return EN_DEFW_RC_BAD_PARAM;
+
+	rc = defw_check_can_connect(ip_addr, port);
+	if (rc)
+		return rc;
+
+	req = calloc(1, sizeof(*req));
 	if (!req)
 		return EN_DEFW_RC_OOM;
 
-	strncpy(req->ip_addr, ip_addr, MAX_SHORT_STR_LEN);
-	strncpy(req->name, name, MAX_SHORT_STR_LEN);
-	strncpy(req->hostname, hostname, MAX_SHORT_STR_LEN);
+	/* calloc zeroed the buffers, so copying one byte less keeps each
+	 * string terminated however long the argument is
+	 */
+	strncpy(req->ip_addr, ip_addr, MAX_SHORT_STR_LEN - 1);
+	strncpy(req->name, name, MAX_SHORT_STR_LEN - 1);
+	strncpy(req->hostname, hostname, MAX_SHORT_STR_LEN - 1);
 	req->port = port;
 	req->type = type;
 	req->list = list;
@@ -1067,6 +1098,7 @@ defw_rc_t defw_connect_to_agent(char *ip_addr, int port, char *name,
 	trc = pthread_create(&tid, NULL, defw_connect_to_agent_thread, req);
 	if (trc) {
 		PERROR("Failed to start connection thread");
+		free(req);
 		return EN_DEFW_RC_ERR_THREAD_STARTUP;
 	}
 

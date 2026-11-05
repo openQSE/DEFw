@@ -87,7 +87,12 @@ typedef enum {
 	EN_DEFW_RC_NO_DATA_ON_SOCKET = -22,
 	EN_DEFW_RC_KEEP_DATA = -23,
 	EN_DEFW_RC_UNKNOWN_MESSAGE = -24,
-	EN_DEFW_RC_MAX,
+	EN_DEFW_RC_NOT_STARTED = -25,
+	EN_DEFW_RC_NO_LISTENER = -26,
+	/* One beyond the last code. The codes count down, so an implicit
+	 * value here would be one above the last code, not one beyond it.
+	 */
+	EN_DEFW_RC_MAX = -27,
 } defw_rc_t;
 
 typedef enum defw_type {

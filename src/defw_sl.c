@@ -215,8 +215,6 @@ run_pure_python:
 	/* generate global uuid for this instance */
 	uuid_generate(g_defw_cfg.uuid);
 
-	defw_agent_init();
-
 	rc = python_init(bin_name);
 	if (rc) {
 		PERROR("Failed to initialize Python Module");
