@@ -6,12 +6,6 @@
 
 typedef int (*process_agent)(defw_agent_blk_t *agent, void *user_data);
 
-/*
- * agent_init
- *	Initialize the agent module
- */
-void defw_agent_init(void);
-
 /* defw_agent_get_highest_fd
  *	Find the highest connected FD in all connected agents.
  */
