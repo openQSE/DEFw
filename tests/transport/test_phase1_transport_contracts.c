@@ -360,7 +360,6 @@ static int test_send_rejects_invalid_arguments(void)
 int main(void)
 {
 	defw_init_logging();
-	defw_agent_init();
 
 	if (test_connection_table_iteration_order())
 		return 1;

@@ -18,7 +18,7 @@
         }
         PyList_SET_ITEM(list, i, item);
     }
-#if SWIG_VERSION >= 0x040100
+#if SWIG_VERSION >= 0x040300
     $result = SWIG_Python_AppendOutput($result, list, $isvoid);
 #else
     $result = SWIG_Python_AppendOutput($result, list);
