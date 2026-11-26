@@ -244,6 +244,63 @@ def address_checks():
 	      seen['another provider'] is None, seen)
 
 
+def log_directory_checks():
+	"""Where a compat process keeps its log, by what its environment
+	gives it."""
+	import shutil
+	import socket
+	import tempfile
+	from defw2.compat._v1 import cdefw_global
+
+	names = ('DEFW_LOG_DIR', 'DEFW_AGENT_NAME')
+	saved = {name: os.environ.get(name) for name in names}
+	kept = dict(cdefw_global._values)
+	scratch = tempfile.mkdtemp(prefix='defw2-compat-log-')
+	named = 'defw2-compat-smoke-{}'.format(os.getpid())
+	made = [scratch, os.path.join('/tmp', named)]
+	seen = {}
+	try:
+		for name in names:
+			os.environ.pop(name, None)
+		cdefw_global._values.clear()
+		os.environ['DEFW_LOG_DIR'] = os.path.join(scratch, 'given')
+		seen['given'] = cdefw_global.get_defw_tmp_dir()
+		del os.environ['DEFW_LOG_DIR']
+		os.environ['DEFW_AGENT_NAME'] = named
+		seen['named'] = cdefw_global.get_defw_tmp_dir()
+		del os.environ['DEFW_AGENT_NAME']
+		seen['first'] = cdefw_global.get_defw_tmp_dir()
+		seen['again'] = cdefw_global.get_defw_tmp_dir()
+		# Another process starts with nothing kept.
+		cdefw_global._values.clear()
+		seen['other'] = cdefw_global.get_defw_tmp_dir()
+		made += [seen['first'], seen['other']]
+		owned = all(os.stat(seen[k]).st_uid == os.getuid()
+			    for k in ('first', 'other'))
+	finally:
+		cdefw_global._values.clear()
+		cdefw_global._values.update(kept)
+		for name, value in saved.items():
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+		for path in made:
+			shutil.rmtree(path, ignore_errors=True)
+	check('a process keeps its log where DEFW_LOG_DIR says',
+	      seen['given'] == os.path.join(scratch, 'given'), seen)
+	check('and a named agent under /tmp, in a directory of its name',
+	      seen['named'] == os.path.join('/tmp', named), seen)
+	shared = os.path.join('/tmp', socket.gethostname())
+	check('an unnamed one gets a directory of its own, as v1 gave it, '
+	      'and not the one every process on the host would share',
+	      seen['first'].startswith('/tmp/defw_python_') and owned and
+	      shared not in (seen['first'], seen['other']), seen)
+	check('which it keeps, and which no other process gets',
+	      seen['again'] == seen['first'] and
+	      seen['other'] != seen['first'], seen)
+
+
 def watch_checks():
 	"""The directory watch, against a directory that answers as told."""
 	from defw2._defw2 import lib
@@ -474,6 +531,7 @@ def main(argv):
 
 	mapping_checks()
 	address_checks()
+	log_directory_checks()
 	watch_checks()
 	end_to_end(args.dirsvc, args.launcher)
 	directory_stops(args.dirsvc, args.launcher)
