@@ -62,6 +62,23 @@ def _message(exc):
 	return str(exc)
 
 
+def _name(exc):
+	"""The class a v1 exception goes by, which the calling side must be
+	able to make again.
+
+	It makes a DEFw exception from defw_exception and a built-in one
+	from builtins, by name. A service's own subclass of a DEFw
+	exception is in neither, so it goes by the nearest class it derives
+	from that defw_exception defines. v1 handed the caller the subclass
+	itself, which an except clause for that base class caught. Any
+	other class keeps its own name.
+	"""
+	for cls in type(exc).__mro__:
+		if cls.__module__ == 'defw_exception':
+			return cls.__name__
+	return type(exc).__name__
+
+
 def service_error(exc):
 	"""The ServiceError a v1 exception fails a typed call with.
 
@@ -78,7 +95,7 @@ def service_error(exc):
 			category = _CATEGORY[cls.__name__]
 			break
 	text = _message(exc)
-	name = type(exc).__name__
+	name = _name(exc)
 	return ServiceError(category, '{}: {}'.format(name, text) if text
 			    else name)
 

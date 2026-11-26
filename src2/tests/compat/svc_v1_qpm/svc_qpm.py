@@ -49,6 +49,11 @@ class AdmissionPolicyError(Exception):
 	"""An exception class that is neither DEFw's nor a built-in one."""
 
 
+class DeviceOffline(DEFwExecutionError):
+	"""A DEFw exception subclass of the service's own, as QFw's QPMs
+	have: defw_exception has no class of this name."""
+
+
 def statevector_payload(num_qubits):
 	"""Amplitude k is (k, -k), encoded as QFw encodes a statevector."""
 	count = 1 << num_qubits
@@ -151,6 +156,8 @@ class QPM:
 				'QPM admission API')
 		if request.get('workload_kind') == 'refused':
 			raise AdmissionPolicyError('policy refused the workload')
+		if request.get('workload_kind') == 'offline':
+			raise DeviceOffline('the device is offline')
 		return {
 			'status': 'accepted',
 			'decision': 1,
@@ -439,6 +446,8 @@ class QPM:
 			'dispatch': {'limit': None, 'ratio': 0.5}}
 
 	def get_backend_info(self, lib=None, token=None):
+		if lib == 'offline':
+			raise DeviceOffline('no library reaches the device')
 		return {'lib': lib, 'calibrated': None,
 			'qubits': [{'id': i, 't1': 1e-4 * (i + 1), 'ok': i != 2}
 				   for i in range(4)],

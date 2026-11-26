@@ -285,6 +285,23 @@ def admission_checks(admission, reference):
 	check('an exception class v2 cannot name arrives as DEFwRemoteError',
 	      got == ('raised', 'DEFwRemoteError',
 		      'AdmissionPolicyError: policy refused the workload'), got)
+	got = outcome(admission.reserve, request={'workload_kind': 'offline'})
+	check("a service's own subclass of a DEFw exception arrives as the "
+	      'DEFw class it derives from, with its message as it was',
+	      got == ('raised', 'DEFwExecutionError',
+		      'the device is offline'), got)
+
+	def caught_by_its_base(reserve):
+		try:
+			reserve(request={'workload_kind': 'offline'})
+		except defw_exception.DEFwExecutionError:
+			return True
+		except Exception:  # noqa: BLE001
+			return False
+		return False
+	check('so an except clause for that class catches it, as on v1',
+	      caught_by_its_base(admission.reserve) and
+	      caught_by_its_base(reference.reserve))
 
 	same('renew, with a request', admission, reference, 'renew',
 	     reservation_id=RID, request={'ttl_ns': 5, 'now_ns': 0})
@@ -419,6 +436,11 @@ def document_checks(apis, reference):
 	     apis['scheduler'], reference, 'get_scheduler_status')
 	same('telemetry answers nested data as it was',
 	     apis['telemetry'], reference, 'get_backend_info', lib='qdmi')
+	got = outcome(apis['telemetry'].get_backend_info, lib='offline')
+	check("and its own subclass of a DEFw exception arrives as the DEFw "
+	      'class, from a method that travels as a document too',
+	      got == ('raised', 'DEFwExecutionError',
+		      'no library reaches the device'), got)
 
 	got = outcome(apis['telemetry'].capability_map)
 	check('a tuple in an answer arrives as a list, as JSON carries it',
