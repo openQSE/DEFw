@@ -8,6 +8,7 @@ setter keeps what it is given, so reading it back gives the same value.
 
 import os
 import socket
+import tempfile
 
 _values = {}
 
@@ -17,8 +18,26 @@ def _agent_name():
 
 
 def get_defw_tmp_dir():
-	path = _values.get('tmp_dir') or os.environ.get('DEFW_LOG_DIR') or \
-		os.path.join('/tmp', _agent_name())
+	"""Where this process keeps its files: what it was told, then
+	DEFW_LOG_DIR, then a directory under /tmp.
+
+	v1 kept them under /tmp in a directory named for the agent, and
+	named an agent with no DEFW_AGENT_NAME defw_python_ and eight hex
+	digits, so two processes never shared a directory. Here an
+	unnamed agent goes by its host's name, which every process on the
+	host shares. The first user to run a client would own that
+	directory, and the next user's client could not write its log
+	there. So an unnamed agent gets a directory of its own, with v1's
+	prefix.
+	"""
+	path = _values.get('tmp_dir') or os.environ.get('DEFW_LOG_DIR')
+	if not path:
+		name = os.environ.get('DEFW_AGENT_NAME')
+		if not name:
+			_values['tmp_dir'] = tempfile.mkdtemp(
+				prefix='defw_python_', dir='/tmp')
+			return _values['tmp_dir']
+		path = os.path.join('/tmp', name)
 	os.makedirs(path, exist_ok=True)
 	return path
 
