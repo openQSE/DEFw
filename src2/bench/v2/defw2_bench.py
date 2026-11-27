@@ -349,17 +349,15 @@ def payload_kind(args):
 
 
 def transport_env(args):
-	"""What picks the transport. QFw's client gets its own from the run,
-	except that v1 takes DEFW_TRANSPORT from the caller."""
+	"""What picks the transport. QFw's client gets its own from the
+	run."""
 	if args.client == 'qfw':
-		if args.defw_major == 1:
-			return common.transport_env(args.transport)
 		return {}
 	return {'DEFW2_ADDRESS': args.transport + '://'}
 
 
 def read_qfw_run(run_dir):
-	"""The directory and the DEFw of a QFw run, from its state file."""
+	"""The directory of a QFw run, from its state file."""
 	path = os.path.join(run_dir, 'state', 'runtime-state.json')
 	try:
 		with open(path, encoding='utf-8') as stream:
@@ -369,9 +367,7 @@ def read_qfw_run(run_dir):
 	endpoint = (state.get('local_dirsvc') or {}).get('endpoint')
 	if not endpoint:
 		fail('the QFw run at {} names no directory'.format(run_dir))
-	major = str((state.get('environment') or {}).get(
-		'QFW_DEFW_VERSION') or '1').strip()
-	return {'directory': 'ofi+tcp://' + endpoint, 'defw_major': int(major)}
+	return 'ofi+tcp://' + endpoint
 
 
 def process_env(args, run_dir, agent):
@@ -465,8 +461,6 @@ def start_clients(args, config, binaries, address):
 			'--result', common.result_path(run_dir, index),
 			'--wait-s', str(int(args.timeout)),
 		]
-		if args.client == 'qfw':
-			command += ['--defw-major', str(args.defw_major)]
 		if args.qpm:
 			command += ['--qpm', '--qubits', str(args.qubits),
 				    '--shots', str(args.shots)]
@@ -678,11 +672,9 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 		'transport': {
 			'kind': args.transport,
 			'env': config['transport_env'],
-			# v2 asks Margo for one provider and fails if it
+			# DEFw asks Margo for one provider and fails if it
 			# cannot have it, so there is nothing to fall back to.
-			# v1 under QFw is not checked here.
-			'fallback_check': ('not checked' if args.defw_major == 1
-					   else 'not applicable'),
+			'fallback_check': 'not applicable',
 		},
 		'environment': environment(args, config),
 		'latency': common.latency_summary(ok_durations),
@@ -721,22 +713,14 @@ def build_report(args, config, results, service, go_unix_ns, end_unix_ns):
 			'service_id': results[0].get('service_id'),
 		})
 		report['qpm'] = qpm_summary(args, results)
-	report['wire'] = wire_summary(args, config, results, total_calls,
-				      go_unix_ns, end_unix_ns)
+	report['wire'] = wire_summary(config, total_calls, go_unix_ns,
+				      end_unix_ns)
 	return report
 
 
-def wire_summary(args, config, results, total_calls, go_unix_ns,
-		 end_unix_ns):
-	"""Wire bytes per call, or per job. On v2 every client's calls are
-	libdefw2's spans in the run's trace. v1 records none, so QFw's client
-	counts its own messages there."""
-	if args.defw_major == 1:
-		counts = {}
-		for result in results:
-			common.add_counts(counts, result.get('wire') or {})
-		return common.wire_summary(counts, total_calls,
-					   'client message counts')
+def wire_summary(config, total_calls, go_unix_ns, end_unix_ns):
+	"""Wire bytes per call, or per job. Every client's calls are
+	libdefw2's spans in the run's trace."""
 	if not config['spans']:
 		return None
 	counts = common.run_wire_bytes(
@@ -890,10 +874,7 @@ def main(argv):
 	args.defw_major = 2
 	directory = args.directory
 	if args.qpm and args.qfw_run_dir:
-		qfw_run = read_qfw_run(args.qfw_run_dir)
-		directory = directory or qfw_run['directory']
-		if args.client == 'qfw':
-			args.defw_major = qfw_run['defw_major']
+		directory = directory or read_qfw_run(args.qfw_run_dir)
 	needed = []
 	if args.client == 'c':
 		needed.append('defw2-bench')

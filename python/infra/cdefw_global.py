@@ -1,9 +1,11 @@
-"""v1's cdefw_global, the C runtime's globals, on DEFw v2.
+"""A process's DEFw globals: where it keeps temporary files, its node name
+and the DEFw path.
 
-v1's is a SWIG module over its C library. What v1's Python reads from it
-is where the process keeps temporary files, its node name and the DEFw
-path, which here come from the same environment v1 read them from. A
-setter keeps what it is given, so reading it back gives the same value.
+DEFw v1 kept these in its C library and read them through a SWIG module of
+this name. DEFw's Python still reads them here, in a defw2-python process
+and in plain Python alike, and they come from the environment v1 read them
+from. A setter keeps what it is given, so reading it back gives the same
+value.
 """
 
 import os
@@ -23,8 +25,8 @@ def get_defw_tmp_dir():
 
 	v1 kept them under /tmp in a directory named for the agent, and
 	named an agent with no DEFW_AGENT_NAME defw_python_ and eight hex
-	digits, so two processes never shared a directory. Here an
-	unnamed agent goes by its host's name, which every process on the
+	digits, so two processes never shared a directory. An unnamed
+	agent now goes by its host's name, which every process on the
 	host shares. The first user to run a client would own that
 	directory, and the next user's client could not write its log
 	there. So an unnamed agent gets a directory of its own, with v1's
@@ -64,5 +66,5 @@ def get_defw_initialized():
 
 def __getattr__(name):
 	raise AttributeError(
-		"defw2.compat's cdefw_global has no {}: v1's C runtime is not on "
-		'v2'.format(name))
+		'cdefw_global has no {}: DEFw v1\'s C runtime, which had it, is '
+		'gone'.format(name))

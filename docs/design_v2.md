@@ -1,6 +1,9 @@
 # DEFw v2 Design Proposal
 
-**Status:** draft
+**Status:** implemented. DEFw v2 replaced v1 in November 2026, and v1's
+runtime was removed from this repository. Its last commit is `8a3b94f`.
+This document is kept as the design's record, so it speaks of v1 and of
+the two versions side by side as they were when it was written.
 **Owner:** Doug Oucharek
 **Date:** 4 September 2026
 

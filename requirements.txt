@@ -1,5 +1,3 @@
+cffi
 pyyaml
-netifaces
-psutil
 paramiko
-rich

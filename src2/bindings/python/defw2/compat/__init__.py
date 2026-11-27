@@ -11,16 +11,17 @@ v2 without an edit:
 
 The v1 names come from three places.
 
-- cdefw_global, defw, defw_app_util, defw_remote and defw_workers are
-  compat's own, in _v1. They are v1's runtime: the process (defw.me), the
-  directory (defw.dirsvc), remote objects (defw.connect_to_binding and
+- defw, defw_app_util, defw_remote and defw_workers are compat's own, in
+  _v1. They are v1's runtime: the process (defw.me), the directory
+  (defw.dirsvc), remote objects (defw.connect_to_binding and
   defw_remote.BaseRemote) and peer events. Each says what it is on v2.
-- api_events, defw_cmd, defw_common_def, defw_event_baseapi,
-  defw_exception, defw_trace, defw_util and svc_launcher are v1's own
-  modules, loaded unchanged from the v1 tree, because none of them touches
-  the v1 runtime. A v1 exception raised here is v1's own class.
-- Every other v1 module name fails to import, with an error that says so,
-  rather than loading v1's runtime beside v2's.
+- api_events, cdefw_global, defw_cmd, defw_common_def,
+  defw_event_baseapi, defw_exception, defw_trace, defw_util and
+  svc_launcher are v1's own modules, loaded unchanged from DEFw's python
+  tree, because none of them touches a runtime. A v1 exception raised
+  here is v1's own class.
+- Every other v1 module name fails to import, with an error that says so.
+  Those modules were v1's runtime, which is gone.
 
 A remote QPM's fifteen typed methods go over the typed QPM APIs. Any
 other remote method fails, naming the method, until v2 types it. Every
@@ -36,20 +37,28 @@ import logging
 import os
 import sys
 
-__all__ = ['install', 'installed', 'v1_root', 'SHIMS', 'V1_OWN']
+__all__ = ['install', 'installed', 'v1_root', 'SHIMS', 'V1_OWN', 'V1_GONE']
 
 log = logging.getLogger('defw2.compat')
 
 # v1 names compat provides itself.
-SHIMS = ('cdefw_global', 'defw', 'defw_app_util', 'defw_remote',
-	 'defw_workers')
+SHIMS = ('defw', 'defw_app_util', 'defw_remote', 'defw_workers')
 
-# v1 modules loaded unchanged from the v1 tree.
-V1_OWN = ('api_events', 'defw_cmd', 'defw_common_def', 'defw_event_baseapi',
-	  'defw_exception', 'defw_trace', 'defw_util', 'svc_launcher')
+# v1 modules loaded unchanged from DEFw's python tree.
+V1_OWN = ('api_events', 'cdefw_global', 'defw_cmd', 'defw_common_def',
+	  'defw_event_baseapi', 'defw_exception', 'defw_trace', 'defw_util',
+	  'svc_launcher')
 
-# Where v1 keeps its Python, under its root, and the paths v1's launcher
-# added from the environment, as v1's setup_paths did.
+# v1 modules that went with v1's runtime. Importing one fails with an
+# error that says so, where a missing module would only say it is missing.
+V1_GONE = ('api_dirsvc', 'api_launcher', 'api_test_counter',
+	   'api_test_echo', 'defw_agent', 'defw_agent_baseapi',
+	   'defw_attachments', 'defw_directory', 'defw_peers',
+	   'defw_telnet_sr', 'defw_telnetservlib', 'defw_venv', 'svc_dirsvc',
+	   'svc_test_counter', 'svc_test_echo')
+
+# Where DEFw keeps that Python, under its root, and the paths v1's
+# launcher added from the environment, as v1's setup_paths did.
 _V1_DIRS = ('infra', 'service-apis', 'services')
 _EXTERNAL_PATHS = ('DEFW_EXTERNAL_SERVICE_APIS_PATH',
 		   'DEFW_EXTERNAL_SERVICES_PATH',
@@ -60,7 +69,7 @@ _finder = None
 
 
 def v1_root():
-	"""v1's Python tree: $DEFW_PATH/python, or this source tree's."""
+	"""DEFw's python tree: $DEFW_PATH/python, or this source tree's."""
 	candidates = []
 	if os.environ.get('DEFW_PATH'):
 		candidates.append(os.path.join(os.environ['DEFW_PATH'], 'python'))
@@ -102,10 +111,8 @@ def _v1_names(root):
 
 
 class _Finder(importlib.abc.MetaPathFinder):
-	"""Answers for the v1 module names, ahead of everything on sys.path.
-
-	It has to come first: QFw's environment puts v1's infra directory on
-	PYTHONPATH, where v1's defw would start v1's runtime.
+	"""Answers for the v1 module names, ahead of everything on sys.path,
+	so that its answers win over anything else of the same name.
 	"""
 
 	def __init__(self, root):
@@ -129,8 +136,8 @@ class _Finder(importlib.abc.MetaPathFinder):
 				name, filename,
 				submodule_search_locations=(
 					[package] if package else None))
-		if name in self.v1_names or name.startswith('cdefw') or \
-		   name.startswith('_cdefw'):
+		if name in self.v1_names or name in V1_GONE or \
+		   name.startswith('cdefw') or name.startswith('_cdefw'):
 			if name not in self.refused:
 				self.refused.add(name)
 				log.warning('refused v1 module %s, which has no '
@@ -158,7 +165,7 @@ def install(root=None):
 	root = root or v1_root()
 	if root is None:
 		raise RuntimeError(
-			'defw2.compat needs the v1 Python tree; set DEFW_PATH to '
+			"defw2.compat needs DEFw's python tree; set DEFW_PATH to "
 			'the DEFw installation')
 	for variable in _EXTERNAL_PATHS:
 		paths = [p for p in os.environ.get(variable, '').split(':') if p]

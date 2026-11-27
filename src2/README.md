@@ -1,8 +1,8 @@
-# DEFw v2 prototype
+# DEFw v2
 
-v2 is built on Mercury and Margo and lives here, beside v1 in `src/`, which
-it does not touch. `docs/design_v2.md` is the design. This directory is the
-prototype that the go or no-go decision is made on.
+DEFw v2 is built on Mercury and Margo and lives here. `docs/design_v2.md`
+is the design. It began as a prototype beside v1, which has since been
+removed.
 
 What exists so far is the runtime core, the typed RPC tier, the telemetry,
 the directory and the Python binding: configuration from the environment,
@@ -13,12 +13,9 @@ directory service with its client, agent and binding cache, the QPM's
 control, admission and execution APIs typed in C, the document tier that
 carries every method v2 has not typed, events, the spans and histograms the
 comparison reads, a `defw2` Python package that calls and serves all of it,
-and the benchmarks that measure the lot against v1.
+and the benchmarks that measured the lot against v1.
 
 ## Building
-
-The build is off by default, so every existing DEFw build and CI job is
-unchanged until it is asked for.
 
 In the QFw-SLURM-Cluster image, from the repository root:
 
@@ -26,18 +23,14 @@ In the QFw-SLURM-Cluster image, from the repository root:
 export PKG_CONFIG_PATH=/opt/qfw/mochi/lib/pkgconfig:/opt/qfw/libfabric/lib/pkgconfig
 export LD_LIBRARY_PATH=/opt/qfw/mochi/lib:/opt/qfw/libfabric/lib
 
-cmake -S . -B build -DDEFW_BUILD_V2=ON \
+cmake -S . -B build \
 	-DPython3_EXECUTABLE=/workspace/qfw-container-base/qfw-venv/bin/python
-cmake --build build -j "$(nproc)" --target defw2 defw2-echo defw2-dirsvc \
-	defw2-bench defw2-python defw2_runtime_smoke defw2_echo_smoke \
-	defw2_queue_smoke defw2_telemetry_smoke defw2_dir_store_smoke \
-	defw2_dir_rpc_smoke defw2_dir_agent_smoke defw2_dir_cache_smoke \
-	defw2_self_call_smoke defw2_qpm_smoke defw2_wire_smoke
-ctest --test-dir build -R defw2
+cmake --build build -j "$(nproc)"
+ctest --test-dir build
 ```
 
-That prints seventeen passing tests. Each line of it is doing something, so
-changing one of them tends to be how a build goes wrong:
+Every test passes. Two things in it are how a build goes wrong when they
+change:
 
 - **The paths are set by hand rather than with `module load`.** The image
   ships Mochi under `/opt/qfw/mochi` and libfabric under
@@ -46,14 +39,6 @@ changing one of them tends to be how a build goes wrong:
   pkg-config then cannot find Margo. Mercury, Margo and Argobots are found
   through pkg-config, so any of the image's copy, a Spack `mochi-margo`, or
   a local build works as long as `PKG_CONFIG_PATH` points at it.
-- **The targets are named.** `cmake --build build` with no target also
-  builds v1, which fails on a SWIG fixture that needs PyYAML, and the
-  system Python has none. Naming the targets keeps the v2 build independent
-  of the v1 tree's own dependencies.
-- **The test binaries are among them.** They are separate targets, so a
-  build of `defw2` and `defw2-echo` alone leaves `ctest` reporting every
-  test as Not Run, which reads like a broken build rather than a missing
-  target.
 - **The Python interpreter is named.** The binding needs cffi, the
   container's default `python3` has none, and a configure that does not
   find it says so once and then carries on without the binding. So the
@@ -111,7 +96,7 @@ comparison reads is `defw2-bench`, under `bench/`.
 | `event/` | Event sinks, publishers and `defw2.event.deliver`, the one RPC that carries every API's events. Each API supplies its own events' payload, so nothing here knows an event by name |
 | `bindings/python/` | The `defw2` package, built with cffi. See its own README |
 | `tests/` | C tests, which run over `na+sm`, so they need no network, and the Python checker that reads the OTLP files back |
-| `bench/` | The benchmarks, the v1 side of the comparison, and the line counter |
+| `bench/` | The benchmarks and the line counter |
 | `examples/` | `defw2-spank-flow`, the Slurm plugin's reserve and release in C |
 
 ## Calling and serving
@@ -216,7 +201,7 @@ defw2-spank-flow release <service_id> "$rid"
 It is 93 lines of code against the public headers alone, which is the C
 caller experience the design asks for, under one hundred.
 `defw2_spank_flow_check` runs it against the Python fake QPM and counts its
-lines as `bench/defw_loc.py` counts DEFw's.
+lines with `bench/defw_loc.py`.
 
 ## Documents
 
@@ -478,9 +463,10 @@ section. The names v2 adds:
 | `DEFW2_COMPAT_DIRSVC_CHECK_MS` | 2000 | How often `defw2.compat` asks the directory which runtime it is, while v1 code listens for its peer events |
 | `DEFW2_COMPAT_DIRSVC_TIMEOUT_MS` | 2000 | How long the directory has to answer each of those questions. Over `ofi+tcp` a call to a directory that has stopped fails only when its time is up, so this decides how soon one is lost |
 
-`defw2-python` finds the v1 tree it reuses at `DEFW_PATH`, as v1's launcher
-did. It also reads the v1 names that still mean something: `DEFW_AGENT_NAME`,
-`DEFW_AGENT_TYPE` (`service` and `dirsvc` are servers), `DEFW_LOG_DIR`,
+`defw2-python` finds the `python/` tree it loads v1's modules from at
+`DEFW_PATH`, as v1's launcher did. It also reads the v1 names that still
+mean something: `DEFW_AGENT_NAME`, `DEFW_AGENT_TYPE` (`service` and
+`dirsvc` are servers), `DEFW_LOG_DIR`,
 `DEFW_LOG_LEVEL` (`error`, `warning`, `message`, `debug`, `all`),
 `DEFW_LISTEN_PORT` for `ofi+tcp`, and `DEFW_DISABLE_DIRSVC`.
 `DEFW_EXTERNAL_SERVICE_APIS_PATH` names where v1 API modules are, as it did
