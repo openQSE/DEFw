@@ -22,9 +22,9 @@ either way, which is the point of writing the headers for bindings.
   build error rather than a crash.
 - **It says what the binding depends on.** The `cdef` block is the whole
   contract between Python and `libdefw2`, in one readable page.
-- **v1's SWIG layer is what the prototype is trying to leave behind.** It
-  generates thousands of lines nobody reads, and it is the part of the v1
-  build that breaks first.
+- **v1's SWIG layer is what v2 set out to leave behind.** It generated
+  thousands of lines nobody read, and it was the part of the v1 build
+  that broke first.
 
 SWIG stays viable if the review prefers it. Nothing in `src2` except this
 directory would change.
@@ -35,7 +35,7 @@ The build is automatic when cffi is present and skipped when it is not, so
 a C-only build needs no Python at all.
 
 ```bash
-cmake -S . -B build -DDEFW_BUILD_V2=ON \
+cmake -S . -B build \
       -DPython3_EXECUTABLE=/opt/openqse/qfw-venv/bin/python3
 cmake --build build --target defw2-python
 PYTHONPATH=build/src2/python python3 -c "import defw2; print(defw2.version())"
@@ -282,12 +282,14 @@ defw2-python --serve svc_fake_iqm_qpm           # a v1 QPM service module
 ```
 
 Before anything else loads, it makes the v1 module names importable.
-`cdefw_global`, `defw`, `defw_app_util`, `defw_remote` and `defw_workers`
-are compat's own, because they were v1's runtime. `api_events`, `defw_cmd`,
+`defw`, `defw_app_util`, `defw_remote` and `defw_workers` are compat's own,
+because they were v1's runtime. `api_events`, `defw_cmd`,
 `defw_common_def`, `defw_event_baseapi`, `defw_exception`, `defw_trace`,
 `defw_util` and `svc_launcher` are v1's own files, loaded unchanged from the
-v1 tree that `DEFW_PATH` names. Any other v1 name fails to import with an
-error that says it has no v2 counterpart.
+`python/` tree that `DEFW_PATH` names. `cdefw_global` is loaded from there
+too. v1 kept those globals in its C library, and the file holds them in
+Python, so plain Python can import the modules that read them. Any other
+v1 name fails to import with an error that says it has no v2 counterpart.
 
 A v1 client's API classes come from the directories
 `DEFW_EXTERNAL_SERVICE_APIS_PATH` names, as they did on v1, and
@@ -334,7 +336,7 @@ then, to give v1 code the peer events it follows a restart by.
 | `defw2/compat/_events.py` | v1's events: the process's sink, the sweep that recovers a lost completion, and the directory watch behind peer events |
 | `defw2/compat/_directory.py` | `defw.dirsvc`: v1 registration and resolution over the v2 directory |
 | `defw2/compat/_serve.py`, `__main__.py` | `defw2-python` and its `--serve` |
-| `defw2/compat/_v1/` | The five v1 modules compat provides itself |
+| `defw2/compat/_v1/` | The four v1 modules compat provides itself |
 | `defw2-python.in` | The launcher, configured beside the built package and for the install |
 
 `src2/tests/defw2_python_smoke.py` exercises echo and the host, including

@@ -1,5 +1,9 @@
 # DEFw v2 Comparison Report
 
+v1's runtime has since been removed from this repository, and with it the
+v1 harness under `src2/bench/v1/` and the campaign script this report
+names. They are in the repository's history, at `8a3b94f`.
+
 This report closes Phase 3 of the DEFw v2 prototype. It evaluates the
 success criteria in [the design](design_v2.md#success-criteria) against a
 campaign that ran every workload on both versions, from one build, on

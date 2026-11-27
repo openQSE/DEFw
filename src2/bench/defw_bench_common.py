@@ -1,10 +1,9 @@
 """
-Shared pieces of the DEFw benchmark harnesses.
+Shared pieces of the DEFw benchmark harness.
 
-The v1 harness under v1/ measures DEFw v1 through its Python runtime. The
-DEFw v2 harnesses will use the same workload table, statistics and output
-format, so a v1 run and a v2 run can be compared directly. Nothing in this
-module imports DEFw, so it loads the same way in either runtime.
+The workload table, the statistics and the output format are the ones the
+DEFw v1 harness used too, so a report kept from a v1 run and a v2 run can
+be compared directly. Nothing in this module imports DEFw.
 
 Output follows the file profile of the QFw benchmarking design
 (docs/design/benchmarking.md in openQSE/QFw): OTLP/JSON, one export request
@@ -21,12 +20,8 @@ import platform
 import re
 import socket
 import subprocess
-import threading
 
 MIB = 1024 * 1024
-
-CONFIG_ENV = 'DEFW_BENCH_CONFIG'
-CLIENT_INDEX_ENV = 'DEFW_BENCH_CLIENT_INDEX'
 
 # Workload defaults, from the Workloads table in docs/design_v2.md. W3's
 # call count depends on its payload size, see default_calls().
@@ -48,11 +43,6 @@ WORKLOADS = {
 	'W6': {'payload_bytes': 16 * MIB, 'calls': 20, 'warmup': 2,
 	       'qpm': True, 'qubits': 20, 'shots': 1024, 'statevector': True},
 }
-
-# What the v1 harness measures, against DEFw's own echo service and
-# directory. W5 and W6 run QPM jobs through QFw instead, see the v2 launcher.
-V1_WORKLOADS = sorted(name for name, workload in WORKLOADS.items()
-		      if not workload.get('qpm'))
 
 # A W3 client moves about this much payload, within the call limits below,
 # so a 256 MiB run takes minutes rather than hours.
@@ -93,17 +83,6 @@ def format_size(nbytes):
 	return f'{nbytes} B'
 
 
-def transport_env(kind):
-	"""DEFw v1 environment for a transport named tcp or ofi+<provider>."""
-	if kind == 'tcp':
-		return {'DEFW_TRANSPORT': 'tcp'}
-	if kind.startswith('ofi+') and len(kind) > len('ofi+'):
-		return {'DEFW_TRANSPORT': 'ofi',
-			'DEFW_OFI_PROVIDER': kind[len('ofi+'):]}
-	raise ValueError(
-		f'unknown transport {kind!r}, expected tcp or ofi+<provider>')
-
-
 def build_payload(nbytes, kind):
 	"""A deterministic payload of nbytes, as bytes or as an ASCII str."""
 	if kind == 'bytes':
@@ -121,10 +100,6 @@ def build_payload(nbytes, kind):
 
 # Files one run uses to coordinate its processes and hand back results.
 
-def client_dir(run_dir, index):
-	return os.path.join(run_dir, f'client-{index}')
-
-
 def ready_path(run_dir, index):
 	return os.path.join(run_dir, 'control', f'ready-{index}')
 
@@ -135,11 +110,6 @@ def go_path(run_dir):
 
 def result_path(run_dir, index):
 	return os.path.join(run_dir, 'results', f'client-{index}.json')
-
-
-def load_config():
-	with open(os.environ[CONFIG_ENV], encoding='utf-8') as stream:
-		return json.load(stream)
 
 
 def write_json(path, value, indent=None):
@@ -184,81 +154,13 @@ def latency_summary(durations_ns):
 
 
 # Wire bytes per call count each message's body as the framework encoded
-# it: v1's YAML text and the NUL that ends it, and the message Mercury
-# encodes for v2, which carries v2's own header and trace context. Neither
-# version's fixed transport header is counted, 28 bytes a message for v1
-# and Mercury's own for v2, so what is compared is the two encodings. Both
+# it: the message Mercury encodes, which carries DEFw's own header and
+# trace context. Mercury's transport header is not counted. Both
 # directions count: the requests a client sends and their answers, and
 # the events a service sends it and its acknowledgements.
 
-def _message_bytes(text):
-	"""A v1 message's body: its text, and the NUL that ends it."""
-	return len(text.encode('utf-8')) + 1
-
-
-class V1Messages:
-	"""Counts the RPC messages a DEFw v1 process sends and receives.
-
-	Every v1 request leaves through defw_workers.defw_send_req, the C call
-	that sends its YAML text, and every answer through defw_send_rsp. The
-	C runtime hands each request and answer it receives to
-	defw_workers.put_request and put_response, looking them up by name for
-	every message. Wrapping the four sees every call, the events a service
-	sends included. Counting is off until start(), so a run counts only
-	its measured calls."""
-
-	def __init__(self, workers):
-		self.counting = False
-		self.lock = threading.Lock()
-		self.totals = {'rpcs': 0, 'request_bytes': 0, 'responses': 0,
-			       'response_bytes': 0}
-		send_req = workers.defw_send_req
-		send_rsp = workers.defw_send_rsp
-		put_req = workers.put_request
-		put_rsp = workers.put_response
-
-		def count(messages, nbytes, text):
-			if not self.counting:
-				return
-			size = _message_bytes(text)
-			with self.lock:
-				self.totals[messages] += 1
-				self.totals[nbytes] += size
-
-		def counted_send_req(remote_uuid, blk_uuid, msg):
-			count('rpcs', 'request_bytes', msg)
-			return send_req(remote_uuid, blk_uuid, msg)
-
-		def counted_send_rsp(remote_uuid, blk_uuid, msg):
-			count('responses', 'response_bytes', msg)
-			return send_rsp(remote_uuid, blk_uuid, msg)
-
-		def counted_put_req(msg, uuid):
-			count('rpcs', 'request_bytes', msg)
-			return put_req(msg, uuid)
-
-		def counted_put_rsp(msg, uuid):
-			count('responses', 'response_bytes', msg)
-			return put_rsp(msg, uuid)
-
-		workers.defw_send_req = counted_send_req
-		workers.defw_send_rsp = counted_send_rsp
-		workers.put_request = counted_put_req
-		workers.put_response = counted_put_rsp
-
-	def start(self):
-		self.counting = True
-
-	def stop(self):
-		self.counting = False
-
-	def counts(self):
-		with self.lock:
-			return dict(self.totals)
-
-
 def run_wire_bytes(otlp_dir, trace_id, start_ns, end_ns):
-	"""What a v2 run's clients sent and received, from the span files of
+	"""What a run's clients sent and received, from the span files of
 	the client processes, whose names the launcher gives them: each
 	client span of the run's trace, which counts one call's request and
 	answer, and each span a client served while the run was measured,
@@ -319,12 +221,6 @@ def wire_summary(counts, calls, source):
 		'bytes_per_call': (counts['request_bytes'] +
 				   counts['response_bytes']) / calls,
 	}
-
-
-def add_counts(total, counts):
-	for key, value in counts.items():
-		total[key] = total.get(key, 0) + value
-	return total
 
 
 # Where a run's processes run, and with what memory.

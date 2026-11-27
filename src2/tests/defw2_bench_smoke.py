@@ -20,7 +20,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BENCH = os.path.join(os.path.dirname(HERE), 'bench')
@@ -45,27 +44,6 @@ def pieces():
 	check('CPU lists read and print as Linux lists them',
 	      common.cpu_set('0-2,5') == {0, 1, 2, 5} and
 	      common.cpu_text({0, 1, 2, 5, 7, 8}) == '0-2,5,7-8')
-
-	# v1's four message paths, wrapped as a v1 client wraps them.
-	sent = []
-	workers = types.SimpleNamespace(
-		defw_send_req=lambda *a: sent.append('req') or 0,
-		defw_send_rsp=lambda *a: sent.append('rsp') or 0,
-		put_request=lambda *a: sent.append('in-req'),
-		put_response=lambda *a: sent.append('in-rsp'))
-	messages = common.V1Messages(workers)
-	workers.defw_send_req('peer', 'blk', 'before')
-	messages.start()
-	workers.defw_send_req('peer', 'blk', 'abc')
-	workers.put_response('de', 'uuid')
-	workers.put_request('fghi', 'uuid')
-	workers.defw_send_rsp('peer', 'blk', 'j')
-	messages.stop()
-	workers.put_response('after', 'uuid')
-	check('v1 counts both ways while counting, and only then',
-	      messages.counts() == {'rpcs': 2, 'request_bytes': 4 + 5,
-				    'responses': 2, 'response_bytes': 3 + 2} and
-	      len(sent) == 6)
 
 
 def launch(args, out, *argv):
