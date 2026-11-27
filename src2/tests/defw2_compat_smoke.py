@@ -247,10 +247,19 @@ def address_checks():
 def log_directory_checks():
 	"""Where a compat process keeps its log, by what its environment
 	gives it."""
+	import importlib.util
 	import shutil
 	import socket
 	import tempfile
-	from defw2.compat._v1 import cdefw_global
+
+	# A copy of its own, so the checks leave this process's globals alone.
+	defw_root = os.environ.get('DEFW_PATH') or os.path.normpath(
+		os.path.join(HERE, '..', '..'))
+	spec = importlib.util.spec_from_file_location(
+		'cdefw_global_checked', os.path.join(
+			defw_root, 'python', 'infra', 'cdefw_global.py'))
+	cdefw_global = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cdefw_global)
 
 	names = ('DEFW_LOG_DIR', 'DEFW_AGENT_NAME')
 	saved = {name: os.environ.get(name) for name in names}

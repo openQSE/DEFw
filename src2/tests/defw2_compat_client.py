@@ -110,8 +110,10 @@ def resolve(dirsvc, **filters):
 
 
 def v1_directory():
-	path = os.path.join(os.environ['DEFW_PATH'], 'python', 'infra',
-			    'defw_directory.py')
+	# v1's directory, kept beside this test as the reference it compares
+	# v2's directory with.
+	path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+			    'compat', 'v1_directory.py')
 	spec = importlib.util.spec_from_file_location('v1_directory', path)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)

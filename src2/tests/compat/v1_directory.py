@@ -1,3 +1,11 @@
+"""DEFw v1's directory, kept as a reference.
+
+It was python/infra/defw_directory.py, the store behind v1's directory
+service. Nothing runs it any more. defw2_compat_client.py loads it to
+compare what v2's directory answers with what v1's answered, call for
+call.
+"""
+
 import logging
 import threading
 import time

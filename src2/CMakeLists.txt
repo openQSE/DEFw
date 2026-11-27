@@ -1,5 +1,5 @@
-# DEFw v2 prototype. Built only when DEFW_BUILD_V2 is ON, so every existing
-# build and CI job stays exactly as it was.
+# DEFw v2: the runtime, its directory service, the typed QPM APIs and the
+# Python binding.
 #
 # Mercury, Margo and Argobots come from pkg-config, which finds either a
 # source build such as the QFw-SLURM-Cluster image's /opt/qfw/mochi or a
@@ -8,6 +8,8 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MARGO REQUIRED IMPORTED_TARGET margo)
 pkg_check_modules(ARGOBOTS REQUIRED IMPORTED_TARGET argobots>=1.2)
+find_package(Threads REQUIRED)
+find_library(UUID_LIBRARY uuid REQUIRED)
 
 message(STATUS "DEFw v2: margo ${MARGO_VERSION}, argobots ${ARGOBOTS_VERSION}")
 
@@ -369,13 +371,10 @@ if(BUILD_TESTING)
 			PROPERTIES
 				FIXTURES_REQUIRED defw2_event_otlp_files)
 
-		# The line counter the comparison's line-count criterion
-		# rests on, and both versions counted with it, so a new
-		# source file that belongs to no area fails here.
+		# The line counter that defw2_spank_flow_check counts with.
 		add_test(NAME defw2_loc_check
 			COMMAND "${Python3_EXECUTABLE}"
-				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_loc_check.py"
-				"${CMAKE_CURRENT_SOURCE_DIR}/..")
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/defw2_loc_check.py")
 	else()
 		message(STATUS "DEFw v2: no python3, skipping defw2_otlp_check")
 	endif()
