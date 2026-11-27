@@ -81,6 +81,9 @@ Slurm plugin calling DEFw directly in C and the gateway daemon being deleted.
 - [Risks and Open Questions](#risks-and-open-questions)
 - [Phased Plan](#phased-plan)
 - [Success Criteria](#success-criteria)
+- [Phase 0 Results](#phase-0-results)
+- [Phase 2 Results](#phase-2-results)
+- [Phase 3 Results](#phase-3-results)
 - [Appendix A: DEFw v1 Inventory](#appendix-a-defw-v1-inventory)
 - [Appendix B: Dependencies and Licenses](#appendix-b-dependencies-and-licenses)
 - [Appendix C: References](#appendix-c-references)
@@ -249,8 +252,8 @@ every Mochi data service use the same stack.
 - **Typed Python conversion is not free.** Whatever binding is used, matching
   the encoded structures on both sides is DEFw's work. It is the same work the
   C-centric requirements assign to a generated Python adapter.
-- **Dependencies.** Mercury, Argobots, json-c and libfabric, plus a CBOR
-  library for the document tier. All are packaged in Spack. The container
+- **Dependencies.** Mercury, Argobots, json-c and libfabric. The document
+  tier is JSON, so it adds none. All are packaged in Spack. The container
   builds them from source the way it already builds libfabric.
 - **One network plugin per Margo instance.** A process talks to every peer
   through the plugin its address string names. A deployment therefore picks
@@ -362,7 +365,7 @@ exist in C, once. The table applies that rule to v1's Python infrastructure.
 | `defw_peers` | Peer table driven by C lifecycle events | Binding cache inside the directory client | Peer liveness collapses into binding validity. |
 | `defw_agent.Endpoint`, `defw.Myself` | Endpoint identity, local host facts | `defw2_identity_t` and the record's endpoint block | Address is a Margo address string. |
 | `defw_attachments` | Transparent large-buffer detection, base64 inline, RMA descriptors | Bulk handles inside typed structs, tensor descriptors | Mercury owns eager versus bulk. |
-| `api_events`, `defw_event_baseapi` | Server-to-client events over `PY_EVENT` | Event sinks and reverse RPC in C | See [Events and Completion Notification](#events-and-completion-notification). |
+| `api_events`, `defw_event_baseapi` | Server-to-client events, each a blocking remote call to a `BaseEventAPI` object in the client. v1's `PY_EVENT` message type is never sent | Event sinks and a publisher in C | See [Events and Completion Notification](#events-and-completion-notification). |
 | `defw.configure_defw`, YAML role configs | Configuration from YAML and `DEFW_*` environment | C configuration reader for the same environment names plus a Margo JSON file | QFw's launcher contract is preserved. See [Configuration and Deployment](#configuration-and-deployment). |
 | `defw_exception` | Error classes | `defw2_status_t` with categories | Structured errors cross the wire as codes and text. |
 | `defw_common_def` registries | Class and singleton registries | Not needed | Providers are singletons by construction. |
@@ -390,7 +393,7 @@ DEFw/
       defw2_types.h         shared wire types, status categories, header
       defw2_dir.h           directory client: resolve, register, heartbeat
       defw2_rpc.h           typed RPC declarations per API
-      defw2_doc.h           document tier: CBOR call
+      defw2_doc.h           document tier: JSON call and serve
       defw2_bulk.h          bulk and tensor descriptors
       defw2_event.h         event sinks and delivery
       defw2_service.h       service host: providers, handler queue
@@ -405,9 +408,11 @@ DEFw/
     host/                   defw2-host and the C plugin ABI
     services/
       echo/                 reference C service used by the benchmarks
-      qpm_adapter/          typed QPM hot path over a Python or C QPM
+    qpm/                    the typed QPM APIs
     bindings/python/
       defw2/                Python package
+      defw2/compat/         v1 names on v2, and the v1 QPM adapter
+      defw2-python          the launcher for v1 code
       cffi_build.py         binding build
     bench/                  defw2-bench client and service
     tests/                  C contract tests and Python binding tests
@@ -542,6 +547,11 @@ the Margo provider identifier that serves it. A client resolves a binding,
 looks up the address, and forwards typed RPCs to that provider. Clients never
 learn which language implements the service.
 
+A record also carries a `properties` map that the service fills in. The
+directory stores and returns it without defining the names or the values, as
+`openQSE/DEFw` #20 left v1. Anything a service wants callers to see lives
+there, and adding one needs no DEFw release.
+
 ### Operations
 
 | RPC | Caller | Behaviour |
@@ -549,10 +559,12 @@ learn which language implements the service.
 | `register_service` | A service at startup | Validates the record, rejects a live conflicting runtime for the same `service_id`, assigns or increments the generation, marks the record `UP`, returns the generation. |
 | `heartbeat` | A service, on a Margo timer | Refreshes `last_heartbeat`. Carries `service_id`, `runtime_id` and generation so a stale process cannot refresh a newer record. |
 | `deregister_service` | A service at shutdown | Marks `DEREGISTERED`, clears the address, sets the retention deadline. |
-| `resolve_services` | Clients | Filters by `service_type`, selector name or resource, `binding_name` and API version. Returns records with the selected binding. Omits `DOWN`, `TIMED_OUT` and `DEREGISTERED` records. |
+| `resolve_services` | Clients | Filters by `service_type`, selector name or resource, `binding_name`, API version, and properties. A property filter matches on equality by default. A caller that needs a bitmask match, which v1 hard-codes for `qpm_type` and `qpm_capabilities`, names those properties in the request, so the directory keeps no vocabulary of its own. Returns records with the selected binding. Omits `DOWN`, `TIMED_OUT` and `DEREGISTERED` records. |
 | `query_directory` | Operators | Everything, including inactive records until retention expires. |
 | `get_generation` | Clients and services | Current generation for a `service_id`. |
-| `subscribe` | Clients, optional | Registers an event sink for record changes so cached bindings can be invalidated without polling. |
+| `subscribe` | Clients, optional | Registers an event sink for record changes, so a client hears of a restarted service without polling. The directory sends `SERVICE_CONNECTED` when a matching record becomes `UP` and `SERVICE_DISCONNECTED` when it stops being `UP`, each with its reason and the record, in the order it records them. Narrows by `service_id` and `service_type`. Lasts until `unsubscribe` or until a delivery to the sink fails. |
+| `unsubscribe` | Clients | Ends a subscription. |
+| `get_runtime_id` | Clients that subscribe | The directory's own runtime ID, which is new each time it starts and is every directory event's source. A client that asks now and then sees a restart, after which its subscriptions are gone. |
 
 ### Liveness
 
@@ -619,7 +631,7 @@ structures. This tier is for stable, high-rate or latency-sensitive methods,
 and it is the tier C callers use.
 
 **Document tier.** A method is carried by one generic RPC whose payload is a
-CBOR document. This tier is for methods that are still changing, that return
+JSON document. This tier is for methods that are still changing, that return
 provider-shaped nested data, or that belong to a Python service that has not
 been typed yet. It is what keeps the long tail of QFw's API off the schema
 treadmill, and it is the v2 form of the dynamic path that requirement CAPI-007
@@ -635,7 +647,7 @@ flowchart TB
     Call["Caller invokes a method"]
     Tier{"Is the method<br/>typed?"}
     Typed["Typed stub encodes the<br/>declared request structure"]
-    Doc["Document tier encodes<br/>a CBOR payload"]
+    Doc["Document tier sends<br/>a JSON document"]
     Fwd["Fill the DEFw header,<br/>forward with a timeout"]
     Size{"Payload<br/>large?"}
     Eager["Eager: the payload rides<br/>inside the message"]
@@ -693,48 +705,89 @@ form `defw2.<api>.<method>`. The prototype types the hot path.
 
 | API | Methods typed in the prototype |
 | --- | --- |
-| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe` |
+| `qfw.dir` | `register_service`, `heartbeat`, `deregister_service`, `resolve_services`, `query_directory`, `get_generation`, `subscribe`, `unsubscribe`, `get_runtime_id` |
 | `qfw.qpm.control` | `is_ready`, `get_service_status` |
 | `qfw.qpm.admission` | `reserve`, `renew`, `release`, `cancel`, `get_reservation` |
-| `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit` |
+| `qfw.qpm.execution` | `async_run`, `sync_run`, `read_cq`, `peek_cq`, `task_status`, `cancel_task`, `delete_circuit`, `register_event_notification` |
 | `qfw.echo` | `echo`, `echo_bulk`, used by the benchmarks |
 
-The execution request shows the shape.
+The execution request shows the shape. The public structures are plain C
+and the stubs take them whole, so a caller never sees Mercury. The wire
+structures that mirror them live inside `libdefw2`.
 
 ```c
-MERCURY_GEN_PROC(defw2_qpm_async_run_in_t,
-    ((defw2_hdr_t)(hdr))
-    ((hg_uint64_t)(reservation_id))
-    ((hg_const_string_t)(token))
-    ((hg_const_string_t)(qasm))
-    ((hg_uint32_t)(num_qubits))
-    ((hg_uint32_t)(num_shots))
-    ((hg_const_string_t)(compiler))
-    ((defw2_u32_list_t)(qubit_mapping))
-    ((hg_uint8_t)(return_statevector))
-    ((defw2_bulk_desc_t)(result_buffer)))
+typedef struct {
+    defw2_qpm_ctx_t      ctx;          /* reservation_id and token, every call */
+    defw2_qpm_circuit_t  circuit;      /* format, then OpenQASM text or QPY bytes */
+    uint32_t             num_qubits;
+    uint32_t             num_shots;
+    const char          *compiler;
+    bool                 return_statevector;
+    bool                 has_timeout;  /* a zero timeout is not "none" */
+    uint64_t             timeout_ms;
+    bool                 cancel_on_timeout;
+    const char          *extra;        /* JSON: the rest of v1's info dict */
+} defw2_qpm_run_req_t;
 
-MERCURY_GEN_PROC(defw2_qpm_async_run_out_t,
-    ((defw2_status_t)(status))
-    ((hg_uint64_t)(circuit_id))
-    ((hg_uint64_t)(queue_position)))
-```
+typedef struct {
+    const char     *outcome;           /* "ACCEPTED", "INVALID_RESERVATION", ... */
+    const char     *lifecycle_state;
+    const char     *cid;               /* a UUID string in QFw */
+    uint64_t        qtask_id;
+    uint64_t        reservation_id;
+    const char     *reason, *message;
+    bool            completion_ready;
+    defw2_tensor_t  statevector;       /* described whether or not it arrived */
+    bool            statevector_delivered;
+    const char     *extra;             /* JSON: the rest of v1's answer */
+    void           *arena;
+} defw2_qpm_task_t;
 
-The client stub is a plain C function.
-
-```c
 defw2_rc_t defw2_qpm_async_run(defw2_binding_t *qpm,
-                               const defw2_qpm_async_run_in_t *in,
-                               defw2_qpm_async_run_out_t *out,
-                               uint32_t timeout_ms);
-void defw2_qpm_async_run_out_free(defw2_qpm_async_run_out_t *out);
+                               const defw2_qpm_run_req_t *req,
+                               const defw2_call_opts_t *opts,
+                               defw2_qpm_task_t *out, defw2_status_t *status);
+void defw2_qpm_task_free(defw2_qpm_task_t *task);
 ```
 
-Inside, the stub fills the header, creates a Margo handle for the binding's
-address and provider identifier, calls `margo_provider_forward_timed`, copies
-the output and records the profiling sample. A timeout cancels the request
-and returns the timeout category. Every out structure has a generated free
-function, which is the whole ownership rule for callers.
+Every answer has two layers. The typed fields are what a C caller branches
+on. `extra` is a JSON object carrying everything else the service said, so
+the provider-shaped parts of a QPM's answer, such as a result's counts and
+metadata or a reservation decision's estimates, travel without a schema per
+provider, and the compatibility layer can rebuild the exact dictionary a v1
+caller expects. Outcomes are data and failures are status: a task whose
+reservation does not match comes back as outcome `INVALID_RESERVATION` with
+a status of OK, as v1 callers expect, while a service that cannot answer at
+all fails the status. JSON rather than CBOR for `extra`, because json-c and
+Python's `json` are already present and nothing in C parses it.
+
+Building the QPM tier corrected three things in the first sketch of this
+section. A circuit is a format and bytes, because QFw sends QPY as well as
+OpenQASM. A circuit identifier is a string, because QFw's is a UUID.
+`qubit_mapping` travels in `extra`, because QFw's is a map from logical
+qubit to a physical qubit's name rather than a list of integers.
+
+Inside, every stub takes the same path: fill the header, create a Margo
+handle for the binding's address and provider identifier, call
+`margo_provider_forward_timed`, copy the answer into an arena the caller
+frees, and record the profiling sample. The provider side is one path too:
+decode, check the version, run the service, push any bulk result, check the
+answer fits the wire, encode, record. A method costs only its own
+conversions. A timeout cancels the request and returns the timeout category.
+Every answer has one free function, which is the whole ownership rule for
+callers.
+
+A stub makes its handle with the identifier the call goes out as, which has
+the provider in it. The runtime registers that identifier itself, under a
+lock of its own, before the first call to an RPC on a provider. Left to a
+Margo older than 0.24.4, it would be registered on the first forward, with
+nothing between Margo's check and its registration. Threads making that
+first call at once could all register it. Mercury then frees the first
+registration while a handle still uses it, and the reply is decoded through
+freed memory (`mochi-hpc/mochi-margo` issue #325). Margo 0.24.4 serializes
+that registration itself, and registering first keeps an older Margo safe.
+A process that already serves the API on that provider keeps the
+registration it has, with the service's handler.
 
 Requests and responses follow the constraints in the C-centric requirements:
 fixed-width scalars, counted arrays, strings with explicit lengths on the
@@ -746,24 +799,35 @@ a payload.
 ### Document tier
 
 ```c
-MERCURY_GEN_PROC(defw2_doc_call_in_t,
+MERCURY_GEN_PROC(defw2_doc_in_t,         /* defw2.<api>.document */
     ((defw2_hdr_t)(hdr))
-    ((hg_const_string_t)(api_id))
-    ((hg_const_string_t)(method))
-    ((defw2_bytes_t)(request)))      /* CBOR, inline or bulk above a threshold */
+    ((defw2_str_t)(method))
+    ((defw2_text_t)(document)))          /* a JSON object of named arguments */
 
-MERCURY_GEN_PROC(defw2_doc_call_out_t,
-    ((defw2_status_t)(status))
-    ((defw2_bytes_t)(response)))     /* CBOR */
+MERCURY_GEN_PROC(defw2_doc_out_t,
+    ((defw2_wire_status_t)(status))
+    ((defw2_text_t)(document)))          /* the JSON answer */
 ```
 
-CBOR is chosen over JSON because it is binary-safe, compact, has a small
-strict C decoder with no code execution on decode, and maps onto Python
-dictionaries with one library call. The C side uses tinycbor and the Python
-side uses cbor2. The document tier is how QFw's telemetry, policy
-configuration and scheduler control APIs run on day one, and how a Python
-service exposes any method that has no typed structure yet. A typed method
-can be added later without touching the document path.
+One RPC per API, `defw2.<api>.document`, is registered on the provider that
+serves the API's typed methods. So a document shares that provider's queue,
+header, version check, status and spans, and its span names the document's
+own method. A request is a JSON object of named arguments, and an answer is
+any JSON value. Both travel inside the message, so each is at most 4 MiB.
+
+JSON replaced the CBOR first proposed here, in Phase 3. Phase 2 chose JSON
+for `extra`, json-c and Python's `json` are already present, and C never
+parses a document, so to C it is only text. A method name must be an
+identifier that does not start with an underscore, because a Python service
+looks it up by name. The client refuses any other name before it sends, and
+the provider refuses it before the service sees it.
+
+The QPM has six APIs. Control, admission and execution have typed methods,
+and their other methods are documents. Admission policy, scheduler and
+telemetry are documents alone, each on a provider of its own, 6, 7 and 8, so
+a slow telemetry query never holds up control. That is how the 31 QPM
+methods v2 has not typed run. A method can be typed later without touching
+the document path.
 
 ### Object model
 
@@ -800,13 +864,18 @@ Mercury bulk transfers described by a small descriptor in the typed
 structure.
 
 ```c
-MERCURY_GEN_PROC(defw2_bulk_desc_t,
-    ((hg_uint8_t)(present))
-    ((hg_uint8_t)(dtype))          /* DEFW2_DTYPE_* : u8, i32, f64, c128, ... */
-    ((hg_uint8_t)(rank))
-    ((hg_uint64_t)(nbytes))
-    ((defw2_u64_list_t)(shape))
-    ((hg_bulk_t)(handle)))
+typedef struct {                   /* what a request lends */
+    hg_uint64_t  capacity;
+    hg_bulk_t    handle;           /* null when nothing is lent */
+} defw2_wire_result_t;
+
+typedef struct {                   /* what an answer describes */
+    hg_uint32_t  dtype;            /* DEFW2_DTYPE_* : u8, i32, f64, c128, ... */
+    hg_uint32_t  rank;             /* at most DEFW2_TENSOR_RANK_MAX */
+    hg_uint64_t  shape[DEFW2_TENSOR_RANK_MAX];
+    hg_uint64_t  nbytes;
+    hg_uint8_t   delivered;
+} defw2_wire_tensor_t;
 ```
 
 Two directions are supported.
@@ -818,13 +887,22 @@ Two directions are supported.
   parameter array costs no extra round trip and a 64 MiB statevector uses
   registered memory, with no threshold to tune in DEFw.
 - **Result payloads.** When the client knows the result size, as it does for
-  a statevector from `num_qubits`, it registers a writable buffer and passes
-  it in the request as `result_buffer`. The handler pushes the result into it
-  and the response carries only the descriptor metadata. When the size is
-  unknown, the response carries a server-owned bulk handle and the client
-  pulls, then calls `defw2.bulk.release` so the server can drop its
-  registration. This is the same shape as the phase 3 acknowledgement in v1,
-  implemented with library calls rather than a custom message type.
+  a statevector from `num_qubits`, it registers a writable buffer and lends it
+  with the call that collects the result: `read_cq`, `peek_cq` or
+  `sync_run`. The handler pushes the result into it and the answer carries
+  only the descriptor. The buffer is not lent with `async_run`, because the
+  result exists only once the task completes, after `async_run` has
+  returned, and the thread that sees a Python task complete cannot drive a
+  Margo transfer. A buffer that is missing or too small gets the size it
+  needs back, and `read_cq` leaves the completion queued for the retry, so
+  a caller that does not know the size asks once without a buffer and then
+  again with one.
+  When the size is unknown and the service cannot hold the result, the
+  response could carry a server-owned bulk handle for the client to pull,
+  followed by a `defw2.bulk.release` so the server can drop its
+  registration. That is the shape of the phase 3 acknowledgement in v1,
+  implemented with library calls rather than a custom message type. Nothing
+  needs it yet, so it is not built.
 
 The two result forms are worth seeing side by side, because they differ in who
 owns the memory and who releases it.
@@ -858,6 +936,21 @@ can hand back a NumPy array without copying, and so a C caller can validate
 `nbytes` against `shape` before trusting either. The registration cache and
 the provider-specific registration rules are Mercury's.
 
+**Server buffers.** A handler that pulls a payload needs a buffer of its own
+for it, and allocating one for each call costs more than the transfer at
+large sizes. glibc maps a block over 32 MiB afresh every time, so each call
+faults in and zeroes new pages and unmaps them after, and on Slingshot
+registering memory pins it. So each runtime keeps a pool of registered
+buffers and lends them to its handlers, through `defw2_bulk_get` and
+`defw2_bulk_put` in `src2/rpc/defw2_bulk_pool.h`. A buffer is the size asked
+for rounded up to a power of two, from 64 KiB. The pool holds at most
+`DEFW2_BULK_POOL_MIB`, lent or idle, 1024 MiB by default. It frees idle
+buffers to fit a new one, and makes a buffer it cannot fit for its one call
+alone. The echo service draws on it, and W3 moves 256 MiB 27% faster on
+`ofi+tcp` and 30% faster on shared memory than with a buffer allocated per
+call, about Mercury's own rate. The pool is internal for now, since only C
+handlers inside libdefw2 pull payloads into buffers of their own.
+
 ## Events and Completion Notification
 
 QFw's execution API prefers notification and keeps completion-queue reads as
@@ -865,35 +958,103 @@ the fallback. v2 supports both.
 
 **Pull.** `read_cq` and `peek_cq` are typed RPCs. They need nothing new.
 
-**Push.** A client that wants notifications creates an event sink, which
-registers a `defw2.event.deliver` handler on the client's own Margo instance
-and returns the sink's address and provider identifier. The client passes
-that pair in `register_event_notification`. The service forwards
-`defw2.event.deliver` to the sink when the event occurs. Delivery is
-at-most-once with a bounded timeout, and the completion queue remains the
-recovery path, which is exactly the QFw requirement.
+**Push.** A caller that wants notifications creates an event sink. A sink is
+a provider on the caller's own Margo instance, so the caller's runtime
+listens, and it serves one RPC, `defw2.event.deliver`. The caller passes the
+sink's address, its provider identifier and a tag of its own in
+`register_event_notification`. The service keeps its registrations and
+decides which events match them, as v1's QPM does, and sends each event
+through a publisher.
+
+`register_event_notification` is a typed QPM method. Its request carries
+the reservation and token every QPM call carries, the target, which is the
+sink's address and provider and the caller's tag, the caller's own type for
+the events, and `extra` for the rest, such as QFw's filters. It answers with
+a decision. The provider refuses a target with no address, or one on the
+directory's provider, before the service sees it. A registration lasts until
+a delivery to its sink fails, as v1's lasted until a `put` failed, so a
+caller ends one by destroying its sink. QFw has no call that ends one.
+
+A publisher copies the event and returns at once, so the service's own
+thread never waits on the network. It delivers from an execution stream it
+adds to Margo for itself: to every target at once, each target's events in
+order, and each delivery within a time limit. A sink acknowledges an event
+when it has queued it, before anything reads it, so a slow consumer costs
+only itself. A delivery that fails drops whatever waits for that target and
+fails the next publish to it, and the service drops the registration, as v1
+dropped one whose call failed. Delivery is at most once, and the completion
+queue remains the recovery path, which is the QFw requirement.
+
+v1 delivered events differently, and openQSE/QFw#64 records what it cost. A
+v1 service delivered an event by calling `put` on the client's event object,
+an ordinary remote method call that waited for the client's answer. It
+called each client in turn, and the event carried the whole completion,
+statevector included, as YAML text. For 20 qubits that is a 40 MiB message,
+so one client decoding it held up the events of every client behind it.
+v2's completion event carries the task record `read_cq` answers with, except
+that it describes the statevector rather than carrying it. A caller that
+wants the statevector lends `read_cq` or `peek_cq` a buffer of the size the
+description gives, which is the result path the typed API already has.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant App as Application
-    participant Lib as libdefw2 (client)
+    participant Sink as Sink in the application
     participant QPM as QPM service
+    participant Pub as Publisher in the QPM
 
-    App->>Lib: defw2_event_sink_create(callback)
-    Lib-->>App: sink address + provider_id
-    App->>QPM: register_event_notification(sink, evtype)
+    App->>Sink: defw2_event_sink_create, accept QPM events
+    App->>QPM: register_event_notification(sink, provider, tag)
     App->>QPM: async_run(...)
     QPM-->>App: circuit_id
-    Note over QPM: task completes
-    QPM->>Lib: defw2.event.deliver(circuit_id, outcome)
-    Lib->>App: callback on the delivery thread, or queued to Python
-    App->>QPM: read_cq(circuit_id) if the callback did not carry the result
+    Note over QPM: task completes and its completion is queued
+    QPM->>Pub: publish the completion, which returns at once
+    Pub->>Sink: defw2.event.deliver(task record)
+    Sink-->>Pub: queued
+    Sink->>App: callback on the sink's thread, or next for Python
+    App->>QPM: read_cq(circuit_id) with a buffer, for the statevector
 ```
 
-For a C caller the callback runs on a `libdefw2` delivery thread, never on a
-Margo handler thread, so the caller may block. For Python the event is queued
-to the binding's handler thread, as described next.
+One RPC carries every API's events. Its request is an envelope, which names
+the API and the event, followed by the payload as that API's own wire
+structure. A sink decodes only the kinds its owner accepted, and refuses any
+other before allocating anything for it, so a payload is as checked as any
+typed answer.
+
+**Directory events.** The directory publishes through the same mechanism.
+A caller subscribes a sink with `subscribe`, narrowed by `service_id` or
+`service_type` if it likes, and the directory sends it `SERVICE_CONNECTED`
+when a matching record becomes `UP`, by registering or by its heartbeat
+resuming, and `SERVICE_DISCONNECTED` when one stops being `UP`, by
+deregistering or timing out. Those are v1's names, and they are the event's
+type. Each event carries the reason and the record as the directory then
+holds it, so a client following a restarted QPM gets its new address and
+generation without resolving again. The store hands each change to the
+publisher under its own lock, so a subscriber hears of the changes in the
+order the directory made them. A subscription lasts until `unsubscribe` or
+until a delivery to its sink fails, and it lives in the directory's memory,
+so a restarted directory has none. Each event's source is the directory's
+runtime, which is how a subscriber notices a new directory and subscribes
+again.
+
+For a C caller the callback runs on the sink's own thread, never on a Margo
+handler thread, so the caller may block. A Python caller takes events with
+`EventSink.next`, or by iterating the sink, which wait in
+`defw2_event_sink_next` with the interpreter lock released, as a Python
+service takes calls from its queue. A Python service publishes with
+`EventPublisher.publish`, which raises `TargetGone` when the registration
+should go.
+
+`defw2.compat` gives v1 code these events unchanged, as the Python section
+describes. Every compat process listens and serves one sink. A v1 QPM keeps
+a client's registration as the event object it makes from the endpoint the
+client gave, which is that sink, and its `put` publishes the completion and
+returns at once. So QFw's QPM, which calls `put` on each client in turn,
+stops waiting on any of them without a line of it changing, which is the
+fix #64 asks for. Delivery is at most once, so a slow sweep of each
+client's own tasks peeks for any completion whose event never came, and the
+completion queue really is the fallback.
 
 ## Language Bindings
 
@@ -973,45 +1134,143 @@ locks.
 ```python
 import defw2
 
-rt = defw2.Runtime.from_environment()
-qpm = rt.resolve(service_type="qfw.qpm", resource="IQM-20q", binding="execution")
-job = qpm.async_run(qasm=qasm, num_qubits=5, num_shots=1024,
+rt = defw2.Runtime()
+record = defw2.Directory(rt).resolve(service_type="qfw.qpm",
+                                     resource="IQM-20q")[0]
+qpm = defw2.QPM.from_record(rt, record)
+job = qpm.async_run(qasm, num_qubits=5, num_shots=1024,
                     reservation_id=rid, token=token)
-result = qpm.read_cq(job.circuit_id, reservation_id=rid)
+result = qpm.read_cq(cid=job.cid, reservation_id=rid)
 ```
 
-Typed methods are bound one to one. Anything else on a binding goes through
-the document tier as a dictionary in and a dictionary out, which is how the
-telemetry surface works from day one.
+Typed methods are bound one to one, through the same C stubs a C caller
+uses. Anything else goes as a document, with `qpm.document(api, method,
+request)`: a dict of named arguments in, and the service's JSON out. A
+service answers documents through its handler's `document()`, and only
+there, so a caller cannot reach the handler's other methods by naming
+them. Any Python thread may call: the runtime keeps Margo's progress
+loop on its own execution stream, so a thread Argobots has never seen can
+wait on a reply, which the tests do with eight threads sharing one client.
 
 **Service API.**
 
 ```python
 class QPM:
-    api_bindings = {
-        "control":   defw2.api.QPM_CONTROL,
-        "execution": defw2.api.QPM_EXECUTION,
-        "telemetry": defw2.api.DOCUMENT,   # dict in, dict out
-    }
-    def is_ready(self, token=None): ...
-    def async_run(self, qasm, num_qubits, num_shots, reservation_id, **kw): ...
+    def is_ready(self, request): ...           # request.reservation_id, .token
+    def async_run(self, request): ...          # .circuit, .num_qubits, .extra
+        return {"outcome": "ACCEPTED", "cid": cid, "qtask_id": qtask}
 
-host = defw2.ServiceHost.from_environment(service_id="qpm-iqm-ornl",
-                                          service_type="qfw.qpm",
+host = defw2.ServiceHost.from_environment("qpm-iqm-ornl", "qfw.qpm",
+                                          apis=defw2.QPM_APIS,
                                           selector=selector)
 host.serve(QPM())
 ```
 
-The QPM service classes in QFw keep their method names and their dictionary
-results. The adapter in `src2/services/qpm_adapter` maps the typed
-structures onto those methods, so a v1 service becomes a v2 service by
-importing a different host and dropping the `BaseRemote` inheritance.
+Each API is served on its own provider with its own queue and workers, so a
+QPM answers `is_ready` while its execution queue is backed up. Measured with
+one execution worker and a 2.5 second backlog of `async_run` calls,
+`is_ready` answered in 1.6 ms at worst. A typed call reaches Python as the C
+request structure read into plain values, and the dictionary a method
+returns is written straight into the C answer, so nothing is encoded between
+the two languages.
 
-**Compatibility shim.** For the migration period the binding ships
-`defw2.compat.BaseRemote`, a proxy with the v1 constructor shape that routes
-known methods to typed stubs and unknown ones to the document tier. The
-Qiskit backend and the QFw resolver can move to v2 by changing the import
-that constructs the proxy.
+**Running v1 code on v2.** QFw's QPM services and its Qiskit backend are v1
+Python. They import `defw`, `defw_remote`, `api_events` and the rest, and the
+QPM classes answer v1 calls with dictionaries. They run on v2 unchanged,
+through `defw2.compat` and a launcher, `defw2-python`, which plays the part
+v1's `defw-python` did:
+
+```bash
+defw2-python script.py ARGS              # a v1 client, such as an application
+defw2-python --serve svc_fake_iqm_qpm    # a v1 QPM service module
+```
+
+The launcher makes the v1 module names importable before the script or the
+service module loads, from three places. Five are compat's own, because they
+are v1's runtime: `defw` (the process as `defw.me`, the directory as
+`defw.dirsvc`, and `connect_to_binding`), `defw_remote`, `defw_app_util`,
+`defw_workers` and `cdefw_global`. Eight are v1's own modules, loaded
+unchanged from the v1 tree, because none of them touches the v1 runtime:
+`api_events`, `defw_cmd`, `defw_common_def`, `defw_event_baseapi`,
+`defw_exception`, `defw_trace`, `defw_util` and `svc_launcher`. So a v1
+exception on v2 is v1's own class, and v1's logging works as it did. Every
+other v1 name fails to import, with an error that says so. It has to be
+refused rather than left to the path, because QFw's environment puts v1's
+`infra` directory on `PYTHONPATH`, where v1's `defw` would start the v1
+runtime.
+
+On the service side, `--serve` loads the module as v1 did, calls its
+`initialize()`, and serves its class through `QPMAdapter`, a `ServiceHost`
+handler that turns each typed call back into the v1 call, and the
+dictionary the v1 method returns into the typed answer. The module
+registers itself through `defw.dirsvc`, as QFw's QPMs do. On the calling
+side, `defw.connect_to_binding` returns QFw's own API classes, such as
+`QPMExecution`, built on compat's `BaseRemote`. The module and the class
+come from a directory record, so it imports the module only from the
+directories `DEFW_EXTERNAL_SERVICE_APIS_PATH` names, where QFw's API modules
+are, and makes only a `BaseRemote` from it. A call to one of the
+fifteen typed QPM methods goes over the typed APIs, with its arguments
+taken by the names the API class declares. Any other method goes as a
+document to the API of the binding the object was connected through, with
+the arguments the caller passed. `QPMAdapter` calls it on the v1 QPM only
+when the v1 API class for that API declares it.
+
+A v1 dictionary crosses the typed APIs unchanged. A value moves into a typed
+field only when the trip back gives the same value: a string that is not
+empty, an integer from 1 to 2^64 - 1, or True. An empty string, a zero, a
+False, a None or a float stays in `extra` under its own key. So a v1 caller
+gets back the dictionary the service returned, key for key, and a v2 caller
+still finds what it branches on in the typed fields. A circuit moves into
+the request's circuit bytes, so base64 QPY travels as its bytes. A
+statevector moves into the bulk result. Each leaves a stub where it was, so
+the far side puts it back in the same place and the same encoding. A
+base64+zlib statevector encoded again on the same zlib is the payload the
+service made, byte for byte. `read_cq` peeks first, so a completion whose
+statevector does not fit the buffer the caller lent stays queued for the
+retry the typed API promises, where v1's `read_cq` would have consumed it.
+
+A v1 exception fails the call with a status category, and the message names
+the class, so the caller gets the same class back: a DEFw exception or a
+Python built-in one by name, and any other class as `DEFwRemoteError`
+naming it. Each call carries the caller's trace context from v1's
+`defw_trace` hooks, and the adapter runs the v1 method inside it, through
+`defw2_call_traceparent`, so QFw's own spans stay in one trace across the
+hop, as they did on v1.
+
+v1's events are v2's. Every compat process listens, as every v1 process
+did, and binds its host's name unless its environment names an address, so
+a QPM on another node can reach it. A v1 client's
+`register_event_notification` registers the process's one sink with the
+QPM, under the caller's `class_id` as its tag and its event type as JSON,
+so the type reaches QFw's QPM as itself. A completion arrives as v1's
+`Event` on the caller's own queue. Its statevector is fetched from the
+completion queue first, since v1's event carried it, which leaves the
+completion queued, as v1's push did. A slow sweep, every five seconds by
+default, recovers a completion whose event was lost, and a completion that
+both find reaches the queue once. Directory events arrive the same way, as
+v1's dictionaries, with the v1 record when a service connects.
+
+Two things are emulated. v1 told a process when its link to the directory
+came and went, and QFw's lifecycle binding follows a restarted directory by
+those peer events. v2 has no links, so compat asks the directory for its
+runtime ID every two seconds while something listens, and makes
+`PEER_LOST` when it stops answering or is another runtime and `PEER_READY`
+when it answers again. Each question has two seconds to be answered,
+because over `ofi+tcp` a call to a process that has gone fails only when
+its time is up. And v1's directory records: registering keeps the
+v1 record's fields as JSON in a `v1_record` property, beside the typed
+selector and string properties a v2 client resolves by, and
+`resolve_services` rebuilds the v1 record from it and matches with v1's
+rules.
+
+The differences that remain are JSON's. A tuple arrives as a list, a key
+that is not a string arrives as a string, and a value JSON cannot carry
+fails the call rather than being dropped. `defw2_compat_smoke` serves a v1
+QPM written against v1 alone, calls it from a v1 client, and compares every
+answer and every exception with what a v1 caller got from the same calls,
+and every directory answer with v1's own directory code given the same
+record. QFw's fake IQM QPM, its reservation driver and
+`test_qiskit_simple.py` also ran this way, unmodified, outside Slurm.
 
 ### C++
 
@@ -1023,36 +1282,47 @@ the recommended path.
 ## Profiling and the v1 Comparison
 
 Profiling is a first-class component, built in phase 0 and switched on for
-every benchmark run. Its vocabulary is the QFw benchmarking design's, so the
-existing extractor produces the comparison reports.
+every benchmark run. Its vocabulary is the QFw benchmarking design's. QFw's
+extractor for that vocabulary, `qfw_bench_extract`, does not exist yet, so
+the comparison is made by `src2/bench/defw_bench_compare.py`, which joins
+the summary reports that the v1 and v2 harnesses both write.
 
 ### What is recorded
 
 | Source | Records | How enabled |
 | --- | --- | --- |
-| Margo profiling | Per-RPC count, elapsed time, call path dependency chain | `enable_profiling` in the Margo JSON, or `MARGO_ENABLE_PROFILING=1` |
-| Margo diagnostics | Progress loop and trigger statistics | `enable_diagnostics`, or `MARGO_ENABLE_DIAGNOSTICS=1` |
+| Margo monitor | Per-RPC count, elapsed time and the calling RPC, one `stats.json` per process beside the spans | `DEFW2_MARGO_MONITOR=1` together with `DEFW2_PROFILE=1`. Off by default, see below |
 | `libdefw2` spans | One `qfw.transport.rpc` span per forward with `qfw.rpc.api`, `qfw.rpc.method`, `qfw.transport.kind` (`ofi+tcp`, `ofi+cxi`, `na+sm`), request bytes, response bytes, bulk bytes, status category, and the tier | `DEFW2_PROFILE=1` |
 | `libdefw2` server timings | Decode time, queue wait for Python services, handler time, encode time, as span events on the server span | `DEFW2_PROFILE=1` |
 | `libdefw2` metrics | `qfw.transport.rpc.duration` and `qfw.transport.rpc.bytes` histograms labelled by `qfw.transport.kind` and tier | `DEFW2_PROFILE=1` |
 | Process metrics | CPU time and maximum resident set at exit, from `getrusage` | always |
+
+This table first named Margo's breadcrumb profiler and its diagnostics,
+switched on by `enable_profiling` and `enable_diagnostics` in the Margo JSON
+or by `MARGO_ENABLE_PROFILING` and `MARGO_ENABLE_DIAGNOSTICS`. Margo 0.24
+removed both. None of those names appears in the Margo 0.24.4 library, and
+neither does `margo_profile_dump`. Per-RPC statistics now come from Margo's
+monitor. The runtime installs it only on request. Before Margo 0.24.3 the
+default monitor read freed memory under concurrent load and took a service
+down (`mochi-hpc/mochi-margo` issue #322), and a site may still have an
+older Margo. The `libdefw2` spans cover the same ground without it.
 
 Every RPC header carries the W3C `traceparent` the caller supplies, so v2
 spans join QFw's Phase 1 benchmarking traces the way v1's do, following
 `openQSE/DEFw` pull request #17, which added trace-context propagation across
 the v1 RPC boundary.
 
-All four sources land in the same place, and the comparison is produced by
-tooling QFw already has.
+All four sources land in the same place. The comparison comes from
+`defw_bench_compare.py` until QFw's extractor exists.
 
 ```mermaid
 flowchart LR
     A["libdefw2 spans<br/>per RPC round trip"]
     B["libdefw2 metrics<br/>duration and byte histograms"]
-    M["Margo profiling<br/>per-RPC count, time, call path"]
+    M["Margo monitor, opt-in<br/>per-RPC count, time, call path"]
     R["getrusage<br/>CPU time and peak memory"]
     F[("OTLP JSON files<br/>node-local, under DEFW_LOG_DIR")]
-    X["qfw_bench_extract"]
+    X["defw_bench_compare.py<br/>qfw_bench_extract later"]
     Rep["Comparison report<br/>v1 against v2"]
 
     A --> F
@@ -1075,7 +1345,8 @@ free, and at fabric latencies it would tax the quantity under measurement.
 
 **Node-local export.** Each process writes OTLP JSON files under
 `DEFW_LOG_DIR`, the benchmarking design's profile 1, using a small writer in
-C with no external dependency. `qfw_bench_extract` reads them unchanged.
+C with no external dependency. They follow that profile so that QFw's
+extractor can read them unchanged once it exists.
 
 ### Timestamps
 
@@ -1114,7 +1385,7 @@ report's environment block.
 | Bulk bandwidth | W3 and W6 | Whether the bulk path reaches the fabric's rate |
 | CPU microseconds per call, client and server | `getrusage` deltas | The cost that scales with load |
 | Peak resident set | `getrusage` | Memory footprint of the runtime |
-| Wire bytes per call | spans | Encoding efficiency |
+| Wire bytes per call | v2's client spans, v1's own count of its messages | Encoding efficiency |
 | Framework overhead per job | W5, `qfw.app.job` minus backend | The headline number tracked by `openQSE/QFw` issue #49, QFw performance optimization |
 | Lines of code owned by DEFw | repository | Maintenance cost proxy |
 | Lines of upstream code relied on | dependency manifests | The leverage being bought |
@@ -1139,7 +1410,11 @@ and adds a small `DEFW2_` set.
 | `DEFW2_ADDRESS` | | Margo address string, default `ofi+tcp://`. `ofi+cxi://` on Slingshot, `na+sm://` for single-node tests. |
 | `DEFW2_DIRSVC` | | Directory address string or path to its address file. |
 | `DEFW2_MARGO_CONFIG` | | Path to the Margo JSON configuration. A built-in default is used when unset. |
-| `DEFW2_PROFILE` | | `1` turns on spans, metrics and Margo profiling. |
+| `DEFW2_PROFILE` | | `1` turns on spans and metrics. |
+| `DEFW2_MARGO_MONITOR` | | `1` also installs Margo's monitor while profiling is on. Off by default, see Profiling and the v1 Comparison. |
+| `DEFW2_RPC_THREADS` | | Handler execution streams. A server gets two when it is unset. |
+| `DEFW2_PROGRESS_SPINDOWN_MS` | | How long Margo's progress loop spins after it has handled something. A server spins for 0 ms when it is unset, and a client keeps Margo's default. |
+| `DEFW2_BULK_POOL_MIB` | | The most memory, in MiB, a runtime keeps in registered bulk buffers to lend again, lent or idle. 1024 when unset, and 0 keeps none. |
 | `DEFW2_HEARTBEAT_MS`, `DEFW2_HEARTBEAT_TIMEOUT_MS` | | Liveness intervals. |
 
 The launcher gains the `DEFW2_` names in its allow list and a per-role switch
@@ -1163,14 +1438,22 @@ the prototype.
     ]
   },
   "progress_pool": "progress",
-  "rpc_pool": "handlers",
-  "enable_profiling": false,
-  "enable_diagnostics": false
+  "rpc_pool": "handlers"
 }
 ```
 
-The built-in default is this file with two handler streams. Sites tune it
-without rebuilding.
+The runtime's built-in configuration is shorter: a progress thread and
+`DEFW2_RPC_THREADS` handler streams, plus Margo's monitor when
+`DEFW2_MARGO_MONITOR` asks for it. A site that wants explicit pools like
+these supplies the file through `DEFW2_MARGO_CONFIG`, without rebuilding.
+
+A server's progress loop does not spin, unless
+`DEFW2_PROGRESS_SPINDOWN_MS` says to. Margo spins for 10 ms after any
+handler by default, which shortens a call that comes right after another.
+A process that listens has handlers often enough to spin all the time, and
+in Phase 3 that held a CPU in every QPM and in every client taking events. A
+client, which handles only the answers to its own calls, keeps Margo's
+default.
 
 ### Container
 
@@ -1178,7 +1461,10 @@ The QFw-SLURM-Cluster image builds libfabric from source into
 `/opt/qfw/libfabric`. v2 adds the Mochi stack the same way into
 `/opt/qfw/mochi`, pinned to the versions in Appendix B, with Mercury
 configured for the OFI and shared-memory plugins and the bundled Boost
-preprocessor headers. Sites with Spack use the `mochi-margo` package instead.
+preprocessor headers. Mercury's `hg_rate`, `hg_bw_read` and `hg_bw_write`
+benchmarks are installed with it, since the success criteria compare against
+them. `module load libfabric mochi` puts the stack on the compiler, pkg-config
+and CMake paths. Sites with Spack use the `mochi-margo` package instead.
 `pkg-config` finds either.
 
 ## Coexistence and Migration
@@ -1191,7 +1477,7 @@ time.
 | --- | --- | --- |
 | 1 | `defw2-dirsvc` replaces the v1 directory for a test profile | C and Python clients resolve the echo service |
 | 2 | The fake IQM QPM runs under `defw2.ServiceHost` with the adapter | W5 passes from a C client and a Python client |
-| 3 | The Qiskit backend constructs its proxy through `defw2.compat` | W7 passes unchanged at the application level |
+| 3 | The Qiskit backend runs unchanged under `defw2-python` | W7 passes unchanged at the application level |
 | 4 | The SPANK plugin links `libdefw2` and calls admission RPCs directly | The QSGP gateway and its protocol are deleted |
 | 5 | Remaining Python services move to the host | v1 is no longer started by any QFw profile |
 | 6 | `src/` is retired | One DEFw again |
@@ -1202,7 +1488,7 @@ flowchart LR
         direction TB
         S1["1 Directory<br/>defw2-dirsvc"]
         S2["2 QPM service<br/>on the v2 host"]
-        S3["3 Qiskit backend<br/>via the compat proxy"]
+        S3["3 Qiskit backend<br/>unchanged, under defw2-python"]
         S1 --> S2 --> S3
     end
     G{{"Go or no-go<br/>decision"}}
@@ -1226,11 +1512,48 @@ first after the decision for that reason.
 ## Security
 
 v2 removes the code-execution surface. Typed decoding constructs only the
-declared structures, and the document tier's CBOR decoder builds maps, lists,
-strings and numbers and nothing else. Every handler validates counts,
-lengths, bulk sizes and reservation context before it uses a payload. That is
-what requirement CWIRE-008 of Amir's C-centric requirements asks of a server
-before it invokes an implementation.
+declared structures. C never parses a document, and Python's `json` builds
+dicts, lists, strings and numbers and nothing else. A document's method is
+an identifier, and reaches a Python service only through its handler's
+`document()`. Every handler validates counts, lengths, bulk sizes and
+reservation context before it uses a payload. That is what requirement
+CWIRE-008 of Amir's C-centric requirements asks of a server before it
+invokes an implementation.
+
+Mercury's own decoders are not enough for that, which building the QPM tier
+showed. At 2.4.1 the string decoder allocates whatever length a message
+claims before checking that the bytes are there, and when they are not,
+Mercury grows its buffer and copies uninitialised memory into the string
+rather than failing. It never checks for the terminator either, so a sender
+that leaves the NUL off hands the receiver a string that `strlen` reads
+straight past. The bulk-handle decoder reserves a claimed size the same way.
+v2 therefore carries every string, counted payload, tensor shape and lent
+buffer through procs of its own, which refuse a length beyond the field's
+bound or beyond the bytes actually received, and a string whose last byte
+is not its only NUL, before anything reads it. A provider also checks its
+own answer before encoding it, so an answer too large for the wire becomes a
+provider failure rather than a reply that never arrives.
+
+A request that fails to decode part way is answered with the
+invalid-argument category, and what it decoded before failing is freed.
+Mercury's `HG_Free_input` would free it, but it also releases a reference on
+the handle that only a successful decode takes, and Mercury then recycles the
+handle while the handler still holds it. v2 walks the fields with a proc of
+its own instead. Both properties are tested against a live provider with
+hostile requests, and the absence of a leak is measured across a thousand of
+them rather than left to the leak sanitizer, which cannot see it: the decoded
+structure lives on a handler stack that Argobots keeps pooled, so a stale
+pointer to the stranded string survives and counts as a reference.
+
+One path loaded code a peer chose. v1's `connect_to_binding` imports the
+module a directory record names and instantiates the class the record names,
+so whoever can register in the directory chooses what a client imports.
+compat's version imports a module only from the directories
+`DEFW_EXTERNAL_SERVICE_APIS_PATH` names, where v1 API modules come from and
+QFw installs its own, and instantiates only a `BaseRemote` class in it. A
+record that names a module anywhere else fails the connect with a
+`DEFwError` before the module is imported. One that names any other class
+fails before the class is called.
 
 Authentication is not in the prototype. The RPC header has room for a token
 and the status model has a category for authorization failure, so the QFw
@@ -1270,12 +1593,13 @@ table records what each family asks for and where it lands in v2.
 | One plugin per instance | A cxi-only service cannot reach a tcp-only directory. | One plugin per deployment. A second Margo instance for the directory path if a site ever needs mixing. |
 | Byte order | Mercury encodes natively by default. x86_64 and aarch64 agree. | Enable XDR at build time if a mixed-endian deployment ever exists. Checksums are a Mercury option if wanted. |
 | Directory durability | In-memory state loses records on a directory restart. | Open. The QFw design's generation model tolerates it. SQLite can be added behind the same interface. |
-| Dependency footprint | Four libraries plus CBOR in the container and on sites. | Source build in the Dockerfile, Spack elsewhere. Versions pinned. |
+| Dependency footprint | Four libraries in the container and on sites. | Source build in the Dockerfile, Spack elsewhere. Versions pinned. |
 | Mercury and Margo API drift | Both release often. | Pin exact versions, upgrade deliberately, keep the Mochi usage behind `src2/core` and `src2/rpc`. |
 | Flock has no license file | Group membership would have been convenient. | Not used. Heartbeats are DEFw's own. |
 | Binding technology | cffi is proposed. v1 uses SWIG and the QFw design invests in SWIG typemaps. | Open for review. The C API is designed so either works. |
-| Document tier encoding | CBOR is proposed. | Open for review. JSON is the fallback and costs nothing to swap. |
+| Document tier encoding | CBOR was proposed. | JSON, chosen in Phase 3, because Phase 2 chose it for `extra` and C never parses a document. |
 | Slingshot access | Phase 2 of the v1 plan never had a system to test on. | The go decision should name the system and the window. |
+| Bitmask property matching in the directory | v1 hard-codes it for `qpm_type` and `qpm_capabilities`, and matches every other property on equality. Those two names are the only QPM vocabulary left in the directory after `openQSE/DEFw` #20. | Replace the special case with a generic filter whose bitmask property names come from the caller. Offered to Amir as a follow-up, no answer yet. |
 | Where v2 lives long term | `src2/` in DEFw is proposed for the prototype. | A separate repository is a possible outcome of the go decision, not a starting condition. |
 
 ## Phased Plan
@@ -1289,9 +1613,14 @@ met.
 | 0. Foundation | Mochi stack in the container. `src2/` skeleton, CMake option, `libdefw2` init and finalize, echo service in C, C and Python echo clients, profiling spans and OTLP export, `defw2-bench`. | W1 to W3 produce reports for v2 and v1 on `ofi+tcp` and `na+sm`. A Python echo service holds under eight concurrent clients with no stall. |
 | 1. Directory | `defw2-dirsvc`, registration, heartbeats, generations, resolve, binding cache, address bootstrap. | W4 reports. A killed service is `TIMED_OUT` within the timeout and its restart gets a new generation. |
 | 2. QPM hot path | Typed control, admission and execution RPCs. Bulk descriptors and result buffers. `ServiceHost` and the QPM adapter. `defw2.compat`. | W5 and W6 from C and Python. W7 unchanged at the application level. |
-| 3. Events and comparison | Event sinks and reverse RPC. Full comparison campaign, both versions, all workloads, all providers. Comparison report. | The report exists and the success criteria are evaluated. |
+| 3. Events and comparison | Event sinks and reverse RPC. The document tier, for the QPM methods v2 has not typed. Full comparison campaign, both versions, all workloads, all providers. Comparison report. | The report exists and the success criteria are evaluated. |
 | 4. Decision | Review with Amir and interested parties. | Go, no-go, or go with changes. |
 | After go | SPANK plugin on `libdefw2`, QSGP retired. Slingshot measurement. Remaining services. Generator only if the method count justifies it. | |
+
+Phase 0's exit criterion was met on 29 September 2026. See Phase 0 Results.
+Phase 1's was met on 30 September 2026. See Phase 1 Results.
+Phase 2's was met on 3 October 2026. See Phase 2 Results.
+Phase 3's was met on 5 October 2026. See Phase 3 Results.
 
 ## Success Criteria
 
@@ -1316,6 +1645,321 @@ A result that meets the performance targets but fails the Python service
 criterion is a no-go, because QFw's services are Python for the foreseeable
 future.
 
+## Phase 0 Results
+
+Phase 0's exit criterion is met. These results were measured on 29 September
+2026.
+
+**How it was measured.** The QFw-SLURM-Cluster image, built from its
+`defw2-prototype` branch, ran one container with a compute node's limits of
+4 CPUs and 6 GiB. v1 is DEFw `master` at `f2da31b`, which includes
+`openQSE/DEFw` #24. Without that change v1 drops the first RPC it receives
+over OFI, and the benchmark's echo service never registers. v2 is
+`defw2-prototype` at `4a940a7`. For each workload the five configurations ran
+back to back: v1 on tcp, `ofi+tcp` and `sm2`, and v2 on `ofi+tcp` and
+`na+sm`. Each v2 run is set against v1 on the same provider. v1 cannot use
+Mercury's `na+sm`, so the shared-memory pair is `na+sm` against v1's `sm2`.
+Clients and services are C unless a row says otherwise, and profiling was on
+in every run.
+
+**Round trip and throughput.** Latency is the client's p50 round trip.
+Throughput is calls per second across all clients.
+
+| Workload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| W1, 64 B, 1 client, p50 | 4.303 ms | 0.081 ms | 53x | 4.271 ms | 0.067 ms | 64x |
+| W1, 64 B, 8 clients | 426 calls/s | 7,811 calls/s | 18x | 419 calls/s | 42,994 calls/s | 103x |
+| W2, 4 KiB, 1 client, p50 | 10.076 ms | 0.190 ms | 53x | 10.277 ms | 0.091 ms | 113x |
+| W2, 4 KiB, 8 clients | 184 calls/s | 4,863 calls/s | 26x | 175 calls/s | 27,665 calls/s | 158x |
+
+**Bulk.** W3 echoes one payload per call from one client. The figures are
+payload MiB per second of round trip.
+
+| Payload | v1 `ofi+tcp` | v2 `ofi+tcp` | | v1 `sm2` | v2 `na+sm` | |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 MiB | 49 | 2,669 | 54x | 0.6 | 3,875 | 6,000x |
+| 16 MiB | 68 | 1,749 | 26x | 0.6 | 3,119 | 4,800x |
+| 256 MiB | 52 | 1,900 | 37x | not run | 3,390 | |
+
+**Python.** W1 with 64 B payloads and one client, except the last row, which
+is eight clients against a Python service.
+
+| Pairing | v2 `ofi+tcp` | against v1 `ofi+tcp` | v2 `na+sm` | against v1 `sm2` |
+| --- | --- | --- | --- | --- |
+| C client, C service | 0.081 ms | 53x | 0.067 ms | 64x |
+| Python client, C service | 0.091 ms | 47x | 0.071 ms | 60x |
+| C client, Python service | 0.130 ms | 33x | 0.102 ms | 42x |
+| Python client and service | 0.140 ms | 31x | 0.091 ms | 47x |
+| 8 clients, Python service | 6,357 calls/s | 15x | 18,311 calls/s | 44x |
+
+No call failed in any run. The Python service held all eight clients without
+a stall, which is the second half of the exit criterion.
+
+**Success criteria that can be judged now.**
+
+| Criterion | Target | Result |
+| --- | --- | --- |
+| Small RPC round trip, C client, `ofi+tcp` | At most one tenth of v1 | One 53rd. Met. |
+| Small RPC round trip, Python client through the binding | At most one half of v1 | One 47th on `ofi+tcp`. Met. |
+| Small RPC round trip, Python service, C client | At most one half of v1 | One 33rd on `ofi+tcp`. Met. |
+| Throughput at eight concurrent clients | At least four times v1 | 18 times on `ofi+tcp` and 103 times on shared memory, and 15 and 44 times with the Python service. Met. |
+| Bulk bandwidth, 16 MiB and above | At least eighty percent of Mercury's own bulk benchmark | Not measured yet. `hg_bw_read` and `hg_bw_write` are in the image. |
+
+The other criteria belong to later phases: W5, W7, unsafe deserialization,
+lines of code and the SPANK flow.
+
+**What the matched pairing shows.**
+
+- v1's small-RPC cost does not depend on the transport. W1 takes 4.29 ms
+  over tcp, 4.30 ms over `ofi+tcp` and 4.27 ms over `sm2`, because Python
+  dominates it. Pairing providers barely moves the small-RPC ratios.
+- Bulk is where the pairing matters. Over `ofi+tcp`, v1 moves a W3 payload
+  by RMA. 1 MiB takes 20 ms rather than the 1.46 s it takes over tcp, and
+  256 MiB completes in 4.9 s where tcp would take about six minutes a call.
+  Ratios in the thousands against v1 over tcp measure v1's inline base64
+  path, not its best one. Against v1 on the same provider, v2's bulk rate is
+  26 to 54 times higher.
+- v1's `sm2` has no RMA. Its W3 payloads travel inline, and above the
+  256 KiB eager buffer they go over TCP, so the shared-memory W3 pair sets
+  v2's shared memory against v1's inline path. 256 MiB was not run on
+  `sm2`, at about six minutes a call.
+- v1 over `sm2` spends more CPU for the same latency. At W1 it uses 5.5 ms a
+  call in the client and 5.4 ms in the service, against 2.1 and 2.4 ms over
+  `ofi+tcp`.
+- Peak memory is the least settled figure. In W1 the C service peaked at
+  16 MiB on `na+sm` and 34 MiB on `ofi+tcp` against a C client, but at
+  94 and 116 MiB against the Python client, where v1's service peaked at
+  44 and 56 MiB. The same service code should not care which language
+  calls it, so this wants a closer look before memory is quoted. From
+  16 MiB payloads up v2 is well below v1, at 361 MiB against 1,781 MiB for
+  256 MiB. The Python service peaks between 104 and 172 MiB.
+- Eight clients over `ofi+tcp` are CPU-bound. They share four CPUs with the
+  service and its progress threads, and v2 manages 7,811 calls/s with eight
+  clients against 12,047 with one, so that row understates v2. `na+sm`
+  leaves out the network stack and scales from 13,912 to 42,994 calls/s.
+
+## Phase 1 Results
+
+Phase 1's exit criterion is met. The directory merged into `defw2-prototype`
+on 30 September 2026 as `openQSE/DEFw` #27, and `openQSE/DEFw` #28 then let
+one process serve the directory and call it too. Everything in the phase's
+scope is built: `defw2-dirsvc`, registration, heartbeats, generations,
+resolve, the binding cache and the address-file bootstrap.
+
+**The lifecycle.** A killed service has to be `TIMED_OUT` within the timeout,
+and its restart has to get a new generation. The directory's tests show both,
+in the store with a 50 ms timeout, and in the served directory, whose own
+timer times a quiet record out. Across real processes it ran on 6 October
+2026: `defw2-dirsvc` with its default 15 s timeout, and a `defw2-echo` that
+registered itself and was then killed with `SIGKILL`, so it never
+deregistered. `defw2-dirsvc dump` showed the record at each step:
+
+```
+echo-node-1   qfw.echo   UP             1  na+sm://678-0
+echo-node-1   qfw.echo   TIMED_OUT      1  na+sm://678-0
+echo-node-1   qfw.echo   UP             2  na+sm://925-0
+echo-node-1   qfw.echo   DEREGISTERED   2  -
+```
+
+In two runs the record was `TIMED_OUT` 15.0 and 14.6 s after the kill. The
+timeout counts from the last heartbeat, and the directory scans every 250 ms.
+The restarted service came back as generation 2, and stopped cleanly it
+deregistered.
+
+**W4.** 1,000 resolves against three registered services, all three runs in
+one session on 30 September 2026. No resolve failed.
+
+| Run | p50 | p99 | Resolves a second | CPU a call | Peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| `na+sm`, one node | 77.7 µs | 159.5 µs | 11,843 | 40.4 µs | 8.4 MiB |
+| `ofi+tcp`, one node | 92.4 µs | 157.1 µs | 10,492 | 53.2 µs | 27.6 MiB |
+| `ofi+tcp`, `c1` to `slurmctld` | 108.7 µs | 204.0 µs | 8,862 | 63.8 µs | 27.6 MiB |
+
+The comparison campaign measured W4 against v1 as well. One client resolves
+in 0.109 ms on `ofi+tcp` against v1's 6.369 ms, and eight make 20,889
+resolves a second against v1's 316. See the
+[comparison report](comparison_report_v2.md).
+
+## Phase 2 Results
+
+Phase 2's exit criterion is met. W5 and W6 run from C and Python, and W7 runs
+unchanged at the application level. W5 and W6 were measured on 3 October
+2026, and W7 on 2 October.
+
+**How it was measured.** The QFw-SLURM-Cluster image, built from its
+`defw2-prototype` branch. QFw's fake IQM QPM ran on `fake-iqm-head`, in a
+plane of its own started afresh for every run, and the clients ran on `c1`.
+The two nodes share the same four CPUs, so the clients and the QPM compete
+for them, and the Docker VM has 8 GB. One QFw installation served both versions:
+QFw `defw2-prototype` with openQSE/QFw#89, and DEFw `defw2-prototype` with the
+harness at `42a53f8`, built with v2. `QFW_DEFW_VERSION` was the only
+difference between them. v1 ran on `ofi+tcp`, as v2 does, with one W5 run on
+tcp for reference. Both logged as Phase 0 did, at `error`, with Python's
+logging at `critical`. QFw's own default for a QPM is `debug,DEFW_ALL`, which
+on v1 writes about half a megabyte a job. Profiling was on.
+
+A job is `async_run`, then `read_cq` back to back until the completion is
+ready. The fake sleeps about a millisecond a job and reports how long, and
+overhead is the job less that time, the design's `qfw.app.job` minus backend.
+The fake had eight slots, the concurrent jobs its device profile declares,
+rather than the one a single host gives it.
+
+Three clients ran each workload. QFw's own client code, its `QPMResolver` and
+v1 calls, ran on v1, and unchanged on v2 through `defw2.compat`. The typed C
+and Python clients ran on v2. The harness is in `src2/bench`, and its README
+says how to run it.
+
+**W5.** A fixed 4-qubit circuit, 1,000 jobs a client, except v1 at eight
+clients, which ran ten, see below. Jobs per second at eight clients is the
+median client's rate times eight, for the reason in the QFw findings below.
+
+| Client | DEFw | Clients | Overhead p50 | Overhead p99 | Job p50 | Polls a job | Jobs/s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| QFw | v1 | 1 | 12.130 ms | 13.842 ms | 13.257 ms | 1.0 | 75 |
+| QFw | v2 | 1 | 0.791 ms | 3.142 ms | 1.909 ms | 4.7 | 496 |
+| Python | v2 | 1 | 0.732 ms | 2.663 ms | 1.853 ms | 5.2 | 510 |
+| C | v2 | 1 | 0.821 ms | 2.827 ms | 1.946 ms | 5.0 | 478 |
+| QFw | v1 | 8 | 91.621 ms | 271.565 ms | 94.485 ms | 2.8 | 74 |
+| QFw | v2 | 8 | 18.125 ms | 26.753 ms | 19.395 ms | 6.4 | 409 |
+| Python | v2 | 8 | 18.030 ms | 26.993 ms | 19.277 ms | 6.4 | 411 |
+| C | v2 | 8 | 15.992 ms | 25.084 ms | 17.225 ms | 6.1 | 452 |
+
+v1 on tcp gave 12.126 ms of overhead with one client, the same as on
+`ofi+tcp`.
+
+**W6.** A 20-qubit statevector, 16 MiB, 20 jobs from one client. Collect is
+the `read_cq` that delivered it. For QFw's client it includes decoding it,
+since an application has not got its result until then.
+
+| Client | DEFw | Job p50 | Collect p50 | Statevector on collect |
+| --- | --- | --- | --- | --- |
+| QFw | v1 | 19.634 s | 19.296 s | 0.8 MiB/s |
+| QFw | v2 | 19.649 ms | 9.514 ms | 1,509 MiB/s |
+| Python | v2 | 19.407 ms | 9.261 ms | 1,515 MiB/s |
+| C | v2 | 19.740 ms | 9.536 ms | 1,470 MiB/s |
+
+**W7.** From openQSE/QFw-SLURM-Cluster#31: `qfw_qiskit_simple.sh` with 4
+qubits, its QPM a site service, under Slurm, timed as a whole.
+
+| QPM | v1 | v2 |
+| --- | --- | --- |
+| NWQ-Sim | 22.8 s | 4.4 s |
+| Fake IQM | 22.7 s | 4.7 s |
+
+Both versions returned the same statevector from NWQ-Sim, and the same counts
+and reservation from the fake. `qfw_mpi_smoke.sh` ran on v1 from the same
+installation, beside the v2 plane, in 15.2 s.
+
+**Bulk.** Mercury's own bulk benchmark against v2's W3, `c1` to
+`fake-iqm-head` over `ofi+tcp`, the pair W5 and W6 ran on. Mercury's moves
+one way, 64 transfers a call. W3 moves its payload both ways each call, a
+pull and a push with the RPC inside the time, so its rate here counts both.
+Mercury's could not run above 32 MiB on the 6 GiB node, since it keeps 64
+buffers in flight.
+
+| Rate | 16 MiB | 32 MiB |
+| --- | --- | --- |
+| Mercury `hg_bw_read`, server push | 3,430 MiB/s | 3,407 MiB/s |
+| Mercury `hg_bw_write`, server pull | 3,419 MiB/s | 3,411 MiB/s |
+| v2 W3, both ways | 3,276 MiB/s | 4,054 MiB/s |
+| v2 against Mercury | 96% | 119% |
+
+W6's collect pushes 16 MiB one way through the Python QPM at about 1,500
+MiB/s, 44% of Mercury's push. The rest of its 9.5 ms is the RPC and the
+QPM's own work.
+
+**Success criteria that can be judged now.**
+
+| Criterion | Target | Result |
+| --- | --- | --- |
+| Framework overhead per job in W5 | At most one half of v1 | One 15th for QFw's own code on v2, 0.79 ms against 12.13 ms, and about the same for the typed clients. Met. |
+| Bulk bandwidth, 16 MiB and above | At least eighty percent of Mercury's own bulk benchmark | 96% at 16 MiB and 119% at 32 MiB, for W3 against Mercury on the same pair. Met. |
+| Application-level regressions in W7 | None | None. Met. |
+
+The rest belong to later phases: unsafe deserialization over the whole of
+v2, lines of code and the SPANK flow.
+
+**What the measurements show.**
+
+- At one client v2 costs about 0.8 ms a job beyond the QPM's own run,
+  whichever client calls it. QFw's own code through `defw2.compat` costs no
+  more than the typed Python client. v1 costs 12.1 ms, and as in Phase 0 its
+  transport makes no difference.
+- v2 polls about five times a job and v1 once. A v1 `read_cq` takes 6.9 ms,
+  longer than the job, so v1's first poll finds it done.
+- At eight clients QFw's QPM is the limit, not DEFw. v2 holds 410 to 450 jobs
+  a second, fewer than the 480 to 510 one client gets alone, because the QPM
+  runs in one Python interpreter and every poll costs it CPU. The clients
+  share its four CPUs, so what a client spends is taken from the QPM. A C
+  client spends 0.40 ms of CPU a job, a Python one 0.55 ms and QFw's 0.64 ms,
+  and at eight clients the C clients got the most through. Events, in Phase
+  3, take the polling away.
+- v1 at eight clients ran 74 jobs a second over ten jobs a client, at 92 ms
+  of overhead a job, and 3 of its 80 jobs failed in QFw's QPM. With a
+  hundred jobs a client it did not finish in 30 minutes. Its QPM sat at 100%
+  of one CPU, and its scheduler reported `failed to mark task failed:
+  rc=-7`.
+- W6 is where the bulk path shows. v2 delivers 16 MiB in about 9.5 ms,
+  1,500 MiB/s, through a Python service and QFw's controller. v1 carries the
+  statevector as base64 text inside its YAML message. It takes 19.3 s to
+  deliver it, and its client spends 5.3 s of CPU on it.
+
+**What the measurements found in QFw.** Two problems in QFw's QPM are fixed
+by openQSE/QFw#89. Both affect any QPM, and v2 exposed them.
+
+- The controller sized every completion record for
+  `max-bytes-per-reservation` with `repr`, which spells a byte as up to four
+  characters. On v2 a statevector travels raw, and building that text took
+  216 ms for 16 MiB, under the controller's lock. Every `read_cq` waited
+  behind it, and W6's collect took 230 ms before the fix and 9.5 ms after.
+  It also counted the statevector about three times against the budget.
+- `submit_provider_async` looks a task up and then binds the provider's
+  handle, taking the lock for each step. A fast provider's own thread can
+  finish and retire the task in between, and the bind raised `KeyError`.
+
+Two are not fixed.
+
+- QFw's out-of-resources queue races. `process_oor_queue` runs in several
+  threads at once, each provider completion and every `read_cq`, and two can
+  take the same queued task. The second finds it retired, and the error
+  surfaces in some other client's call, or kills the completion thread before
+  it hands over its own task's result. In the table's runs at eight clients
+  three jobs in 24,000 failed: two of 8,000 for C, none for Python and one
+  for QFw's client. One of them lost its completion and waited out the 60 s
+  call timeout, which is why jobs per second at eight clients is taken from
+  the median client. The harness retries the unmeasured first job and gives
+  every job the call timeout, so a lost completion costs a job and not a
+  run. This is openQSE/QFw#91.
+- Every result `read_cq` collects is kept. `UTIL_QPM.read_cq` appends each
+  one to `all_results`, which nothing reads or empties, so a W6 job leaves
+  its 16 MiB behind in the QPM for good. This is openQSE/QFw#92.
+
+**Not run.** The shared-memory pair Phase 0 set beside `ofi+tcp`. QFw's plane
+finds its directory from a host and a port, which `na+sm` does not have.
+
+## Phase 3 Results
+
+Phase 3's exit criterion is met. Events, the document tier and the
+comparison campaign are built, and the campaign ran on 5 October 2026. The
+[comparison report](comparison_report_v2.md) evaluates every success
+criterion.
+
+| Criterion | Verdict |
+| --- | --- |
+| Small RPC round trip, C client, `ofi+tcp` | Met, one 44th of v1 |
+| Small RPC round trip, Python client through the binding | Met, one 40th |
+| Small RPC round trip, Python service, C client | Met, one 32nd |
+| Throughput at eight concurrent clients | Met, 58 times v1 on `ofi+tcp` |
+| Bulk bandwidth, 16 MiB and above | Not met at 256 MiB, 79.5% of Mercury on `ofi+tcp` and 69% on shared memory. Met at 16 MiB, 94% and 88%. The shortfall is the echo service allocating its buffer on every call, and with one buffer kept between calls 256 MiB reaches 97% and 87%. Met with the buffer pool, re-measured on 6 October with Mercury in the same session: 92% and 90% at 16 MiB, 97% and 86% at 256 MiB |
+| Framework overhead per job in W5 | Met, one 15th to one 17th |
+| Unsafe deserialization on any path | Met, none found |
+| Application-level regressions in W7 | Met, none |
+| DEFw-owned lines of code for equivalent function | Not met, 9,349 against 9,337 |
+| C caller experience | Met, 93 lines |
+
+Phase 0 left peak memory unsettled. Its spread was the kernel's transparent
+huge pages, which the harness now turns off for every process it measures.
+
 ## Appendix A: DEFw v1 Inventory
 
 Measured on the current `master`, generated SWIG wrappers excluded.
@@ -1337,13 +1981,11 @@ import DEFw infrastructure.
 
 | Component | Pinned version | License | Notes |
 | --- | --- | --- | --- |
-| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. |
-| Margo | 0.24.2 | Argonne open source license | BSD-3-style with a DOE contract notice. |
-| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. |
-| json-c | 0.19 | MIT | Margo dependency. |
+| Mercury | 2.4.1 | BSD-3-Clause | Copyright Argonne, The HDF Group, Intel, HPE. Bundles Boost preprocessor headers under the Boost Software License. The oldest release that Spack allows with libfabric 2.x. |
+| Margo | 0.24.4 | Argonne open source license | BSD-3-style with a DOE contract notice. Releases before 0.24.3 crash with the default monitor under load, issue #322. Releases before 0.24.4 race to register an RPC on its first forward to a provider, issue #325, which `libdefw2` avoids by registering first. |
+| Argobots | 1.2 | Argonne modified BSD | Requires an acknowledgment line in distributed documentation. The 1.2 release reports its version as 1.2rc1. |
+| json-c | 0.18, from the distribution | MIT | Margo dependency. Margo accepts any version, and Slurm in the container already links the distribution package. |
 | libfabric | 2.3.1 in the container, 2.6.0 upstream | BSD-2 or GPLv2 at the user's choice | Already a DEFw dependency. BSD is chosen. |
-| tinycbor | current | MIT | Document tier, C side. |
-| cbor2 | current | MIT | Document tier, Python side. |
 | cffi | current | MIT | Python binding. |
 | DEFw, QFw | | BSD-3-Clause | UT-Battelle and openQSE. |
 
